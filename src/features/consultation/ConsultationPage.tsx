@@ -55,6 +55,7 @@ import type { VitalsSnapshot } from '@/types/vitals'
 import { generateClinicalDraft } from '@/mock/aiDraft'
 import { AiDraftDrawer, type DraftApplySelection } from './AiDraftDrawer'
 import { PrescriptionPreviewModal } from './PrescriptionPreviewModal'
+import { DeviceLinkStatus } from './DeviceLinkStatus'
 import { AiDraftSummary } from './AiDraftSummary'
 import { PatientConsultationHeader } from './PatientConsultationHeader'
 import { StepTitle } from './StepTitle'
@@ -512,7 +513,7 @@ export function ConsultationPage() {
           </div>
 
           <Panel
-            title={<StepTitle step={3}>Vitals</StepTitle>}
+            title={<StepTitle step={3}>Live vitals</StepTitle>}
             description={
               latestVitals
                 ? `Mock device data · recorded ${formatDateTime(latestVitals.recordedAt)}`
@@ -520,15 +521,18 @@ export function ConsultationPage() {
             }
             icon={Activity}
             actions={
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={Activity}
-                disabled={locked}
-                onClick={() => setRecordingVitals(true)}
-              >
-                Record
-              </Button>
+              <>
+                <DeviceLinkStatus />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={Activity}
+                  disabled={locked}
+                  onClick={() => setRecordingVitals(true)}
+                >
+                  Record
+                </Button>
+              </>
             }
           >
             {vitalsQuery.loading ? (
@@ -536,6 +540,7 @@ export function ConsultationPage() {
             ) : latestVitals ? (
               <VitalsTileGrid
                 snapshot={latestVitals}
+                history={vitalsQuery.data}
                 heightCm={patient.heightCm}
                 weightKg={patient.weightKg}
               />

@@ -1,11 +1,16 @@
-import { Droplet, HeartPulse, Ruler, Thermometer, Weight, Wind } from 'lucide-react'
+import { Activity, Droplet, HeartPulse, Ruler, Thermometer, Weight, Wind } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { VITAL_DEFINITIONS, formatVitalValue, referenceRangeLabel } from '@/lib/vitals'
-import type { VitalStatus, VitalsSnapshot } from '@/types/vitals'
+import type { VitalKey, VitalStatus, VitalsSnapshot } from '@/types/vitals'
 import { VitalTile } from './VitalTile'
 
 export interface VitalsTileGridProps {
   snapshot: VitalsSnapshot
+  /**
+   * Earlier recorded snapshots, newest first, used to draw each tile's trend
+   * line. Omit to render values without trends.
+   */
+  history?: VitalsSnapshot[]
   /** Shown as unclassified tiles — height and weight have no clinical
    *  reference range in this model, so they carry no status colour. */
   heightCm?: number
@@ -27,11 +32,25 @@ function worstOf(a: VitalStatus, b: VitalStatus): VitalStatus {
  */
 export function VitalsTileGrid({
   snapshot,
+  history,
   heightCm,
   weightKg,
   className,
 }: VitalsTileGridProps) {
   const { readings } = snapshot
+
+  /**
+   * Recorded values for one measurement, oldest first, with the current
+   * snapshot last. Only past readings are plotted — nothing is interpolated.
+   */
+  function seriesFor(key: VitalKey): number[] | undefined {
+    if (!history?.length) return undefined
+    const past = [...history]
+      .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
+      .map((entry) => entry.readings[key]?.value)
+      .filter((value): value is number => value !== undefined)
+    return past.length ? past : undefined
+  }
   const systolic = readings.systolicBp
   const diastolic = readings.diastolicBp
   const bmi =
@@ -50,6 +69,7 @@ export function VitalsTileGrid({
           value={`${formatVitalValue('systolicBp', systolic.value)}/${formatVitalValue('diastolicBp', diastolic.value)}`}
           unit="mmHg"
           status={worstOf(systolic.status, diastolic.status)}
+          series={seriesFor('systolicBp')}
           hint="90–130 / 60–85 mmHg"
         />
       ) : (
@@ -62,6 +82,7 @@ export function VitalsTileGrid({
           value={formatVitalValue('heartRate', readings.heartRate.value)}
           unit={VITAL_DEFINITIONS.heartRate.unit}
           status={readings.heartRate.status}
+          series={seriesFor('heartRate')}
           icon={HeartPulse}
           hint={referenceRangeLabel('heartRate')}
         />
@@ -75,6 +96,7 @@ export function VitalsTileGrid({
           value={formatVitalValue('temperature', readings.temperature.value)}
           unit="°C"
           status={readings.temperature.status}
+          series={seriesFor('temperature')}
           icon={Thermometer}
           hint={referenceRangeLabel('temperature')}
         />
@@ -88,6 +110,8 @@ export function VitalsTileGrid({
           value={formatVitalValue('respiratoryRate', readings.respiratoryRate.value)}
           unit="/min"
           status={readings.respiratoryRate.status}
+          series={seriesFor('respiratoryRate')}
+          icon={Activity}
           hint={referenceRangeLabel('respiratoryRate')}
         />
       ) : (
@@ -100,6 +124,7 @@ export function VitalsTileGrid({
           value={formatVitalValue('spo2', readings.spo2.value)}
           unit="%"
           status={readings.spo2.status}
+          series={seriesFor('spo2')}
           icon={Wind}
           hint={referenceRangeLabel('spo2')}
         />
@@ -113,6 +138,7 @@ export function VitalsTileGrid({
           value={formatVitalValue('bloodGlucose', readings.bloodGlucose.value)}
           unit="mg/dL"
           status={readings.bloodGlucose.status}
+          series={seriesFor('bloodGlucose')}
           icon={Droplet}
           hint={referenceRangeLabel('bloodGlucose')}
         />

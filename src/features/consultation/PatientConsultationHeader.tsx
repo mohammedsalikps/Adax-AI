@@ -76,7 +76,7 @@ export function PatientConsultationHeader({
               name={patient.fullName}
               size="xl"
               decorative
-              className="border-2 border-accent-soft"
+              className="size-14 border-2 border-accent-soft sm:size-20"
             />
           </button>
 
@@ -89,7 +89,9 @@ export function PatientConsultationHeader({
               {patient.fullName}
             </button>
 
-            <p className="tnum mt-0.5 truncate text-xs text-ink-soft sm:text-[13px]">
+            {/* Wraps rather than truncates: at 320px a single line drops the
+                sex off the end, and these three facts identify the chart. */}
+            <p className="tnum mt-0.5 text-xs text-ink-soft sm:text-[13px]">
               {patient.id}
               <span className="mx-1.5 text-ink-muted">|</span>
               {age} yrs
@@ -100,7 +102,13 @@ export function PatientConsultationHeader({
             {patient.chronicConditions.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {patient.chronicConditions.map((condition) => (
-                  <Badge key={condition} variant="neutral">
+                  // Badge is whitespace-nowrap by default; a condition name
+                  // longer than the column would overflow it at 320px.
+                  <Badge
+                    key={condition}
+                    variant="neutral"
+                    className="max-w-full text-left whitespace-normal"
+                  >
                     {condition}
                   </Badge>
                 ))}

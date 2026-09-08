@@ -495,7 +495,7 @@ export function ConsultationPage() {
       )}
 
       {/* A dominant workspace column beside a fixed-width context rail. */}
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] xl:gap-5">
+      <div className="grid grid-cols-1 items-start gap-4 min-[900px]:grid-cols-[minmax(0,1fr)_20rem] xl:gap-5">
         {/* ============================ consultation workspace ============= */}
         <div className="min-w-0 space-y-3.5">
           <PatientConsultationHeader
@@ -849,7 +849,7 @@ export function ConsultationPage() {
         {/* ============================== patient context rail ============= */}
         <aside
           aria-label="Patient context"
-          className="min-w-0 space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto lg:pb-1"
+          className="min-w-0 space-y-3 min-[900px]:sticky min-[900px]:top-4 min-[900px]:max-h-[calc(100dvh-5.5rem)] min-[900px]:overflow-y-auto min-[900px]:pb-1"
         >
           <div className="flex flex-col gap-2 rounded-panel border border-line bg-surface p-3">
             <div className="flex items-center justify-between gap-2">

@@ -187,24 +187,38 @@ export function PatientRegistrationPage() {
         title={REGISTRATION_STEPS[step].title}
         description={REGISTRATION_STEPS[step].hint}
         footer={
-          <div className="flex w-full items-center gap-2">
+          // Wraps at 320px: Back and Continue will not fit either side of the
+          // step counter, and the panel clips rather than scrolls. Below sm the
+          // counter takes its own line and the buttons share the next.
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <span className="tnum w-full text-[11px] text-ink-muted sm:order-2 sm:ml-auto sm:w-auto">
+              Step {step + 1} of {REGISTRATION_STEPS.length}
+            </span>
             <Button
               variant="ghost"
               icon={ArrowLeft}
+              className="sm:order-1"
               onClick={goBack}
               disabled={step === 0 || submitting}
             >
               Back
             </Button>
-            <span className="tnum ml-auto text-[11px] text-ink-muted">
-              Step {step + 1} of {REGISTRATION_STEPS.length}
-            </span>
             {step < REGISTRATION_STEPS.length - 1 ? (
-              <Button icon={ArrowRight} iconPosition="right" onClick={goNext}>
+              <Button
+                icon={ArrowRight}
+                iconPosition="right"
+                className="ml-auto sm:order-3 sm:ml-0"
+                onClick={goNext}
+              >
                 Continue
               </Button>
             ) : (
-              <Button icon={CircleCheck} loading={submitting} onClick={() => void submit()}>
+              <Button
+                icon={CircleCheck}
+                loading={submitting}
+                className="ml-auto sm:order-3 sm:ml-0"
+                onClick={() => void submit()}
+              >
                 Register patient
               </Button>
             )}

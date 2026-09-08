@@ -6,12 +6,16 @@ import {
   Plus,
   RotateCcw,
   Save,
+  Stethoscope,
   Trash2,
   TriangleAlert,
+  User,
 } from 'lucide-react'
 import { Badge, Button, EmptyState, LoadingState, Panel } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import type { TranscriptLine, TranscriptionStatus } from '@/types/consultation'
+import { formatClockTime } from '@/lib/format'
+import { RecordingWaveform } from './RecordingWaveform'
 import { StepTitle } from './StepTitle'
 import type { TranscriptionController } from './useTranscription'
 
@@ -53,7 +57,7 @@ export function TranscriptionPanel({
   step,
   locked = false,
 }: TranscriptionPanelProps) {
-  const { status, lines, error, elapsedMs } = transcription
+  const { status, lines, error, elapsedMs, startedAt } = transcription
   const isRecording = status === 'recording'
   const isPaused = status === 'paused'
   const isProcessing = status === 'processing'
@@ -156,7 +160,13 @@ export function TranscriptionPanel({
         </div>
       )}
 
-      <div className="mt-4">
+      <RecordingWaveform
+        className="mt-3"
+        active={isRecording}
+        idle={isPaused || lines.length > 0}
+      />
+
+      <div className="mt-3">
         {isProcessing ? (
           <LoadingState label="Processing the recording" />
         ) : lines.length === 0 ? (
@@ -173,6 +183,7 @@ export function TranscriptionPanel({
               <TranscriptRow
                 key={line.id}
                 line={line}
+                startedAt={startedAt}
                 editable={canEdit}
                 onChange={(text) => transcription.updateLine(line.id, text)}
                 onRemove={() => transcription.removeLine(line.id)}
@@ -208,64 +219,87 @@ export function TranscriptionPanel({
 
 function TranscriptRow({
   line,
+  startedAt,
   editable,
   onChange,
   onRemove,
 }: {
   line: TranscriptLine
+  /** Wall-clock start of the recording, or null for a restored transcript. */
+  startedAt: Date | null
   editable: boolean
   onChange: (text: string) => void
   onRemove: () => void
 }) {
   const isDoctor = line.speaker === 'doctor'
   const label = isDoctor ? 'Doctor' : 'Patient'
-  const timestamp = formatElapsed(line.offsetMs)
+  const SpeakerIcon = isDoctor ? Stethoscope : User
+
+  // Prefer the time of day the line was spoken. A transcript loaded back from
+  // storage has no recorded start, so it falls back to the offset.
+  const elapsed = formatElapsed(line.offsetMs)
+  const timestamp = startedAt
+    ? formatClockTime(new Date(startedAt.getTime() + line.offsetMs))
+    : elapsed
 
   return (
     <li className="flex items-start gap-2.5">
-      <div className="w-16 shrink-0 pt-1.5">
-        <span
-          className={cn(
-            'block text-[10px] font-semibold tracking-wider uppercase',
-            isDoctor ? 'text-accent-ink' : 'text-ink-soft',
-          )}
-        >
-          {label}
-        </span>
-        <span className="tnum block text-[10px] text-ink-muted">{timestamp}</span>
-      </div>
-
-      <label className="sr-only" htmlFor={`transcript-${line.id}`}>
-        {`${label} line at ${timestamp}`}
-      </label>
-      <textarea
-        id={`transcript-${line.id}`}
-        rows={1}
-        value={line.text}
-        readOnly={!editable}
-        placeholder="Empty line"
-        onChange={(event) => onChange(event.target.value)}
+      <span
+        aria-hidden
         className={cn(
-          'min-h-9 flex-1 resize-y rounded-control border px-2.5 py-1.5 text-[13px] break-words transition-colors',
-          isDoctor
-            ? 'border-accent-soft bg-accent-soft/30'
-            : 'border-line bg-surface-alt',
-          editable
-            ? 'hover:border-line-strong focus:border-accent'
-            : 'cursor-default opacity-90',
+          'mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full',
+          isDoctor ? 'bg-accent text-ink-inverse' : 'bg-accent-soft text-accent-ink',
         )}
-      />
+      >
+        <SpeakerIcon size={14} />
+      </span>
 
-      {editable && (
-        <Button
-          size="sm"
-          variant="ghost"
-          iconOnly
-          icon={Trash2}
-          aria-label={`Remove ${label} line at ${timestamp}`}
-          onClick={onRemove}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span
+            className={cn(
+              'text-[11px] font-semibold',
+              isDoctor ? 'text-accent-ink' : 'text-ink-soft',
+            )}
+          >
+            {label}
+          </span>
+          <span className="tnum ml-auto shrink-0 text-[10px] text-ink-muted">
+            {timestamp}
+          </span>
+          {editable && (
+            <Button
+              size="sm"
+              variant="ghost"
+              iconOnly
+              icon={Trash2}
+              aria-label={`Remove ${label} line at ${elapsed}`}
+              onClick={onRemove}
+            />
+          )}
+        </div>
+
+        <label className="sr-only" htmlFor={`transcript-${line.id}`}>
+          {`${label} line at ${elapsed}`}
+        </label>
+        <textarea
+          id={`transcript-${line.id}`}
+          rows={1}
+          value={line.text}
+          readOnly={!editable}
+          placeholder="Empty line"
+          onChange={(event) => onChange(event.target.value)}
+          className={cn(
+            'mt-0.5 min-h-8 w-full resize-y rounded-control border px-2.5 py-1.5 text-[13px] break-words transition-colors',
+            isDoctor
+              ? 'border-accent-soft bg-accent-soft/30'
+              : 'border-line bg-surface-alt',
+            editable
+              ? 'hover:border-line-strong focus:border-accent'
+              : 'cursor-default opacity-90',
+          )}
         />
-      )}
+      </div>
     </li>
   )
 }

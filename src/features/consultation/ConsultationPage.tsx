@@ -55,6 +55,7 @@ import type { VitalsSnapshot } from '@/types/vitals'
 import { generateClinicalDraft } from '@/mock/aiDraft'
 import { AiDraftDrawer, type DraftApplySelection } from './AiDraftDrawer'
 import { PrescriptionPreviewModal } from './PrescriptionPreviewModal'
+import { AiDraftSummary } from './AiDraftSummary'
 import { PatientConsultationHeader } from './PatientConsultationHeader'
 import { StepTitle } from './StepTitle'
 import { TranscriptionPanel } from './TranscriptionPanel'
@@ -448,16 +449,70 @@ export function ConsultationPage() {
             onOpenProfile={() => navigate(`/patients/${patient.id}`)}
           />
 
-          <TranscriptionPanel
-            step={1}
-            locked={readOnly}
-            transcription={transcription}
-            savingTranscript={savingTranscript}
-            onSaveTranscript={() => void saveTranscript()}
-          />
+          {/* Recording and the draft it produces sit side by side, so the
+              doctor can read the transcript against the extraction. They
+              stack on anything narrower than a landscape tablet. */}
+          <div className="grid grid-cols-1 items-start gap-3.5 2xl:grid-cols-2">
+            <TranscriptionPanel
+              step={1}
+              locked={readOnly}
+              transcription={transcription}
+              savingTranscript={savingTranscript}
+              onSaveTranscript={() => void saveTranscript()}
+            />
+
+            <Panel
+              title={<StepTitle step={2}>AI draft (from transcript)</StepTitle>}
+              description="Extracted from the transcript · never diagnoses or prescribes"
+              icon={Sparkles}
+              tone={aiDraft ? 'ai' : 'default'}
+              actions={
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {aiDraft && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      icon={FileText}
+                      onClick={() => setDraftOpen(true)}
+                    >
+                      Review draft
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant={aiDraft ? 'ghost' : 'secondary'}
+                    icon={Sparkles}
+                    loading={generating}
+                    disabled={draftBusy}
+                    onClick={() => void generateDraft()}
+                  >
+                    {aiDraft ? 'Regenerate' : 'Generate draft'}
+                  </Button>
+                </div>
+              }
+            >
+              {aiDraft ? (
+                <div className="space-y-3">
+                  <AiDraftSummary draft={aiDraft} />
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line pt-2.5">
+                    <Badge variant="ai">{AI_DRAFT_DISCLAIMER}</Badge>
+                    <p className="tnum text-[11px] text-ink-muted">
+                      Generated {formatDateTime(aiDraft.generatedAt)} from{' '}
+                      {aiDraft.sourceLineCount} transcript lines
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-ink-muted">
+                  No draft yet. Capture or type transcript lines above, then generate a draft
+                  to review. Nothing reaches the consultation until you apply it.
+                </p>
+              )}
+            </Panel>
+          </div>
 
           <Panel
-            title={<StepTitle step={2}>Vitals</StepTitle>}
+            title={<StepTitle step={3}>Vitals</StepTitle>}
             description={
               latestVitals
                 ? `Mock device data · recorded ${formatDateTime(latestVitals.recordedAt)}`
@@ -507,7 +562,7 @@ export function ConsultationPage() {
           {/* The three narrative fields are one act of documentation, so they
               share a card instead of three near-identical ones. */}
           <Panel
-            title={<StepTitle step={3}>Clinical documentation</StepTitle>}
+            title={<StepTitle step={4}>Clinical documentation</StepTitle>}
             description="Chief complaint, history and examination"
             icon={FileText}
           >
@@ -538,52 +593,6 @@ export function ConsultationPage() {
                 onChange={(event) => update('examination', event.target.value)}
               />
             </div>
-          </Panel>
-
-          <Panel
-            title={<StepTitle step={4}>AI documentation draft</StepTitle>}
-            description="Extracted from the transcript · never diagnoses or prescribes"
-            icon={Sparkles}
-            tone={aiDraft ? 'ai' : 'default'}
-            actions={
-              <div className="flex flex-wrap items-center gap-1.5">
-                {aiDraft && (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    icon={FileText}
-                    onClick={() => setDraftOpen(true)}
-                  >
-                    Review draft
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant={aiDraft ? 'ghost' : 'secondary'}
-                  icon={Sparkles}
-                  loading={generating}
-                  disabled={draftBusy}
-                  onClick={() => void generateDraft()}
-                >
-                  {aiDraft ? 'Regenerate' : 'Generate draft'}
-                </Button>
-              </div>
-            }
-          >
-            {aiDraft ? (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <Badge variant="ai">{AI_DRAFT_DISCLAIMER}</Badge>
-                <p className="tnum text-[11px] text-ink-muted">
-                  Generated {formatDateTime(aiDraft.generatedAt)} from{' '}
-                  {aiDraft.sourceLineCount} transcript lines
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-ink-muted">
-                No draft yet. Capture or type transcript lines above, then generate a draft
-                to review. Nothing reaches the consultation until you apply it.
-              </p>
-            )}
           </Panel>
 
           <Panel

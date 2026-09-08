@@ -14,6 +14,11 @@ export interface TranscriptionController {
   error: string | null
   /** Milliseconds of simulated recording elapsed. */
   elapsedMs: number
+  /**
+   * Wall-clock time the recording first started, so each line can be shown at
+   * the time of day it was spoken. Null until recording begins.
+   */
+  startedAt: Date | null
   /** True once every scripted line has been emitted. */
   scriptExhausted: boolean
   start: () => void
@@ -44,6 +49,7 @@ export function useTranscription(patientId: string): TranscriptionController {
   const [lines, setLinesState] = useState<TranscriptLine[]>([])
   const [error, setError] = useState<string | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [startedAt, setStartedAt] = useState<Date | null>(null)
 
   // Position in the script, held in a ref so the interval callback always
   // reads the current value without re-subscribing.
@@ -99,6 +105,8 @@ export function useTranscription(patientId: string): TranscriptionController {
 
   const start = useCallback(() => {
     setError(null)
+    // Resuming after a pause keeps the original start time.
+    setStartedAt((current) => current ?? new Date())
     setStatus('recording')
   }, [])
 
@@ -111,6 +119,7 @@ export function useTranscription(patientId: string): TranscriptionController {
     setScriptExhausted(false)
     setLinesState([])
     setElapsedMs(0)
+    setStartedAt(null)
     setError(null)
     setStatus('not_started')
   }, [])
@@ -123,6 +132,9 @@ export function useTranscription(patientId: string): TranscriptionController {
     setScriptExhausted(true)
     setLinesState(next)
     setElapsedMs(next.length * LINE_INTERVAL_MS)
+    // A restored transcript carries no wall-clock start, so lines fall back
+    // to their offset from the beginning of the recording.
+    setStartedAt(null)
     setStatus('transcript_ready')
   }, [])
 
@@ -168,6 +180,7 @@ export function useTranscription(patientId: string): TranscriptionController {
     lines,
     error,
     elapsedMs,
+    startedAt,
     scriptExhausted,
     start,
     pause,

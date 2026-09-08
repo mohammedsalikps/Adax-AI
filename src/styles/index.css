@@ -81,4 +81,27 @@
   .panel {
     @apply bg-surface border border-line rounded-panel;
   }
+
+  /* Decorative recording indicator. Represents no real audio signal —
+     see RecordingWaveform. Honours reduced-motion. */
+  .wave-bar {
+    animation: wave-pulse 1.1s ease-in-out infinite alternate;
+    transform-origin: center;
+  }
+
+  @keyframes wave-pulse {
+    from {
+      transform: scaleY(0.35);
+    }
+    to {
+      transform: scaleY(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wave-bar {
+      animation: none;
+      transform: scaleY(0.7);
+    }
+  }
 }

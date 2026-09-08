@@ -9,6 +9,7 @@ import {
   ClipboardList,
   FileText,
   IdCard,
+  Info,
   Pill,
   Printer,
   Save,
@@ -600,45 +601,49 @@ export function ConsultationPage() {
             </div>
           </Panel>
 
-          <Panel
-            title={<StepTitle step={5}>Diagnosis</StepTitle>}
-            description="Doctor-entered — the assistant never diagnoses"
-            icon={ClipboardList}
-          >
-            <DiagnosisEditor
-              diagnoses={form.diagnoses}
-              errors={errors.diagnoses}
-              disabled={locked}
-              onChange={(diagnoses) => update('diagnoses', diagnoses)}
-              onAdd={() => update('diagnoses', [...form.diagnoses, createDiagnosis()])}
-            />
-          </Panel>
+          {/* The doctor's two decisions sit together: what this visit
+              concluded, and what is being prescribed for it. */}
+          <div className="grid grid-cols-1 items-start gap-3.5 2xl:grid-cols-2">
+            <Panel
+              title={<StepTitle step={5}>Diagnosis</StepTitle>}
+              description="Doctor-entered — the assistant never diagnoses"
+              icon={ClipboardList}
+            >
+              <DiagnosisEditor
+                diagnoses={form.diagnoses}
+                errors={errors.diagnoses}
+                disabled={locked}
+                onChange={(diagnoses) => update('diagnoses', diagnoses)}
+                onAdd={() => update('diagnoses', [...form.diagnoses, createDiagnosis()])}
+              />
+            </Panel>
 
-          <Panel
-            title={<StepTitle step={6}>Prescription</StepTitle>}
-            description="Doctor-entered only — no interaction checking in this build"
-            icon={Pill}
-            actions={
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={Printer}
-                onClick={() => setPreviewOpen(true)}
-              >
-                Preview &amp; print
-              </Button>
-            }
-          >
-            <PrescriptionEditor
-              items={form.prescription}
-              errors={errors.prescription}
-              disabled={locked}
-              onChange={(items) => update('prescription', items)}
-              onAdd={() =>
-                update('prescription', [...form.prescription, createPrescriptionItem()])
+            <Panel
+              title={<StepTitle step={6}>Prescription</StepTitle>}
+              description="Doctor-entered only — no interaction checking in this build"
+              icon={Pill}
+              actions={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={Printer}
+                  onClick={() => setPreviewOpen(true)}
+                >
+                  Preview &amp; print
+                </Button>
               }
-            />
-          </Panel>
+            >
+              <PrescriptionEditor
+                items={form.prescription}
+                errors={errors.prescription}
+                disabled={locked}
+                onChange={(items) => update('prescription', items)}
+                onAdd={() =>
+                  update('prescription', [...form.prescription, createPrescriptionItem()])
+                }
+              />
+            </Panel>
+          </div>
 
           <Panel
             title={<StepTitle step={7}>Notes and follow-up</StepTitle>}
@@ -700,35 +705,45 @@ export function ConsultationPage() {
             className={
               readOnly
                 ? 'hidden'
-                : 'flex flex-wrap items-center gap-2 rounded-panel border border-line bg-surface p-3'
+                : 'flex flex-col gap-2.5 rounded-panel border border-line bg-surface p-3 shadow-card xl:flex-row xl:items-center'
             }
           >
-            <Button
-              icon={CircleCheck}
-              loading={saving}
-              onClick={() => void save('completed')}
-            >
-              Save consultation
-            </Button>
-            <Button
-              variant="secondary"
-              icon={Save}
-              loading={saving}
-              onClick={() => void save('draft')}
-            >
-              Save as draft
-            </Button>
-            <Button variant="secondary" icon={Printer} onClick={() => setPreviewOpen(true)}>
-              Preview &amp; print
-            </Button>
-            <Button
-              variant="ghost"
-              className="ml-auto"
-              onClick={() => navigate('/')}
-              disabled={saving}
-            >
-              Cancel and return to clinic
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                icon={Save}
+                loading={saving}
+                onClick={() => void save('draft')}
+              >
+                Save as draft
+              </Button>
+              <Button
+                icon={CircleCheck}
+                loading={saving}
+                onClick={() => void save('completed')}
+              >
+                Complete consultation
+              </Button>
+              <Button
+                variant="secondary"
+                icon={Printer}
+                onClick={() => setPreviewOpen(true)}
+              >
+                Preview &amp; print
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => navigate('/')}
+                disabled={saving}
+              >
+                Cancel
+              </Button>
+            </div>
+
+            <p className="flex items-center gap-1.5 text-[11px] text-ink-muted xl:ml-auto">
+              <Info size={13} className="shrink-0" aria-hidden />
+              Printed prescription is a demonstration document and not valid.
+            </p>
           </div>
 
           <Panel

@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "./print.css";
+
+/* ------------------------------------------------------------------
+   Design tokens — clinical console
+   Neutral graphite base, ONE accent, and semantic colours reserved
+   strictly for clinical status so colour always carries meaning.
+------------------------------------------------------------------ */
+@theme {
+  /* surfaces */
+  --color-canvas: #f5f7f9;
+  --color-surface: #ffffff;
+  --color-surface-alt: #fafbfc;
+  --color-surface-sunken: #eef1f4;
+  --color-line: #e2e6ea;
+  --color-line-strong: #cbd3da;
+
+  /* text */
+  --color-ink: #0f172a;
+  --color-ink-soft: #475569;
+  --color-ink-muted: #94a3b8;
+  --color-ink-inverse: #f8fafc;
+
+  /* single clinical accent */
+  --color-accent: #0d9488;
+  --color-accent-hover: #0f766e;
+  --color-accent-soft: #ccfbf1;
+  --color-accent-ink: #115e59;
+
+  /* semantic — clinical status ONLY, never decoration */
+  --color-normal: #059669;
+  --color-normal-soft: #d1fae5;
+  --color-caution: #d97706;
+  --color-caution-soft: #fef3c7;
+  --color-critical: #dc2626;
+  --color-critical-soft: #fee2e2;
+
+  /* AI provenance — every machine-generated element is marked */
+  --color-ai: #6366f1;
+  --color-ai-soft: #e0e7ff;
+
+  /* typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* geometry — hairline borders, restrained radii, no drop shadows */
+  --radius-panel: 0.625rem;
+  --radius-control: 0.375rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans;
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  /* Focus is a safety feature in a clinical UI — never remove it. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+}
+
+@layer utilities {
+  /* Vitals and dosages must not jitter as digits change. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .panel {
+    @apply bg-surface border border-line rounded-panel;
+  }
+}

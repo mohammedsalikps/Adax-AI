@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Native colours mirroring the web application's design tokens in
+  src/styles/index.css, so the system chrome matches the interface.
+  (XML comments cannot contain a double hyphen, so token names are
+  written without their CSS variable prefix.)
+-->
+<resources>
+    <!-- color-accent -->
+    <color name="colorPrimary">#0D9488</color>
+    <!-- color-accent-hover -->
+    <color name="colorPrimaryDark">#0F766E</color>
+    <color name="colorAccent">#0D9488</color>
+
+    <!-- color-surface: the app's own topbar continues to the screen edge -->
+    <color name="statusBarColor">#FFFFFF</color>
+    <!-- color-canvas -->
+    <color name="navigationBarColor">#F5F7F9</color>
+    <color name="appBackground">#F5F7F9</color>
+</resources>

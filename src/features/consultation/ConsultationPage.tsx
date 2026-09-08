@@ -54,10 +54,14 @@ import {
 import type { CurrentMedication } from '@/types/prescription'
 import type { VitalsSnapshot } from '@/types/vitals'
 import { generateClinicalDraft } from '@/mock/aiDraft'
+import { generateClinicalAnalysis } from '@/mock/clinicalInsights'
+import type { ClinicalAnalysis, InsightDecision } from '@/types/insight'
 import { AiDraftDrawer, type DraftApplySelection } from './AiDraftDrawer'
 import { PrescriptionPreviewModal } from './PrescriptionPreviewModal'
 import { DeviceLinkStatus } from './DeviceLinkStatus'
 import { AiDraftSummary } from './AiDraftSummary'
+import { AiNotice } from './AiNotice'
+import { ClinicalInsightsPanel } from './ClinicalInsightsPanel'
 import { PatientConsultationHeader } from './PatientConsultationHeader'
 import { StepTitle } from './StepTitle'
 import { TranscriptionPanel } from './TranscriptionPanel'
@@ -98,6 +102,14 @@ export function ConsultationPage() {
   const [readOnly, setReadOnly] = useState(false)
   const savingTranscriptRef = useRef(false)
   const [generating, setGenerating] = useState(false)
+  const [analysis, setAnalysis] = useState<ClinicalAnalysis | null>(null)
+  const [analysing, setAnalysing] = useState(false)
+  // Doctor decisions on each suggestion, keyed by insight id. Absent = pending;
+  // nothing is ever accepted by default.
+  const [insightDecisions, setInsightDecisions] = useState<
+    Record<string, InsightDecision>
+  >({})
+  const analysingRef = useRef(false)
   const [savingTranscript, setSavingTranscript] = useState(false)
   const transcription = useTranscription(patientId)
   // State updates are asynchronous, so two clicks in the same tick would both
@@ -167,6 +179,35 @@ export function ConsultationPage() {
           },
     )
     window.scrollTo({ top: 0 })
+  }
+
+  async function runClinicalAnalysis() {
+    if (analysingRef.current || !patient) return
+    analysingRef.current = true
+    setAnalysing(true)
+    try {
+      const next = await generateClinicalAnalysis({
+        patient,
+        latestVitals,
+        vitalsHistory: vitalsQuery.data,
+        medications: medicationsQuery.data,
+        transcript: transcription.lines,
+      })
+      setAnalysis(next)
+      // A regenerated analysis mints new ids, so previous decisions no longer
+      // refer to anything. Clearing them is safer than leaving an accepted
+      // marker attached to a suggestion the doctor never saw.
+      setInsightDecisions({})
+    } catch {
+      showToast({
+        title: 'Could not analyse this record',
+        description: 'Nothing was changed. Try again.',
+        status: 'error',
+      })
+    } finally {
+      analysingRef.current = false
+      setAnalysing(false)
+    }
   }
 
   async function generateDraft() {
@@ -496,8 +537,8 @@ export function ConsultationPage() {
               {aiDraft ? (
                 <div className="space-y-3">
                   <AiDraftSummary draft={aiDraft} />
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line pt-2.5">
-                    <Badge variant="ai">{AI_DRAFT_DISCLAIMER}</Badge>
+                  <div className="space-y-1.5 border-t border-line pt-2.5">
+                    <AiNotice>{AI_DRAFT_DISCLAIMER}</AiNotice>
                     <p className="tnum text-[11px] text-ink-muted">
                       Generated {formatDateTime(aiDraft.generatedAt)} from{' '}
                       {aiDraft.sourceLineCount} transcript lines
@@ -812,6 +853,19 @@ export function ConsultationPage() {
               </Button>
             </div>
           </div>
+
+          {/* AI analysis sits above the reference panels: it is the thing
+              the doctor acts on, and everything below is what it read. */}
+          <ClinicalInsightsPanel
+            analysis={analysis}
+            loading={analysing}
+            decisions={insightDecisions}
+            disabled={locked}
+            onGenerate={() => void runClinicalAnalysis()}
+            onDecide={(insightId, decision) =>
+              setInsightDecisions((current) => ({ ...current, [insightId]: decision }))
+            }
+          />
 
           <Panel title="Patient summary" icon={IdCard} dense>
             <ClinicalDataRow label="Patient ID" value={patient.id} numeric emphasis dense />

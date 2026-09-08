@@ -18,6 +18,12 @@ import { SEED_PATIENTS } from './patients'
 import { DEMO_DOCTOR } from './doctor'
 import { getVitalsHistory } from './vitalsHistory'
 import { SEED_VISITS } from './visits'
+import {
+  getFamilyHistory,
+  getLabReports,
+  getStudyReports,
+} from '@/mock/patientRecords'
+import type { FamilyHistoryEntry, LabReport, StudyReport } from '@/types/record'
 
 /* ------------------------------------------------------------------
    Mock repository. Simulates a clinic database using browser storage
@@ -351,6 +357,23 @@ export const mockDb = {
       .filter((visit) => visit.patientId === patientId)
       .sort((a, b) => b.visitedOn.localeCompare(a.visitedOn))
     return delay(matches, READ_LATENCY_MS)
+  },
+
+  /**
+   * Investigation records. These are reference data rather than working
+   * records — nothing in the application creates or edits them — so they are
+   * read straight from the seed rather than from the mutable snapshot.
+   */
+  async listLabReports(patientId: string): Promise<LabReport[]> {
+    return delay(getLabReports(patientId), READ_LATENCY_MS)
+  },
+
+  async listStudyReports(patientId: string): Promise<StudyReport[]> {
+    return delay(getStudyReports(patientId), READ_LATENCY_MS)
+  },
+
+  async listFamilyHistory(patientId: string): Promise<FamilyHistoryEntry[]> {
+    return delay(getFamilyHistory(patientId), READ_LATENCY_MS)
   },
 
   /** Today's schedule joined with patient records, ordered by slot time. */

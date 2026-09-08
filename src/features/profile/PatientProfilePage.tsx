@@ -5,16 +5,19 @@ import {
   CalendarCheck,
   ClipboardList,
   FileText,
+  FlaskConical,
   IdCard,
   MapPin,
   Phone,
   Pencil,
   Pill,
+  ScanLine,
   SearchX,
   ShieldAlert,
   Stethoscope,
   TriangleAlert,
   UserSearch,
+  Users,
 } from 'lucide-react'
 import {
   Badge,
@@ -31,7 +34,9 @@ import {
   AllergyChip,
   ClinicalDataRow,
   PatientIdentityCard,
+  LabReportList,
   SectionHeader,
+  StudyReportList,
   VitalsTileGrid,
 } from '@/components/clinical'
 import { useAsyncData } from '@/hooks/useAsyncData'
@@ -83,6 +88,18 @@ export function PatientProfilePage() {
   const vitalsQuery = useAsyncData(
     () => mockDb.listVitalsHistory(patientId),
     `vitals:${patientId}`,
+  )
+  const labsQuery = useAsyncData(
+    () => mockDb.listLabReports(patientId),
+    `labs:${patientId}`,
+  )
+  const studiesQuery = useAsyncData(
+    () => mockDb.listStudyReports(patientId),
+    `studies:${patientId}`,
+  )
+  const familyQuery = useAsyncData(
+    () => mockDb.listFamilyHistory(patientId),
+    `family:${patientId}`,
   )
 
   // A just-saved record wins over the loaded one, so the profile updates
@@ -361,7 +378,54 @@ export function PatientProfilePage() {
               <p className="text-xs text-ink-muted">No chronic conditions recorded.</p>
             )}
           </Panel>
+
+          <Panel title="Family history" icon={Users} dense>
+            {familyQuery.loading ? (
+              <LoadingState variant="skeleton" rows={2} label="Loading family history" />
+            ) : (familyQuery.data ?? []).length > 0 ? (
+              <ul className="space-y-2">
+                {(familyQuery.data ?? []).map((entry) => (
+                  <li key={entry.id} className="text-[12px]">
+                    <span className="font-semibold text-ink">{entry.relation}</span>
+                    <span className="text-ink-muted"> — </span>
+                    <span className="text-ink-soft">{entry.condition}</span>
+                    {entry.ageAtDiagnosis !== undefined && (
+                      <span className="tnum text-ink-muted">
+                        {' '}
+                        (diagnosed at {entry.ageAtDiagnosis})
+                      </span>
+                    )}
+                    {entry.note && (
+                      <span className="block text-[11px] text-ink-muted">{entry.note}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-ink-muted">No family history recorded.</p>
+            )}
+          </Panel>
         </div>
+      </div>
+
+      {/* Investigation records sit full width: lab panels and study reports
+          need the room, and both are read during a consultation. */}
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+        <Panel title="Laboratory reports" icon={FlaskConical}>
+          {labsQuery.loading ? (
+            <LoadingState variant="skeleton" rows={2} label="Loading laboratory reports" />
+          ) : (
+            <LabReportList reports={labsQuery.data ?? []} />
+          )}
+        </Panel>
+
+        <Panel title="Imaging and diagnostics" icon={ScanLine}>
+          {studiesQuery.loading ? (
+            <LoadingState variant="skeleton" rows={2} label="Loading study reports" />
+          ) : (
+            <StudyReportList reports={studiesQuery.data ?? []} />
+          )}
+        </Panel>
       </div>
 
       {editing && (

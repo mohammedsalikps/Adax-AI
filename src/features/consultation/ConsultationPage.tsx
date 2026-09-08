@@ -8,6 +8,7 @@ import {
   CircleCheck,
   ClipboardList,
   FileText,
+  FlaskConical,
   IdCard,
   Info,
   Pill,
@@ -35,7 +36,9 @@ import {
 import {
   AllergyChip,
   ClinicalDataRow,
+  LabReportList,
   SectionHeader,
+  StudyReportList,
   StatusBadge,
   VitalsTileGrid,
 } from '@/components/clinical'
@@ -132,6 +135,14 @@ export function ConsultationPage() {
   const visitsQuery = useAsyncData(
     () => mockDb.listVisits(patientId),
     `consult-visits:${patientId}`,
+  )
+  const labsQuery = useAsyncData(
+    () => mockDb.listLabReports(patientId ?? ''),
+    `labs:${patientId}`,
+  )
+  const studiesQuery = useAsyncData(
+    () => mockDb.listStudyReports(patientId ?? ''),
+    `studies:${patientId}`,
   )
   const consultationsQuery = useAsyncData(
     () => mockDb.listConsultations(patientId),
@@ -786,6 +797,36 @@ export function ConsultationPage() {
               Printed prescription is a demonstration document and not valid.
             </p>
           </div>
+
+          {/* Previous investigation records, read during the visit. */}
+          <Panel
+            title="Previous records"
+            description="Laboratory, imaging and diagnostic reports on this chart"
+            icon={FlaskConical}
+          >
+            <div className="grid grid-cols-1 items-start gap-3.5 2xl:grid-cols-2">
+              <div>
+                <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ink-muted uppercase">
+                  Laboratory
+                </h3>
+                {labsQuery.loading ? (
+                  <LoadingState variant="skeleton" rows={2} label="Loading laboratory reports" />
+                ) : (
+                  <LabReportList reports={labsQuery.data ?? []} />
+                )}
+              </div>
+              <div>
+                <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ink-muted uppercase">
+                  Imaging and diagnostics
+                </h3>
+                {studiesQuery.loading ? (
+                  <LoadingState variant="skeleton" rows={2} label="Loading study reports" />
+                ) : (
+                  <StudyReportList reports={studiesQuery.data ?? []} />
+                )}
+              </div>
+            </div>
+          </Panel>
 
           <Panel
             title="Consultation history"

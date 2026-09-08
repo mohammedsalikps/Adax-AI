@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FlaskConical, Search } from 'lucide-react'
+import { Activity, FlaskConical, Search } from 'lucide-react'
 import { DemoDrawer } from '@/features/demo/DemoDrawer'
-import { formatLongDate, initialsOf } from '@/lib/format'
+import { initialsOf } from '@/lib/format'
+import { APP_NAME, APP_TAGLINE } from '@/lib/brand'
 import { DEMO_DOCTOR } from '@/mock/doctor'
 
 export function Topbar() {
@@ -23,25 +24,33 @@ export function Topbar() {
   }, [navigate])
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-line bg-surface px-5">
-      <div className="min-w-0">
-        <h1 className="truncate text-sm font-semibold tracking-tight text-ink">
-          {DEMO_DOCTOR.clinicName}
-        </h1>
-        <p className="truncate text-xs whitespace-nowrap text-ink-muted">
-          {formatLongDate(new Date())} · Demonstration data
-        </p>
+    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line bg-surface px-3 sm:gap-4 sm:px-5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div
+          aria-hidden
+          className="flex size-9 shrink-0 items-center justify-center rounded-panel bg-accent text-ink-inverse"
+        >
+          <Activity size={19} strokeWidth={2.5} />
+        </div>
+        <div className="hidden min-w-0 leading-tight sm:block">
+          <h1 className="truncate text-base font-bold tracking-tight text-accent">
+            {APP_NAME}
+          </h1>
+          <p className="truncate text-[11px] text-ink-muted">{APP_TAGLINE}</p>
+        </div>
       </div>
 
       <button
         type="button"
         onClick={() => navigate('/patients/search')}
-        className="ml-auto flex h-9 w-full max-w-72 min-w-0 flex-1 items-center gap-2 rounded-control border border-line bg-surface-alt px-3 text-left text-ink-muted transition-colors hover:border-line-strong hover:text-ink-soft"
+        className="mx-auto flex h-10 w-full max-w-xl min-w-0 flex-1 items-center gap-2 rounded-panel border border-line bg-surface-alt px-3.5 text-left text-ink-muted transition-colors hover:border-line-strong hover:text-ink-soft"
       >
-        <Search size={15} className="shrink-0" aria-hidden />
-        <span className="truncate text-xs">Search patient by ID or name</span>
+        <Search size={16} className="shrink-0" aria-hidden />
+        <span className="truncate text-xs sm:text-[13px]">
+          Search patient by ID or name...
+        </span>
         <kbd className="ml-auto hidden shrink-0 rounded border border-line bg-surface px-1.5 py-0.5 font-mono text-[10px] whitespace-nowrap text-ink-muted sm:block">
-          Ctrl K
+          Ctrl + K
         </kbd>
       </button>
 
@@ -56,23 +65,19 @@ export function Topbar() {
         <span className="sr-only sm:hidden">Demo guide</span>
       </button>
 
-      <div className="flex items-center gap-2.5 border-l border-line pl-4">
+      <div className="flex shrink-0 items-center gap-2.5 border-l border-line pl-3 sm:pl-4">
         <div
           aria-hidden
-          className="flex size-8 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent-ink"
+          className="flex size-9 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent-ink"
         >
           {initialsOf(DEMO_DOCTOR.fullName)}
         </div>
         <div className="hidden leading-tight whitespace-nowrap md:block">
-          <p className="text-xs font-semibold text-ink">{DEMO_DOCTOR.fullName}</p>
-          <p className="hidden text-[11px] text-ink-muted lg:block">
-            {DEMO_DOCTOR.qualifications}
-          </p>
+          <p className="text-[13px] font-semibold text-ink">{DEMO_DOCTOR.fullName}</p>
+          <p className="text-[11px] text-ink-muted">{DEMO_DOCTOR.qualifications}</p>
         </div>
         {/* The name is hidden below md, so keep it available to assistive tech. */}
-        <span className="sr-only md:hidden">
-          Signed in as {DEMO_DOCTOR.fullName}
-        </span>
+        <span className="sr-only md:hidden">Signed in as {DEMO_DOCTOR.fullName}</span>
       </div>
 
       <DemoDrawer open={demoOpen} onClose={() => setDemoOpen(false)} />

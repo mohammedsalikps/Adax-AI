@@ -1,4 +1,4 @@
-import { differenceInYears, format, parseISO } from 'date-fns'
+import { differenceInYears, format, formatDistanceToNowStrict, parseISO } from 'date-fns'
 
 /* India locale conventions: DD/MM/YYYY dates, INR currency, +91 phone,
    mg/dL glucose. Every display-level formatter lives here so the locale
@@ -70,4 +70,13 @@ export function initialsOf(fullName: string): string {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('')
+}
+
+/**
+ * Coarse "how long ago" label for a past date, e.g. "3 months ago".
+ * Used beside a full date, never instead of one — a relative label alone is
+ * not precise enough to read a chart by.
+ */
+export function formatRelativeToNow(iso: string): string {
+  return `${formatDistanceToNowStrict(parseISO(iso))} ago`
 }

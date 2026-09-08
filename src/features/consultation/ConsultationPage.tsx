@@ -34,7 +34,6 @@ import {
 import {
   AllergyChip,
   ClinicalDataRow,
-  PatientIdentityCard,
   SectionHeader,
   StatusBadge,
   VitalsTileGrid,
@@ -56,6 +55,7 @@ import type { VitalsSnapshot } from '@/types/vitals'
 import { generateClinicalDraft } from '@/mock/aiDraft'
 import { AiDraftDrawer, type DraftApplySelection } from './AiDraftDrawer'
 import { PrescriptionPreviewModal } from './PrescriptionPreviewModal'
+import { PatientConsultationHeader } from './PatientConsultationHeader'
 import { StepTitle } from './StepTitle'
 import { TranscriptionPanel } from './TranscriptionPanel'
 import { useTranscription } from './useTranscription'
@@ -443,14 +443,8 @@ export function ConsultationPage() {
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] xl:gap-5">
         {/* ============================ consultation workspace ============= */}
         <div className="min-w-0 space-y-3.5">
-          <PatientIdentityCard
-            patientId={patient.id}
-            fullName={patient.fullName}
-            age={age}
-            sex={patient.sex}
-            photoUrl={patient.photoUrl}
-            bloodGroup={patient.bloodGroup}
-            allergyCount={patient.allergies.length}
+          <PatientConsultationHeader
+            patient={patient}
             onOpenProfile={() => navigate(`/patients/${patient.id}`)}
           />
 

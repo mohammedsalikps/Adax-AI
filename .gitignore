@@ -29,3 +29,10 @@ android/keystore.properties
 *.jks
 *.keystore
 !android/app/debug.keystore
+
+# Environment files — never commit secrets or local configuration.
+# .env.example is the one exception: it documents the required keys
+# without holding any values.
+.env
+.env.*
+!.env.example

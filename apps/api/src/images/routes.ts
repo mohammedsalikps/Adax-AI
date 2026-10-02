@@ -11,6 +11,7 @@ import type { Config } from '../config.ts'
 import type { Db } from '../db/client.ts'
 import { aiEvidence, aiJobs, aiRuns, clinicalImages, encounters, files, imageAnalyses, users } from '../db/schema.ts'
 import { readStoredBytes, storeBytes } from '../files/storage.ts'
+import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import type { JobService } from '../ai/jobs.ts'
@@ -107,13 +108,10 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
     const { id } = parse(IdParams, req.params)
     const patient = await getPatientOr404(db, me.facilityId, id)
     if (!(await activeConsent(db, id, 'clinical_photography'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to clinical photographs first')
-    const part = await req.file()
-    if (!part) throw badRequest('Attach a photograph', [{ path: 'file', message: 'Required' }])
-    const raw = Object.fromEntries(Object.entries(part.fields).flatMap(([k, f]) => (k !== 'file' && typeof (f as { value?: unknown }).value === 'string' ? [[k, (f as { value: string }).value || undefined]] : [])))
-    const fields = parse(ImageUploadFields, raw)
-    const data = await part.toBuffer()
-    if (!data.length) throw badRequest('The file is empty')
-    if (data.length > limits.maxMb * 1024 * 1024) throw badRequest(`The photograph is larger than ${limits.maxMb} MB`)
+    const up = await readUpload(req, 'a photograph')
+    const fields = parse(ImageUploadFields, Object.fromEntries(Object.entries(up.fields).map(([k, v]) => [k, v || undefined])))
+    const data = up.data
+    if (data.length > limits.maxMb * 1024 * 1024) throw new HttpError(413, 'too_large', `The photograph is larger than ${limits.maxMb} MB`)
     if (fields.encounterId) {
       const e = await db.query.encounters.findFirst({ where: and(eq(encounters.id, fields.encounterId), eq(encounters.patientId, id)) })
       if (!e) throw badRequest('Some fields are invalid', [{ path: 'encounterId', message: 'Not a consultation of this patient' }])
@@ -122,7 +120,7 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
     const inspected = await thermal.inspectImage(data, { allowed: limits.types, maxPixels: limits.maxPixels, previewMaxSide: limits.previewMaxSide })
     const original = await storeBytes(config.storageDir, data, EXT[inspected.mimeType] ?? '')
     const preview = await storeBytes(config.storageDir, inspected.preview, '.jpg')
-    const originalName = path.basename(part.filename || 'photo').slice(0, 120)
+    const originalName = path.basename(up.filename || 'photo').slice(0, 120)
     const created = await db.transaction(async (tx) => {
       const base = { facilityId: me.facilityId, patientId: id, encounterId: fields.encounterId ?? null, uploadedBy: me.id }
       const [f] = await tx.insert(files).values({ ...base, kind: 'clinical_image', storageKey: original.storageKey, originalName, mimeType: inspected.mimeType, sizeBytes: original.sizeBytes, sha256: original.sha256 }).returning({ id: files.id })

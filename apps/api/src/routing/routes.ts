@@ -73,7 +73,8 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: { db: Db; rout
   app.get('/api/visits/:id/routing-suggestion', { config: { permission: 'queue:read' } }, async (req) => {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
-    await visitOr404(me, id)
+    const v = await visitOr404(me, id)
+    await audit(db, req, { action: 'routing.read', entityType: 'visit', entityId: id, patientId: v.patientId })
     return respond(id)
   })
 

@@ -39,7 +39,7 @@ export function AdminAuditPage() {
       <PageHeader title="Audit log" description="Append-only record of sign-ins, changes and patient-record access. Viewing this log is itself audited." />
       <Card className="mb-4">
         <form
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6"
           onSubmit={(e) => {
             e.preventDefault()
             setApplied(draft)

@@ -46,7 +46,7 @@ function LabelForm({ capture }: { capture: ThermalCapture }) {
     >
       <h3 className="text-sm font-semibold">Add your label</h3>
       {add.isError && !Object.keys(errors).length && <Alert tone="error">{errorMessage(add.error)}</Alert>}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SelectField label="Applies to" value={scope === 'capture' ? '' : roiLabel} error={errors.roiLabel} onChange={(e) => (setScope(e.target.value ? 'roi' : 'capture'), setRoiLabel(e.target.value), setCode(''))}>
           <option value="">Whole image</option>
           {capture.rois.map((r) => (

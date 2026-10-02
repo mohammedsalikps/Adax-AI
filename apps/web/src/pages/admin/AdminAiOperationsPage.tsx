@@ -134,7 +134,7 @@ export function AdminAiOperationsPage() {
             )}
           </Card>
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <Card title="Models used">
               {!o.models.length && <p className="text-sm text-ink-muted">None yet.</p>}
               <ul className="space-y-1 text-sm">

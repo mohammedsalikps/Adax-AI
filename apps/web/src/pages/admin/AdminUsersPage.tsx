@@ -53,7 +53,7 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
       <form
         id="create-user"
         noValidate
-        className="grid gap-4 sm:grid-cols-2"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2"
         onSubmit={(e) => {
           e.preventDefault()
           const body = form.validate()
@@ -125,7 +125,7 @@ function EditUserDialog({ user, onClose }: { user: UserSummary | null; onClose: 
         </>
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {update.isError && <Alert tone="error" className="sm:col-span-2">{errorMessage(update.error)}</Alert>}
         <TextField label="Full name" value={values.fullName} onChange={(e) => setValues({ ...values, fullName: e.target.value })} className="sm:col-span-2" />
         <SelectField label="Role" value={values.role} onChange={(e) => setValues({ ...values, role: e.target.value as typeof values.role })}>

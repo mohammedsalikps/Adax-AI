@@ -239,7 +239,7 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
       <Alert tone="warning" title="Measurements only">
         Temperatures come from the camera’s radiometric data and depend on emissivity, distance and room conditions. They are not a diagnosis and this tool is not clinically validated. It has been tested with public FLIR sample files only.
       </Alert>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <Card title="Thermal image">
           {matrix.isPending && <Spinner label="Loading temperature data…" />}
           {matrix.isError && <Alert tone="error">{errorMessage(matrix.error)}</Alert>}
@@ -254,7 +254,7 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
                   <span>{fmtC(high)}</span>
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                 <SelectField label="Palette" value={palette} onChange={(e) => setPalette(e.target.value as PaletteName)}>
                   <option value="iron">Iron</option>
                   <option value="rainbow">Rainbow</option>
@@ -337,7 +337,7 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
             const set = (patch: Partial<EditableRoi>) => setAll(rois.map((x, j) => (j === i ? { ...x, ...patch } : x)))
             return (
               <li key={r.key} className="rounded-lg border border-line p-3" data-testid={`roi-${r.label}`}>
-                <div className="grid gap-3 sm:grid-cols-[1fr_7rem_repeat(4,5.5rem)_10rem_auto] sm:items-end">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_7rem_repeat(4,5.5rem)_10rem_auto] sm:items-end">
                   <TextField label="Label" value={r.label} disabled={!editable} onChange={(e) => set({ label: e.target.value })} />
                   <SelectField label="Shape" value={r.shape} disabled={!editable} onChange={(e) => set({ shape: e.target.value as RoiGeom['shape'] })}>
                     <option value="rect">Rectangle</option>

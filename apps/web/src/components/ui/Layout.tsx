@@ -16,7 +16,7 @@ export function PageHeader({ title, description, actions }: { title: ReactNode; 
 export function Card({ title, actions, children, className = '', bodyClassName = 'p-5' }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string }) {
   const headingId = useId()
   return (
-    <section aria-labelledby={title ? headingId : undefined} className={`rounded-xl border border-line bg-surface ${className}`}>
+    <section aria-labelledby={title ? headingId : undefined} className={`min-w-0 rounded-xl border border-line bg-surface ${className}`}>
       {(title || actions) && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3">
           {title && (

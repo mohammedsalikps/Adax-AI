@@ -12,6 +12,7 @@ import type { AppSettings } from './settings/schema.ts'
 import { registerFileRoutes } from './files/routes.ts'
 import { httpThermalService, type ThermalService } from './thermal/client.ts'
 import { registerImageRoutes } from './images/routes.ts'
+import { registerDeviceRoutes } from './devices/routes.ts'
 import { registerPortalRoutes } from './portal/routes.ts'
 import { registerRoutingRoutes } from './routing/routes.ts'
 import { registerThermalDatasetRoutes } from './thermal/datasets.ts'
@@ -77,6 +78,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerRoutingRoutes(app, { db, routing })
   registerOversightRoutes(app, { db, providers, jobs })
   registerPortalRoutes(app, { db })
+  registerDeviceRoutes(app, { db, config: deps.config, settings })
 
   // API responses carry patient data: never store them in any cache (browser,
   // proxy or the web app's service worker), and set basic security headers.

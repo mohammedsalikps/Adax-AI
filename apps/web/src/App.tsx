@@ -27,7 +27,8 @@ import { ConsultationPage } from './pages/doctor/ConsultationPage.tsx'
 import { PrescriptionPrintPage } from './pages/doctor/PrescriptionPrintPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
-import { NotYetBuiltPage } from './pages/NotYetBuiltPage.tsx'
+import { AdminDevicesPage, StaffDevicesPage } from './pages/DevicesPages.tsx'
+import { AuscultationCard } from './components/clinical/AuscultationCard.tsx'
 import { PortalConsentsPage, PortalHomePage, PortalProfilePage, PortalRecordPage, PortalRecordsPage, PortalVisitsPage, PortalVitalsPage } from './pages/patient/PortalPages.tsx'
 import { ClinicalImagesCard } from './components/clinical/ClinicalImagesCard.tsx'
 
@@ -38,9 +39,10 @@ const portal = (role: Role) => (
 )
 
 const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={(p) => (
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <PatientThermalCard patient={p} />
         <ClinicalImagesCard patientId={p.id} />
+        <AuscultationCard patientId={p.id} />
       </div>
     )}
   />
@@ -72,7 +74,7 @@ const router = createBrowserRouter([
       { index: true, element: <AdminOverviewPage /> },
       { path: 'users', element: <AdminUsersPage /> },
       { path: 'departments', element: <AdminDepartmentsPage /> },
-      { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device registry (band, stethoscope, thermal camera)']} /> },
+      { path: 'devices', element: <AdminDevicesPage /> },
       { path: 'thermal-data', element: <AdminThermalDataPage /> },
       { path: 'ai', element: <AdminAiOperationsPage /> },
       { path: 'audit', element: <AdminAuditPage /> },
@@ -93,6 +95,7 @@ const router = createBrowserRouter([
               <>
                 <AiAssistantPanel encounter={e} append={append} />
                 <ClinicalImagesCard patientId={e.patient.id} encounter={e} append={append} />
+                <AuscultationCard patientId={e.patient.id} encounterId={e.id} />
               </>
             )}
           />
@@ -114,7 +117,7 @@ const router = createBrowserRouter([
       { path: 'patients/:patientId', element: profile },
       { path: 'encounters/:encounterId', element: <ConsultationPage /> },
       { path: 'thermal/:captureId', element: <ThermalDetailPage /> },
-      { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device assignment and readings']} /> },
+      { path: 'devices', element: <StaffDevicesPage /> },
     ],
   },
   {

@@ -306,7 +306,7 @@ export function AiAssistantPanel({ encounter, append }: { encounter: Encounter; 
                 </span>
               </Alert>
             )}
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="space-y-3">
                 <p className="text-sm font-medium">Record or upload audio</p>
                 {ai.status.stt.available && ai.status.features.liveTranscription && <LiveRecorder encounterId={id} chunkSeconds={ai.status.liveChunkSeconds} onUpdate={onLiveUpdate} disabled={uploadAudio.isPending} />}

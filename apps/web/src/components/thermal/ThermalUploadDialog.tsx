@@ -60,7 +60,7 @@ export function ThermalUploadDialog({ patientId, encounterId, onClose }: { patie
         </>
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <p className="text-sm text-ink-muted sm:col-span-2">Upload the original radiometric JPEG exported from a FLIR camera. Screenshots or edited images have no temperature data and are rejected.</p>
         {upload.isError && !Object.keys(errors).length && <Alert tone="error" className="sm:col-span-2">{errorMessage(upload.error)}</Alert>}
         <div className="space-y-1 sm:col-span-2">

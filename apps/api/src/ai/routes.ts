@@ -36,6 +36,7 @@ import {
 } from '../db/schema.ts'
 import { getEncounterOr404 } from '../encounters/service.ts'
 import { readStoredBytes, storeBytes } from '../files/storage.ts'
+import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { activeConsent } from '../patients/service.ts'
@@ -510,7 +511,11 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   app.get('/api/encounters/:id/ai', { config: { permission: 'ai:use' } }, async (req) => {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
-    return loadAi(me, id)
+    const out = await loadAi(me, id)
+    // Named outside 'ai.*' so routine reads do not crowd the consultation's AI activity trail.
+    const e = await getEncounterOr404(db, me, id)
+    await audit(db, req, { action: 'encounter_ai.read', entityType: 'encounter', entityId: id, patientId: e.patientId })
+    return out
   })
 
   /** Consent for this consultation only (the profile page records ongoing consent). */
@@ -548,19 +553,14 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   })
 
   async function storeAudio(req: FastifyRequest, me: SessionUser, e: { id: string; patientId: string }, nameFor: (ext: string, original: string | undefined, field: (n: string) => string | undefined) => string) {
-    const part = await req.file()
-    if (!part) throw badRequest('Attach an audio file', [{ path: 'file', message: 'Required' }])
-    const mime = part.mimetype.split(';')[0]!.trim().toLowerCase()
+    const up = await readUpload(req, 'an audio file')
+    const mime = up.mimetype
     const ext = AUDIO_EXT[mime]
     if (!ext || !settings.uploads.audio.types.includes(mime)) throw badRequest('Unsupported audio format', [{ path: 'file', message: 'Use WebM, OGG, MP3, M4A or WAV audio' }])
-    const data = await part.toBuffer()
-    if (!data.length) throw badRequest('The audio file is empty', [{ path: 'file', message: 'Empty file' }])
-    if (data.length > settings.uploads.audio.maxMb * 1024 * 1024) throw badRequest(`Audio is larger than ${settings.uploads.audio.maxMb} MB`)
-    const field = (n: string) => {
-      const f = part.fields[n] as { value?: unknown } | undefined
-      return typeof f?.value === 'string' ? f.value : undefined
-    }
-    const originalName = nameFor(ext, part.filename, field)
+    const data = up.data
+    if (data.length > settings.uploads.audio.maxMb * 1024 * 1024) throw new HttpError(413, 'too_large', `Audio is larger than ${settings.uploads.audio.maxMb} MB`)
+    const field = (n: string) => up.fields[n]
+    const originalName = nameFor(ext, up.filename, field)
     const stored = await storeBytes(config.storageDir, data, ext)
     const [file] = await db
       .insert(files)

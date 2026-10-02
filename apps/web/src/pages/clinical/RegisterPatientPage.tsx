@@ -95,7 +95,7 @@ export function RegisterPatientPage() {
         {Object.keys(err).length > 0 && <Alert tone="error">Please correct the highlighted fields.</Alert>}
 
         <Card title="Identity">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <TextField label="Given name" required value={v.givenName} onChange={(e) => set('givenName', e.target.value)} error={err.givenName} autoComplete="off" />
             <TextField label="Family name" value={v.familyName ?? ''} onChange={(e) => set('familyName', e.target.value)} error={err.familyName} autoComplete="off" hint="Leave empty if the patient uses a single name." />
             <div className="space-y-2">
@@ -119,7 +119,7 @@ export function RegisterPatientPage() {
         </Card>
 
         <Card title="Contact">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <TextField label="Mobile number" required type="tel" inputMode="tel" value={v.phone} onChange={(e) => set('phone', e.target.value)} error={err.phone} hint="10 digits, or international with +" />
             <TextField label="Email" type="email" value={v.email ?? ''} onChange={(e) => set('email', e.target.value)} error={err.email} />
             <TextField label="Address" value={v.addressLine ?? ''} onChange={(e) => set('addressLine', e.target.value)} error={err.addressLine} className="sm:col-span-2" />
@@ -130,7 +130,7 @@ export function RegisterPatientPage() {
         </Card>
 
         <Card title="Other details">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <TextField label="ABHA number" inputMode="numeric" value={v.abhaNumber ?? ''} onChange={(e) => set('abhaNumber', e.target.value)} error={err.abhaNumber} hint="Optional. Stored as entered; not verified with ABDM." />
             <SelectField label="Blood group" value={v.bloodGroup ?? ''} onChange={(e) => set('bloodGroup', (e.target.value || null) as 'A+' | null)}>
               <option value="">Not known</option>

@@ -327,8 +327,8 @@ export const observations = pgTable(
     measuredAt: timestamp('measured_at', { withTimezone: true }).notNull().defaultNow(),
     source: observationSource('source').notNull().default('manual'),
     validationStatus: text('validation_status').notNull().default('manual_entry'),
-    /** Device that produced the value (FK added with devices). */
-    deviceId: uuid('device_id'),
+    /** Device that produced the value (source = device). */
+    deviceId: uuid('device_id').references((): AnyPgColumn => devices.id),
     recordedBy: uuid('recorded_by').references(() => users.id),
     enteredInError: boolean('entered_in_error').notNull().default(false),
     enteredInErrorReason: text('entered_in_error_reason'),
@@ -1014,6 +1014,90 @@ export const thermalDatasetExports = pgTable('thermal_dataset_exports', {
   createdBy: uuid('created_by').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+// ---------------------------------------------------------------------------
+// Devices: registry, assignment, gateway ingestion boundary, auscultation audio
+// ---------------------------------------------------------------------------
+
+/**
+ * A registered device. `integration` states honestly how data gets in:
+ * manual_upload (files uploaded by staff), gateway_api (a separate gateway
+ * posts readings with the device token) or not_integrated.
+ */
+export const devices = pgTable(
+  'devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    /** wearable_band | smart_stethoscope | thermal_camera | other */
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    manufacturer: text('manufacturer'),
+    model: text('model'),
+    serialNumber: text('serial_number').notNull(),
+    /** active | retired */
+    status: text('status').notNull().default('active'),
+    integration: text('integration').notNull().default('not_integrated'),
+    notes: text('notes'),
+    /** SHA-256 of the gateway token; the token itself is shown once and never stored. */
+    ingestTokenHash: text('ingest_token_hash'),
+    tokenCreatedAt: timestamp('token_created_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('devices_serial_uq').on(t.facilityId, t.serialNumber), uniqueIndex('devices_token_uq').on(t.ingestTokenHash)],
+)
+
+/** Which patient a device is attached to. At most one open assignment per device. */
+export const deviceAssignments = pgTable(
+  'device_assignments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    visitId: uuid('visit_id').references(() => visits.id),
+    assignedBy: uuid('assigned_by')
+      .notNull()
+      .references(() => users.id),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    endedBy: uuid('ended_by').references(() => users.id),
+    endReason: text('end_reason'),
+  },
+  (t) => [uniqueIndex('device_assignments_one_open_uq').on(t.deviceId).where(sql`${t.endedAt} is null`), index('device_assignments_patient_idx').on(t.patientId)],
+)
+
+/** A stethoscope (auscultation) recording uploaded as a file. Append-only. */
+export const auscultationRecordings = pgTable(
+  'auscultation_recordings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id),
+    deviceId: uuid('device_id').references(() => devices.id),
+    /** e.g. aortic, pulmonic, tricuspid, mitral, lung_left_upper ... */
+    site: text('site').notNull(),
+    note: text('note'),
+    dataOrigin: text('data_origin').notNull(),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('auscultation_patient_idx').on(t.patientId)],
+)
 
 /** Post-signing corrections. Append-only (triggers block UPDATE/DELETE). */
 export const encounterAmendments = pgTable(

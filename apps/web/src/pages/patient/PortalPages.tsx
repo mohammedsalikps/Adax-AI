@@ -47,7 +47,7 @@ export function PortalHomePage() {
       {(d) => (
         <>
           <PageHeader title={`Hello, ${d.profile.fullName}`} description={`Record number ${d.profile.mrn}. Only records your doctor has signed are shown here.`} />
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Card title="Follow-up advice">
               {!d.upcoming.length && <p className="text-sm text-ink-muted">No follow-up advice in your signed records.</p>}
               <ul className="space-y-3">
@@ -82,7 +82,7 @@ export function PortalHomePage() {
               )}
             </Card>
           </div>
-          <nav aria-label="Your records" className="mt-4 grid gap-3 sm:grid-cols-2">
+          <nav aria-label="Your records" className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Link to="/patient/records" className="rounded-lg border border-line bg-surface p-4 font-medium hover:bg-canvas">
               Consultation records and prescriptions ({d.counts.records})
             </Link>
@@ -279,7 +279,7 @@ export function PortalVitalsPage() {
           const kinds = VITAL_ORDER.filter((k) => d.vitals.some((v) => v.kind === k))
           if (!kinds.length) return <EmptyState title="No measurements yet" />
           return (
-            <ul className="grid gap-3 md:grid-cols-2">
+            <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {kinds.map((k) => {
                 const series = d.vitals.filter((v) => v.kind === k)
                 const def = VITALS[k]
@@ -365,7 +365,7 @@ export function PortalProfilePage() {
       <PageHeader title="My details" description="If anything is wrong, tell the clinic staff at your next visit." />
       <Loading q={q}>
         {(p) => (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Card title="Personal details">
               <DescriptionList
                 items={[

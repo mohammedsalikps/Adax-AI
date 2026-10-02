@@ -459,3 +459,30 @@ describe('retention', () => {
     expect(await runRetention(withAi.db, testConfig.storageDir, { ...settings, retention: { consultationAudioDays: 0 } }, { dryRun: false, now: later })).toMatchObject({ days: 0, deleted: 0 })
   })
 })
+
+describe('signed records', () => {
+  it('accepting AI output never changes the consultation; only text the doctor saved in the note is signed', async () => {
+    const { e, doctor } = await scenario(withAi)
+    const t = await withTranscript(withAi, e.id, doctor)
+    recommender.out = [{ kind: 'follow_up', urgency: 'routine', text: 'Consider review in two days.', rationale: 'Fever.', supportingRefs: ['S2'], conflicts: [], missingInformation: [] }]
+    const before = Encounter.parse((await call(withAi.app, 'GET', `/api/encounters/${e.id}`, { cookie: doctor })).json())
+    let ai = EncounterAi.parse((await call(withAi.app, 'POST', `/api/transcripts/${t.id}/extract`, { cookie: doctor })).json())
+    ai = EncounterAi.parse((await call(withAi.app, 'POST', `/api/encounters/${e.id}/recommendations`, { cookie: doctor, body: {} })).json())
+    for (const f of ai.facts) await call(withAi.app, 'POST', `/api/ai-review/fact/${f.id}`, { cookie: doctor, body: { action: 'accepted', confirmFlags: true } })
+    for (const r of ai.recommendations) await call(withAi.app, 'POST', `/api/ai-review/recommendation/${r.id}`, { cookie: doctor, body: { action: 'accepted', confirmFlags: true } })
+    const after = Encounter.parse((await call(withAi.app, 'GET', `/api/encounters/${e.id}`, { cookie: doctor })).json())
+    // No AI action wrote to the consultation.
+    expect(after.version).toBe(before.version)
+    expect(after.note).toEqual(before.note)
+    expect(after.prescription).toEqual(before.prescription)
+
+    const saved = Encounter.parse((await call(withAi.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: draft(after.version) })).json())
+    expect((await call(withAi.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: saved.version, attestation: true } })).statusCode).toBe(200)
+    const snapshot = JSON.stringify((await adminQuery('SELECT signed_snapshot FROM encounters WHERE id = $1', [e.id])).rows[0].signed_snapshot)
+    for (const text of [...ai.facts.map((f) => f.text), ...ai.recommendations.map((r) => r.text)]) expect(snapshot).not.toContain(text)
+    expect(snapshot).toContain('Metformin')
+    expect(snapshot).not.toContain('Amoxicillin')
+    // And the signed record cannot be changed afterwards, by anyone.
+    await expect(withAi.pool.query("UPDATE encounters SET plan = 'AI text' WHERE id = $1", [e.id])).rejects.toMatchObject({ code: '42501' })
+  })
+})

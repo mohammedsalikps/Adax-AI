@@ -99,7 +99,7 @@ export function RecordVitalsDialog({ visitId, patientName, onClose }: { visitId:
         <p className="text-sm text-ink-muted">Enter the measurements you took; leave the rest blank. Values are recorded as manual entries by you.</p>
         {errors._form && <Alert tone="error">{errors._form}</Alert>}
         {save.isError && !Object.keys(errors).length && <Alert tone="error">{errorMessage(save.error)}</Alert>}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {ENTRY_KINDS.map((kind) => {
             const d = VITALS[kind]
             return (

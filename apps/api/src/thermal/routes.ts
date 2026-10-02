@@ -10,6 +10,7 @@ import type { Config } from '../config.ts'
 import { type Db, pgCode } from '../db/client.ts'
 import { encounters, files, patients, thermalCaptures, thermalLabels, thermalRois, users } from '../db/schema.ts'
 import { readStoredBytes, storeBytes } from '../files/storage.ts'
+import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { activeConsent, getPatientOr404 } from '../patients/service.ts'
@@ -109,13 +110,9 @@ export function registerThermalRoutes(app: FastifyInstance, deps: { db: Db; conf
     const { id } = parse(IdParams, req.params)
     await getPatientOr404(db, me.facilityId, id)
     if (!(await activeConsent(db, id, 'thermal_imaging'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to thermal imaging first')
-    const part = await req.file()
-    if (!part) throw badRequest('Attach a thermal image', [{ path: 'file', message: 'Required' }])
-    const data = await part.toBuffer()
-    const field = (name: string) => {
-      const f = part.fields[name] as { value?: unknown } | undefined
-      return typeof f?.value === 'string' ? f.value : undefined
-    }
+    const up = await readUpload(req, 'a thermal image')
+    const data = up.data
+    const field = (name: string) => up.fields[name]
     let protocolInput: unknown
     try {
       protocolInput = JSON.parse(field('protocol') ?? '{}')
@@ -139,7 +136,7 @@ export function registerThermalRoutes(app: FastifyInstance, deps: { db: Db; conf
     const visible = ex.visibleJpeg ? await storeBytes(config.storageDir, ex.visibleJpeg, '.jpg') : null
     const created = await db.transaction(async (tx) => {
       const base = { facilityId: me.facilityId, patientId: id, encounterId, uploadedBy: me.id }
-      const [rawFile] = await tx.insert(files).values({ ...base, kind: 'thermal_raw', storageKey: raw.storageKey, originalName: (part.filename || 'thermal.jpg').slice(0, 120), mimeType: 'image/jpeg', sizeBytes: raw.sizeBytes, sha256: raw.sha256 }).returning({ id: files.id })
+      const [rawFile] = await tx.insert(files).values({ ...base, kind: 'thermal_raw', storageKey: raw.storageKey, originalName: (up.filename || 'thermal.jpg').slice(0, 120), mimeType: 'image/jpeg', sizeBytes: raw.sizeBytes, sha256: raw.sha256 }).returning({ id: files.id })
       const [matrixFile] = await tx.insert(files).values({ ...base, kind: 'thermal_matrix', storageKey: matrix.storageKey, originalName: 'matrix.f32', mimeType: 'application/octet-stream', sizeBytes: matrix.sizeBytes, sha256: matrix.sha256 }).returning({ id: files.id })
       const visibleFile = visible
         ? (await tx.insert(files).values({ ...base, kind: 'thermal_visible', storageKey: visible.storageKey, originalName: 'visible.jpg', mimeType: 'image/jpeg', sizeBytes: visible.sizeBytes, sha256: visible.sha256 }).returning({ id: files.id }))[0]

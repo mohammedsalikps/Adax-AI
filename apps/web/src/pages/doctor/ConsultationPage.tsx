@@ -65,7 +65,7 @@ function DiagnosesEditor({ items, onChange }: { items: DiagnosisInput[]; onChang
       {!items.length && <p className="text-sm text-ink-muted">No diagnosis yet. At least one is needed to sign (provisional is fine).</p>}
       <ul className="space-y-3">
         {items.map((d, i) => (
-          <li key={i} className="grid gap-3 rounded-lg border border-line p-3 sm:grid-cols-[1fr_8rem_9rem_auto] sm:items-end">
+          <li key={i} className="grid grid-cols-1 gap-3 rounded-lg border border-line p-3 sm:grid-cols-[1fr_8rem_9rem_auto] sm:items-end">
             <TextField label={`Diagnosis ${i + 1}`} value={d.description ?? ''} onChange={(e) => set(i, { description: e.target.value })} />
             <TextField label="ICD-10 (optional)" value={d.code ?? ''} onChange={(e) => set(i, { code: e.target.value })} spellCheck={false} />
             <SelectField label="Type" value={d.kind ?? 'primary'} onChange={(e) => set(i, { kind: e.target.value as DiagnosisInput['kind'] })}>
@@ -101,7 +101,7 @@ function PrescriptionEditor({ items, onChange }: { items: PrescriptionItemInput[
                 Remove
               </Button>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <TextField label="Medicine" value={p.drugName ?? ''} onChange={(e) => set(i, { drugName: e.target.value })} className="sm:col-span-2" />
               <TextField label="Strength" placeholder="500 mg" value={p.strength ?? ''} onChange={(e) => set(i, { strength: e.target.value })} />
               <TextField label="Form" placeholder="Tablet" value={p.form ?? ''} onChange={(e) => set(i, { form: e.target.value })} />
@@ -289,7 +289,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
           .
         </Alert>
       )}
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-6">
           {sidePanel?.(initial, append)}
           <Card title="Consultation note">
@@ -429,7 +429,7 @@ export function EncounterReadView({ e }: { e: Encounter }) {
         </div>
       </div>
       {!signed && <Alert tone="info" className="mb-4">This consultation is still a draft by {e.doctor.fullName}. Only they can edit and sign it.</Alert>}
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-6">
           <Card title="Consultation note">
             <dl className="space-y-4 text-sm">

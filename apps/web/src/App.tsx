@@ -28,6 +28,7 @@ import { PrescriptionPrintPage } from './pages/doctor/PrescriptionPrintPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { NotYetBuiltPage } from './pages/NotYetBuiltPage.tsx'
+import { PortalConsentsPage, PortalHomePage, PortalProfilePage, PortalRecordPage, PortalRecordsPage, PortalVisitsPage, PortalVitalsPage } from './pages/patient/PortalPages.tsx'
 import { ClinicalImagesCard } from './components/clinical/ClinicalImagesCard.tsx'
 
 const portal = (role: Role) => (
@@ -119,7 +120,16 @@ const router = createBrowserRouter([
   {
     path: '/patient',
     element: portal('patient'),
-    children: [{ path: '*', element: <NotYetBuiltPage title="Patient portal" planned={['Visits, prescriptions, vitals, consents']} /> }],
+    children: [
+      { index: true, element: <PortalHomePage /> },
+      { path: 'records', element: <PortalRecordsPage /> },
+      { path: 'records/:recordId', element: <PortalRecordPage /> },
+      { path: 'visits', element: <PortalVisitsPage /> },
+      { path: 'vitals', element: <PortalVitalsPage /> },
+      { path: 'consents', element: <PortalConsentsPage /> },
+      { path: 'profile', element: <PortalProfilePage /> },
+      { path: '*', element: <NotFoundPage /> },
+    ],
   },
   { path: '*', element: <Outlet />, children: [{ path: '*', element: <NotFoundPage /> }] },
 ])

@@ -11,6 +11,8 @@ import {
   ShieldCheck,
   Building2,
   BrainCircuit,
+  Activity,
+  UserRound,
   Stethoscope,
   UserPlus,
   Users,
@@ -49,8 +51,10 @@ export const NAV: Record<Role, NavItem[]> = {
   ],
   patient: [
     { to: '/patient', label: 'Home', icon: HeartPulse, end: true },
+    { to: '/patient/records', label: 'Records', icon: FileText },
     { to: '/patient/visits', label: 'Visits', icon: FileClock },
-    { to: '/patient/prescriptions', label: 'Prescriptions', icon: FileText },
+    { to: '/patient/vitals', label: 'Vital signs', icon: Activity },
     { to: '/patient/consents', label: 'Consents', icon: ShieldCheck },
+    { to: '/patient/profile', label: 'My details', icon: UserRound },
   ],
 }

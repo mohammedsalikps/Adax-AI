@@ -12,6 +12,7 @@ import type { AppSettings } from './settings/schema.ts'
 import { registerFileRoutes } from './files/routes.ts'
 import { httpThermalService, type ThermalService } from './thermal/client.ts'
 import { registerImageRoutes } from './images/routes.ts'
+import { registerPortalRoutes } from './portal/routes.ts'
 import { registerRoutingRoutes } from './routing/routes.ts'
 import { registerThermalDatasetRoutes } from './thermal/datasets.ts'
 import { registerThermalRoutes } from './thermal/routes.ts'
@@ -75,6 +76,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })
   registerRoutingRoutes(app, { db, routing })
   registerOversightRoutes(app, { db, providers, jobs })
+  registerPortalRoutes(app, { db })
+
+  // API responses carry patient data: never store them in any cache (browser,
+  // proxy or the web app's service worker), and set basic security headers.
+  app.addHook('onSend', async (_req, reply) => {
+    if (!reply.hasHeader('cache-control')) reply.header('cache-control', 'no-store')
+    reply.header('x-content-type-options', 'nosniff')
+    reply.header('referrer-policy', 'no-referrer')
+    reply.header('x-frame-options', 'DENY')
+  })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

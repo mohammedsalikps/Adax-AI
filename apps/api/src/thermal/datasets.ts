@@ -1,0 +1,236 @@
+import crypto from 'node:crypto'
+import { THERMAL_DATASET_SCHEMA, THERMAL_TAXONOMY_VERSION, type ThermalDataSummary, type ThermalDatasetExport } from '@adaxai/contracts'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
+import { audit } from '../audit/audit.ts'
+import { currentUser } from '../auth/plugin.ts'
+import type { Config } from '../config.ts'
+import type { Db } from '../db/client.ts'
+import { consents, files, patients, thermalCaptures, thermalDatasetExports, thermalLabels, thermalRois, users } from '../db/schema.ts'
+import { readStoredBytes, storeBytes } from '../files/storage.ts'
+import { createZip } from '../files/zip.ts'
+import { conflict, notFound } from '../http/errors.ts'
+import { parse } from '../http/validate.ts'
+import { ageOn } from '../patients/service.ts'
+import type { ThermalService } from './client.ts'
+
+const IdParams = z.object({ id: z.uuid() })
+
+/** Patients with active, ongoing consent to de-identified research use. */
+const hasResearchConsent = sql`exists (
+  select 1 from ${consents}
+  where ${consents.patientId} = ${thermalCaptures.patientId}
+    and ${consents.type} = 'research_use' and ${consents.status} = 'granted'
+    and ${consents.withdrawnAt} is null and ${consents.scope} = 'ongoing')`
+
+function ageBand(age: number): string {
+  if (age >= 90) return '90+'
+  const lo = Math.floor(age / 10) * 10
+  return `${lo}-${lo + 9}`
+}
+
+const README = `ADAXAI thermal dataset (${THERMAL_DATASET_SCHEMA})
+
+De-identified export for research and tool development. NOT a validated
+clinical dataset.
+
+manifest.json   Dataset metadata and one entry per capture:
+                - id (export-local), subject (export-local; same subject = same patient)
+                - ageBand, sex, dataOrigin (clinical | synthetic | public_sample)
+                - width, height, matrix (path), matrixSha256
+                - protocol (body region, view, room temperature, acclimatisation, distance)
+                - camera (make, model), parameters (emissivity etc.), extractor
+                - rois (label, shape, x, y, width, height in pixels, pairWith, stats)
+                - pairs (mean and max differences between paired regions, deg C)
+                - labels (active clinician labels; rater is export-local;
+                  taxonomy ${THERMAL_TAXONOMY_VERSION})
+matrices/*.f32  Temperatures in deg C: float32, little-endian, row-major,
+                height rows of width values.
+
+Removed: names, record numbers, dates of birth, contact details, dates and
+times, free-text notes (capture, review and label notes), GPS and camera
+serial data, and the original image files.
+
+Only approved captures of patients with active consent to de-identified
+research use are included. Data whose origin is not "clinical" (synthetic,
+demonstration or public sample files) must not be used to make any claim
+about clinical performance.
+`
+
+export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: Db; config: Config; thermal: ThermalService }) {
+  const { db, config, thermal } = deps
+
+  async function toExport(row: typeof thermalDatasetExports.$inferSelect): Promise<ThermalDatasetExport> {
+    const [extra] = await db
+      .select({ name: users.fullName, sha256: files.sha256, sizeBytes: files.sizeBytes })
+      .from(files)
+      .leftJoin(users, eq(users.id, row.createdBy ?? sql`null`))
+      .where(eq(files.id, row.fileId))
+    return {
+      id: row.id,
+      createdAt: row.createdAt.toISOString(),
+      createdByName: extra?.name ?? null,
+      fileSha256: extra!.sha256,
+      sizeBytes: extra!.sizeBytes,
+      summary: row.summary as ThermalDatasetExport['summary'],
+      evaluation: row.evaluatedAt ? { at: row.evaluatedAt.toISOString(), report: row.evaluation as Record<string, unknown>, markdown: row.evaluationMarkdown ?? '' } : null,
+    }
+  }
+
+  async function getExportOr404(facilityId: string, id: string) {
+    const row = await db.query.thermalDatasetExports.findFirst({ where: and(eq(thermalDatasetExports.id, id), eq(thermalDatasetExports.facilityId, facilityId)) })
+    if (!row) throw notFound('Dataset export')
+    return row
+  }
+
+  /** Aggregate counts only: no patient-level data, so admins can see it too. */
+  app.get('/api/thermal-data/summary', { config: { permission: 'thermal:export' } }, async (req): Promise<ThermalDataSummary> => {
+    const me = currentUser(req)
+    const inFacility = eq(thermalCaptures.facilityId, me.facilityId)
+    const byStatus = await db.select({ status: thermalCaptures.status, n: sql<number>`count(*)::int` }).from(thermalCaptures).where(inFacility).groupBy(thermalCaptures.status)
+    const byOrigin = await db.select({ origin: thermalCaptures.dataOrigin, n: sql<number>`count(*)::int` }).from(thermalCaptures).where(inFacility).groupBy(thermalCaptures.dataOrigin)
+    const [consented] = await db.select({ n: sql<number>`count(*)::int` }).from(thermalCaptures).where(and(inFacility, eq(thermalCaptures.status, 'approved'), hasResearchConsent))
+    const active = and(inFacility, isNull(thermalLabels.withdrawnAt))
+    const byCode = await db.select({ code: thermalLabels.code, n: sql<number>`count(*)::int` }).from(thermalLabels).innerJoin(thermalCaptures, eq(thermalCaptures.id, thermalLabels.captureId)).where(active).groupBy(thermalLabels.code)
+    const [labelled] = await db.select({ n: sql<number>`count(distinct ${thermalLabels.captureId})::int` }).from(thermalLabels).innerJoin(thermalCaptures, eq(thermalCaptures.id, thermalLabels.captureId)).where(active)
+    const count = (s: string) => byStatus.find((r) => r.status === s)?.n ?? 0
+    return {
+      captures: { draft: count('draft'), approved: count('approved'), rejected: count('rejected') },
+      approvedWithResearchConsent: consented?.n ?? 0,
+      labelledCaptures: labelled?.n ?? 0,
+      activeLabels: byCode.reduce((n, r) => n + r.n, 0),
+      labelCounts: Object.fromEntries(byCode.map((r) => [r.code, r.n])),
+      dataOrigins: Object.fromEntries(byOrigin.map((r) => [r.origin, r.n])),
+    }
+  })
+
+  app.get('/api/thermal-data/exports', { config: { permission: 'thermal:export' } }, async (req) => {
+    const me = currentUser(req)
+    const rows = await db.select().from(thermalDatasetExports).where(eq(thermalDatasetExports.facilityId, me.facilityId)).orderBy(desc(thermalDatasetExports.createdAt)).limit(20)
+    return { exports: await Promise.all(rows.map(toExport)) }
+  })
+
+  /** Builds a de-identified dataset ZIP of approved, research-consented captures. */
+  app.post('/api/thermal-data/exports', { config: { permission: 'thermal:export' } }, async (req, reply) => {
+    const me = currentUser(req)
+    const approved = and(eq(thermalCaptures.facilityId, me.facilityId), eq(thermalCaptures.status, 'approved'))
+    const rows = await db
+      .select({ c: thermalCaptures, dob: patients.dateOfBirth, sex: patients.sex, matrixKey: files.storageKey })
+      .from(thermalCaptures)
+      .innerJoin(patients, eq(patients.id, thermalCaptures.patientId))
+      .innerJoin(files, eq(files.id, thermalCaptures.matrixFileId))
+      .where(and(approved, hasResearchConsent))
+      .orderBy(asc(thermalCaptures.createdAt))
+    const [all] = await db.select({ n: sql<number>`count(*)::int` }).from(thermalCaptures).where(approved)
+    const excludedNoResearchConsent = (all?.n ?? 0) - rows.length
+    if (!rows.length) throw conflict(`No approved thermal images with research consent to export (${excludedNoResearchConsent} approved image(s) lack consent to research use).`, 'nothing_to_export')
+
+    const ids = rows.map((r) => r.c.id)
+    const rois = await db.select().from(thermalRois).where(inArray(thermalRois.captureId, ids)).orderBy(asc(thermalRois.sortOrder))
+    const labels = await db.select().from(thermalLabels).where(and(inArray(thermalLabels.captureId, ids), isNull(thermalLabels.withdrawnAt))).orderBy(asc(thermalLabels.labelledAt))
+    const subjects = new Map<string, string>()
+    const raters = new Map<string, string>()
+    const pseudo = (m: Map<string, string>, key: string, prefix: string) => {
+      if (!m.has(key)) m.set(key, `${prefix}${String(m.size + 1).padStart(3, '0')}`)
+      return m.get(key)!
+    }
+    const entries: { name: string; data: Buffer }[] = []
+    const captures = []
+    const origins: Record<string, number> = {}
+    let labelled = 0
+    for (const [i, r] of rows.entries()) {
+      const cid = `C${String(i + 1).padStart(4, '0')}`
+      const matrix = await readStoredBytes(config.storageDir, r.matrixKey)
+      if (matrix.length !== r.c.width * r.c.height * 4) throw new Error(`stored matrix of capture ${r.c.id} has the wrong size`)
+      entries.push({ name: `matrices/${cid}.f32`, data: matrix })
+      const { notes: _notes, ...protocol } = r.c.protocol as Record<string, unknown>
+      const camera = r.c.camera as { make: string | null; model: string | null }
+      const capLabels = labels.filter((l) => l.captureId === r.c.id)
+      if (capLabels.length) labelled++
+      origins[r.c.dataOrigin] = (origins[r.c.dataOrigin] ?? 0) + 1
+      captures.push({
+        id: cid,
+        subject: pseudo(subjects, r.c.patientId, 'S'),
+        ageBand: ageBand(ageOn(String(r.dob), r.c.createdAt.toISOString().slice(0, 10))),
+        sex: r.sex,
+        dataOrigin: r.c.dataOrigin,
+        width: r.c.width,
+        height: r.c.height,
+        matrix: `matrices/${cid}.f32`,
+        matrixSha256: crypto.createHash('sha256').update(matrix).digest('hex'),
+        protocol,
+        camera: { make: camera.make, model: camera.model },
+        parameters: r.c.parameters,
+        extractor: r.c.extractor,
+        stats: { minC: r.c.minC, maxC: r.c.maxC, meanC: r.c.meanC },
+        rois: rois.filter((x) => x.captureId === r.c.id).map((x) => ({ label: x.label, shape: x.shape, x: x.x, y: x.y, width: x.width, height: x.height, pairWith: x.pairWith, stats: x.stats })),
+        pairs: r.c.pairStats,
+        labels: capLabels.map((l) => ({ rater: pseudo(raters, l.labelledBy, 'R'), scope: l.scope, roi: l.roiLabel, code: l.code, referenceStandard: l.referenceStandard, certainty: l.certainty, taxonomyVersion: l.taxonomyVersion })),
+      })
+    }
+    const nonClinical = Object.keys(origins).some((o) => o !== 'clinical')
+    const exportId = crypto.randomUUID()
+    const manifest = {
+      schema: THERMAL_DATASET_SCHEMA,
+      exportId,
+      createdAt: new Date().toISOString(),
+      taxonomyVersion: THERMAL_TAXONOMY_VERSION,
+      matrixEncoding: 'float32-le',
+      validated: false,
+      nonClinical,
+      dataOrigins: origins,
+      disclaimer: nonClinical
+        ? 'Contains synthetic, demonstration or public sample data (non-clinical). Not a validated clinical dataset.'
+        : 'Not a validated clinical dataset. Labels reflect the stated reference standard only.',
+      excluded: { approvedWithoutResearchConsent: excludedNoResearchConsent },
+      captures,
+    }
+    entries.unshift({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 2)) }, { name: 'README.txt', data: Buffer.from(README) })
+    const zip = createZip(entries)
+    const stored = await storeBytes(config.storageDir, zip, '.zip')
+    const summary = { captures: rows.length, subjects: subjects.size, labelledCaptures: labelled, dataOrigins: origins, excludedNoResearchConsent }
+    const row = await db.transaction(async (tx) => {
+      const [file] = await tx
+        .insert(files)
+        .values({ facilityId: me.facilityId, kind: 'dataset_export', storageKey: stored.storageKey, originalName: `adaxai-thermal-dataset-${manifest.createdAt.slice(0, 10)}.zip`, mimeType: 'application/zip', sizeBytes: stored.sizeBytes, sha256: stored.sha256, uploadedBy: me.id })
+        .returning({ id: files.id })
+      const [created] = await tx.insert(thermalDatasetExports).values({ id: exportId, facilityId: me.facilityId, fileId: file!.id, summary, createdBy: me.id }).returning()
+      await audit(tx, req, { action: 'thermal.dataset_export', entityType: 'thermal_dataset_export', entityId: exportId, details: { ...summary, sha256: stored.sha256 } })
+      return created!
+    })
+    return reply.code(201).send(await toExport(row))
+  })
+
+  app.get('/api/thermal-data/exports/:id/download', { config: { permission: 'thermal:export' } }, async (req, reply) => {
+    const me = currentUser(req)
+    const { id } = parse(IdParams, req.params)
+    const row = await getExportOr404(me.facilityId, id)
+    const file = (await db.query.files.findFirst({ where: eq(files.id, row.fileId) }))!
+    const data = await readStoredBytes(config.storageDir, file.storageKey)
+    await audit(db, req, { action: 'thermal.dataset_download', entityType: 'thermal_dataset_export', entityId: id, details: { sha256: file.sha256 } })
+    return reply
+      .header('content-type', 'application/zip')
+      .header('content-disposition', `attachment; filename="${(file.originalName ?? 'dataset.zip').replace(/[^\w.-]/g, '_')}"`)
+      .header('content-length', String(data.length))
+      .header('x-content-type-options', 'nosniff')
+      .header('cache-control', 'private, no-store')
+      .send(data)
+  })
+
+  /** Runs the evaluation pipeline on an export and stores its report. */
+  app.post('/api/thermal-data/exports/:id/evaluate', { config: { permission: 'thermal:export' } }, async (req) => {
+    const me = currentUser(req)
+    const { id } = parse(IdParams, req.params)
+    const row = await getExportOr404(me.facilityId, id)
+    const file = (await db.query.files.findFirst({ where: eq(files.id, row.fileId) }))!
+    const result = await thermal.evaluate(await readStoredBytes(config.storageDir, file.storageKey))
+    const [updated] = await db.transaction(async (tx) => {
+      const u = await tx.update(thermalDatasetExports).set({ evaluation: result.report, evaluationMarkdown: result.markdown, evaluatedAt: new Date() }).where(eq(thermalDatasetExports.id, id)).returning()
+      const model = result.report.model as { status?: string } | undefined
+      await audit(tx, req, { action: 'thermal.dataset_evaluate', entityType: 'thermal_dataset_export', entityId: id, details: { pipelineVersion: result.report.pipelineVersion, model: model?.status ?? null, nonClinical: result.report.nonClinical } })
+      return u
+    })
+    return toExport(updated!)
+  })
+}

@@ -1,3 +1,4 @@
+import type { ThermalFlags } from '@adaxai/contracts'
 import { HttpError } from '../http/errors.ts'
 
 export interface ExtractResult {
@@ -27,10 +28,21 @@ export interface RoiStatsInput {
   pairs: { a: string; b: string }[]
 }
 
+export type FlagsInput = RoiStatsInput
+
+export interface EvaluationResult {
+  report: Record<string, unknown>
+  markdown: string
+}
+
 /** The Python thermal service (stateless; never touches the database). */
 export interface ThermalService {
   extract(file: Buffer, filename: string): Promise<ExtractResult>
   roiStats(input: RoiStatsInput): Promise<RoiStatsResult>
+  /** Experimental rule-based flags: not validated, not diagnostic. */
+  flags(input: FlagsInput): Promise<ThermalFlags>
+  /** Evaluates a dataset ZIP against its clinician labels. */
+  evaluate(datasetZip: Buffer): Promise<EvaluationResult>
 }
 
 const unavailable = () => new HttpError(503, 'thermal_unavailable', 'The thermal processing service is not reachable. Try again shortly.')
@@ -65,6 +77,18 @@ export function httpThermalService(baseUrl: string, fetchImpl: typeof fetch = fe
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...input, matrix: input.matrix.toString('base64') }),
       })) as RoiStatsResult
+    },
+    async flags(input) {
+      return (await call('/flags', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...input, matrix: input.matrix.toString('base64') }),
+      })) as ThermalFlags
+    },
+    async evaluate(datasetZip) {
+      const form = new FormData()
+      form.append('file', new Blob([new Uint8Array(datasetZip)], { type: 'application/zip' }), 'dataset.zip')
+      return (await call('/evaluate', { method: 'POST', body: form })) as EvaluationResult
     },
   }
 }

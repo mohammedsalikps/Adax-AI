@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, ne } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
@@ -15,7 +15,8 @@ export function registerFileRoutes(app: FastifyInstance, { db, config }: { db: D
   app.get('/api/files/:id', { config: { permission: 'patients:read' } }, async (req, reply) => {
     const me = currentUser(req)
     const { id } = parse(z.object({ id: z.uuid() }), req.params)
-    const f = await db.query.files.findFirst({ where: and(eq(files.id, id), eq(files.facilityId, me.facilityId)) })
+    // Dataset exports have their own route and permission (thermal:export).
+    const f = await db.query.files.findFirst({ where: and(eq(files.id, id), eq(files.facilityId, me.facilityId), ne(files.kind, 'dataset_export')) })
     if (!f) throw notFound('File')
     const data = await readStoredBytes(config.storageDir, f.storageKey)
     await audit(db, req, { action: 'file.read', entityType: 'file', entityId: id, patientId: f.patientId, details: { kind: f.kind } })

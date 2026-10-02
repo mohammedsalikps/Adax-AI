@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm'
 import {
   bigint,
   boolean,
+  check,
   customType,
   date,
   index,
@@ -573,10 +574,12 @@ export const thermalCaptures = pgTable(
     reviewNote: text('review_note'),
     reviewedBy: uuid('reviewed_by').references(() => users.id),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    /** clinical | synthetic | public_sample - set at upload from deployment config or a known sample checksum. */
+    dataOrigin: text('data_origin').notNull().default('synthetic'),
     createdBy: uuid('created_by').references(() => users.id),
     ...timestamps,
   },
-  (t) => [index('thermal_captures_patient_idx').on(t.patientId), index('thermal_captures_encounter_idx').on(t.encounterId)],
+  (t) => [check('thermal_captures_data_origin_check', sql`${t.dataOrigin} in ('clinical', 'synthetic', 'public_sample')`), index('thermal_captures_patient_idx').on(t.patientId), index('thermal_captures_encounter_idx').on(t.encounterId)],
 )
 
 export const thermalRois = pgTable(
@@ -600,6 +603,59 @@ export const thermalRois = pgTable(
   },
   (t) => [index('thermal_rois_capture_idx').on(t.captureId)],
 )
+
+/**
+ * Clinician labels on reviewed thermal captures, for building evaluation
+ * datasets. Never deleted: a label is withdrawn (once, with a reason) and a
+ * new one added. Trigger in migration 0010 enforces this.
+ */
+export const thermalLabels = pgTable(
+  'thermal_labels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    captureId: uuid('capture_id')
+      .notNull()
+      .references(() => thermalCaptures.id),
+    /** capture | roi */
+    scope: text('scope').notNull(),
+    roiLabel: text('roi_label'),
+    code: text('code').notNull(),
+    referenceStandard: text('reference_standard').notNull(),
+    certainty: text('certainty').notNull(),
+    note: text('note'),
+    taxonomyVersion: text('taxonomy_version').notNull(),
+    labelledBy: uuid('labelled_by')
+      .notNull()
+      .references(() => users.id),
+    labelledAt: timestamp('labelled_at', { withTimezone: true }).notNull().defaultNow(),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+    withdrawnBy: uuid('withdrawn_by').references(() => users.id),
+    withdrawReason: text('withdraw_reason'),
+  },
+  (t) => [
+    check('thermal_labels_scope_check', sql`(${t.scope} = 'capture' and ${t.roiLabel} is null) or (${t.scope} = 'roi' and ${t.roiLabel} is not null)`),
+    index('thermal_labels_capture_idx').on(t.captureId),
+    // One active label per rater per image (or per region).
+    uniqueIndex('thermal_labels_one_active_per_rater').on(t.captureId, t.labelledBy, sql`coalesce(lower(${t.roiLabel}), '')`).where(sql`${t.withdrawnAt} is null`),
+  ],
+)
+
+/** De-identified dataset exports (the ZIP is a stored file) and their evaluation report. */
+export const thermalDatasetExports = pgTable('thermal_dataset_exports', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  facilityId: uuid('facility_id')
+    .notNull()
+    .references(() => facilities.id),
+  fileId: uuid('file_id')
+    .notNull()
+    .references(() => files.id),
+  summary: jsonb('summary').notNull(),
+  evaluation: jsonb('evaluation'),
+  evaluationMarkdown: text('evaluation_markdown'),
+  evaluatedAt: timestamp('evaluated_at', { withTimezone: true }),
+  createdBy: uuid('created_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
 
 /** Post-signing corrections. Append-only (triggers block UPDATE/DELETE). */
 export const encounterAmendments = pgTable(

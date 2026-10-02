@@ -71,6 +71,13 @@
       "when": 1790930128199,
       "tag": "0009_thermal_review_freeze",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790931949677,
+      "tag": "0010_thermal_labels_and_datasets",
+      "breakpoints": true
     }
   ]
 }

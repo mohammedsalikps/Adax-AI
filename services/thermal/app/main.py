@@ -14,10 +14,13 @@ import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from app import __version__
+from app.evaluate import DatasetError, evaluate_dataset, to_markdown
+from app.flags import FlagsRequest, evaluate
 from app.radiometric import ExtractionError, extract, extractor_info, parameters
 from app.roi import RoiStatsRequest, compute, encode_matrix
 
 MAX_FILE_BYTES = 30 * 1024 * 1024
+MAX_DATASET_BYTES = 500 * 1024 * 1024
 
 app = FastAPI(
     title="ADAXAI Thermal Service",
@@ -34,7 +37,7 @@ def health() -> dict:
         "service": "thermal",
         "version": __version__,
         "python": platform.python_version(),
-        "capabilities": ["flir_radiometric_jpeg", "roi_stats"],
+        "capabilities": ["flir_radiometric_jpeg", "roi_stats", "experimental_flags", "dataset_evaluation"],
     }
 
 
@@ -73,3 +76,28 @@ def roi_stats(req: RoiStatsRequest) -> dict:
         return compute(req)
     except ValueError as e:
         raise HTTPException(status_code=422, detail={"error": "invalid_matrix", "message": str(e)}) from e
+
+
+@app.post("/flags")
+def flags(req: FlagsRequest) -> dict:
+    """Experimental rule-based flags (not validated, not diagnostic)."""
+    try:
+        return evaluate(req)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail={"error": "invalid_matrix", "message": str(e)}) from e
+
+
+@app.post("/evaluate")
+async def evaluate_endpoint(file: Annotated[UploadFile, File()]) -> dict:
+    """Evaluate an exported dataset ZIP. Never a clinical validation; the report says so."""
+    data = await file.read(MAX_DATASET_BYTES + 1)
+    if len(data) > MAX_DATASET_BYTES:
+        raise HTTPException(
+            status_code=413, detail={"error": "too_large", "message": "Dataset is larger than 500 MB."}
+        )
+    try:
+        report = evaluate_dataset(data)
+    except (DatasetError, KeyError, ValueError, TypeError) as e:
+        msg = str(e) if isinstance(e, DatasetError) else f"The dataset is malformed ({type(e).__name__})."
+        raise HTTPException(status_code=422, detail={"error": "invalid_dataset", "message": msg}) from e
+    return {"report": report, "markdown": to_markdown(report)}

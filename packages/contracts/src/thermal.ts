@@ -79,8 +79,136 @@ export const ThermalCapture = z.object({
   review: z.object({ byName: z.string().nullable(), at: z.string(), note: z.string().nullable() }).nullable(),
   createdAt: z.string(),
   createdByName: z.string().nullable(),
+  dataOrigin: z.lazy(() => DataOrigin),
+  /** Clinician labels, including withdrawn ones (shown struck through). */
+  labels: z.array(z.lazy(() => ThermalLabel)),
 })
 export type ThermalCapture = z.infer<typeof ThermalCapture>
 
 export const ThermalReviewRequest = z.object({ decision: z.enum(['approved', 'rejected']), note: OptionalText(500) })
 export type ThermalReviewRequest = z.input<typeof ThermalReviewRequest>
+
+/** Where the image data came from. Anything but `clinical` is excluded from any performance claim. */
+export const DataOrigin = z.enum(['clinical', 'synthetic', 'public_sample'])
+export type DataOrigin = z.infer<typeof DataOrigin>
+export const DATA_ORIGIN_LABELS: Record<DataOrigin, string> = {
+  clinical: 'Clinical',
+  synthetic: 'Synthetic / demonstration',
+  public_sample: 'Public sample file',
+}
+
+// ---------------------------------------------------------------------------
+// Clinician labels (ground truth for future evaluation). Versioned taxonomy.
+// ---------------------------------------------------------------------------
+
+export const THERMAL_TAXONOMY_VERSION = 'thermal-labels-v1'
+
+export const CAPTURE_FINDINGS = {
+  no_significant_finding: 'No significant thermal finding',
+  inflammatory_pattern: 'Pattern consistent with inflammation',
+  infective_pattern: 'Pattern consistent with infection',
+  vascular_pattern: 'Pattern consistent with reduced perfusion',
+  musculoskeletal_pattern: 'Pattern consistent with musculoskeletal injury',
+  other_finding: 'Other finding',
+  uninterpretable: 'Not interpretable (image quality or protocol)',
+} as const
+export const ROI_FINDINGS = {
+  normal: 'Normal for this region',
+  warmer_than_expected: 'Warmer than expected',
+  cooler_than_expected: 'Cooler than expected',
+  indeterminate: 'Indeterminate',
+} as const
+/** How the label was established. Clinical impression alone is the weakest reference. */
+export const REFERENCE_STANDARDS = {
+  clinical_impression: 'Clinical impression at the time',
+  confirmed_investigation: 'Confirmed by investigation (lab or imaging)',
+  follow_up: 'Confirmed at follow-up',
+} as const
+export const LABEL_CERTAINTY = { certain: 'Certain', probable: 'Probable', uncertain: 'Uncertain' } as const
+
+type Keys<T> = [keyof T & string, ...(keyof T & string)[]]
+const keys = <T extends object>(o: T) => Object.keys(o) as Keys<T>
+
+export const ThermalLabelInput = z
+  .object({
+    scope: z.enum(['capture', 'roi']),
+    /** Region label, for scope `roi`. */
+    roiLabel: z.string().trim().max(40).nullable().optional(),
+    code: z.string(),
+    referenceStandard: z.enum(keys(REFERENCE_STANDARDS)),
+    certainty: z.enum(keys(LABEL_CERTAINTY)),
+    note: OptionalText(500),
+  })
+  .superRefine((v, ctx) => {
+    const codes: readonly string[] = keys(v.scope === 'capture' ? CAPTURE_FINDINGS : ROI_FINDINGS)
+    if (!codes.includes(v.code)) ctx.addIssue({ code: 'custom', path: ['code'], message: 'Choose a finding from the list' })
+    if (v.scope === 'roi' && !v.roiLabel) ctx.addIssue({ code: 'custom', path: ['roiLabel'], message: 'Choose a region' })
+    if (v.scope === 'capture' && v.roiLabel) ctx.addIssue({ code: 'custom', path: ['roiLabel'], message: 'Whole-image labels have no region' })
+  })
+export type ThermalLabelInput = z.input<typeof ThermalLabelInput>
+
+export const ThermalLabel = z.object({
+  id: z.uuid(),
+  scope: z.enum(['capture', 'roi']),
+  roiLabel: z.string().nullable(),
+  code: z.string(),
+  referenceStandard: z.string(),
+  certainty: z.string(),
+  note: z.string().nullable(),
+  taxonomyVersion: z.string(),
+  labelledById: z.uuid(),
+  labelledByName: z.string().nullable(),
+  labelledAt: z.string(),
+  withdrawn: z.object({ at: z.string(), byName: z.string().nullable(), reason: z.string() }).nullable(),
+})
+export type ThermalLabel = z.infer<typeof ThermalLabel>
+
+export const WithdrawLabelRequest = z.object({ reason: Text(300) })
+
+// ---------------------------------------------------------------------------
+// Experimental rule-based flags (NOT validated, NOT diagnostic).
+// ---------------------------------------------------------------------------
+
+export const ThermalFlags = z.object({
+  version: z.string(),
+  validated: z.literal(false),
+  disclaimer: z.string(),
+  params: z.object({ asymmetry_threshold_c: z.number(), hotspot_k: z.number(), hotspot_min_pixels: z.number(), max_hotspots: z.number() }),
+  image: z.object({ meanC: z.number(), stdC: z.number(), hotspotThresholdC: z.number() }),
+  hotspots: z.array(z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), pixelCount: z.number(), maxC: z.number(), meanC: z.number(), aboveImageMeanC: z.number() })),
+  asymmetry: z.array(z.object({ a: z.string(), b: z.string(), meanDiffC: z.number(), flagged: z.boolean() })),
+})
+export type ThermalFlags = z.infer<typeof ThermalFlags>
+
+// ---------------------------------------------------------------------------
+// De-identified dataset exports and their evaluation.
+// ---------------------------------------------------------------------------
+
+export const THERMAL_DATASET_SCHEMA = 'adaxai-thermal-dataset/1'
+
+export const ThermalDataSummary = z.object({
+  captures: z.object({ draft: z.number(), approved: z.number(), rejected: z.number() }),
+  approvedWithResearchConsent: z.number(),
+  labelledCaptures: z.number(),
+  activeLabels: z.number(),
+  labelCounts: z.record(z.string(), z.number()),
+  dataOrigins: z.record(z.string(), z.number()),
+})
+export type ThermalDataSummary = z.infer<typeof ThermalDataSummary>
+
+export const ThermalDatasetExport = z.object({
+  id: z.uuid(),
+  createdAt: z.string(),
+  createdByName: z.string().nullable(),
+  fileSha256: z.string(),
+  sizeBytes: z.number(),
+  summary: z.object({
+    captures: z.number(),
+    subjects: z.number(),
+    labelledCaptures: z.number(),
+    dataOrigins: z.record(z.string(), z.number()),
+    excludedNoResearchConsent: z.number(),
+  }),
+  evaluation: z.object({ at: z.string(), report: z.record(z.string(), z.unknown()), markdown: z.string() }).nullable(),
+})
+export type ThermalDatasetExport = z.infer<typeof ThermalDatasetExport>

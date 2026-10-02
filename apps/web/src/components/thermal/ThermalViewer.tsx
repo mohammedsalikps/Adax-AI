@@ -1,4 +1,4 @@
-import { type ThermalCapture, type ThermalReviewRequest, type ThermalRoiInput } from '@adaxai/contracts'
+import { DATA_ORIGIN_LABELS, type ThermalCapture, type ThermalReviewRequest, type ThermalRoiInput } from '@adaxai/contracts'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Circle, Plus, Save, Square, Trash2 } from 'lucide-react'
 import { type PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
@@ -11,6 +11,8 @@ import { Alert, Badge, Spinner } from '../ui/Feedback.tsx'
 import { SelectField, TextAreaField, TextField } from '../ui/Form.tsx'
 import { Card, DescriptionList } from '../ui/Layout.tsx'
 import { useToast } from '../ui/Toast.tsx'
+import { ThermalFlagsCard, useThermalFlags } from './ThermalFlags.tsx'
+import { ThermalLabelsCard } from './ThermalLabels.tsx'
 
 interface EditableRoi extends RoiGeom {
   key: string
@@ -19,6 +21,7 @@ interface EditableRoi extends RoiGeom {
 }
 
 const round = (v: number) => Math.round(v * 10) / 10
+const NO_HOTSPOTS: { x: number; y: number; width: number; height: number }[] = []
 const fromCapture = (c: ThermalCapture): EditableRoi[] => c.rois.map((r) => ({ key: r.id, label: r.label, shape: r.shape, x: r.x, y: r.y, width: r.width, height: r.height, pairWith: r.pairWith ?? '' }))
 
 function ThermalCanvas({
@@ -30,6 +33,7 @@ function ThermalCanvas({
   rois,
   tool,
   onDrawn,
+  hotspots = NO_HOTSPOTS,
 }: {
   matrix: Float32Array
   c: ThermalCapture
@@ -39,6 +43,8 @@ function ThermalCanvas({
   rois: EditableRoi[]
   tool: 'none' | 'rect' | 'ellipse'
   onDrawn: (g: RoiGeom) => void
+  /** Experimental warm areas, outlined dashed in amber. */
+  hotspots?: { x: number; y: number; width: number; height: number }[]
 }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const overlay = useRef<HTMLCanvasElement>(null)
@@ -90,9 +96,22 @@ function ThermalCanvas({
       }
       ctx.restore()
     }
+    hotspots.forEach((hs, i) => {
+      ctx.save()
+      ctx.lineWidth = 2
+      ctx.setLineDash([4, 4])
+      ctx.strokeStyle = '#fbbf24'
+      ctx.shadowColor = 'rgba(0,0,0,0.9)'
+      ctx.shadowBlur = 3
+      ctx.strokeRect(hs.x * SCALE, hs.y * SCALE, hs.width * SCALE, hs.height * SCALE)
+      ctx.font = `${Math.max(12, SCALE * 4)}px system-ui, sans-serif`
+      ctx.fillStyle = '#fbbf24'
+      ctx.fillText(`H${i + 1}`, hs.x * SCALE + 2, Math.max(12, hs.y * SCALE - 4))
+      ctx.restore()
+    })
     rois.forEach((r) => draw(r, r.label))
     if (drag && tool !== 'none') draw({ shape: tool, x: Math.min(drag.x0, drag.x1), y: Math.min(drag.y0, drag.y1), width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0) }, '', true)
-  }, [rois, drag, tool, w, h, SCALE])
+  }, [rois, drag, tool, w, h, SCALE, hotspots])
 
   const toPixel = (e: PointerEvent<HTMLCanvasElement>) => {
     const r = e.currentTarget.getBoundingClientRect()
@@ -189,6 +208,8 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
   const [rois, setRois] = useState<EditableRoi[]>(() => fromCapture(capture))
   const [dirty, setDirty] = useState(false)
   const editable = capture.status === 'draft'
+  const [showFlags, setShowFlags] = useState(false)
+  const flags = useThermalFlags(capture, showFlags)
   const setAll = (next: EditableRoi[]) => (setRois(next), setDirty(true))
 
   const save = useMutation({
@@ -224,7 +245,7 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
           {matrix.isError && <Alert tone="error">{errorMessage(matrix.error)}</Alert>}
           {matrix.data && (
             <div className="space-y-4">
-              <ThermalCanvas matrix={matrix.data} c={capture} low={low} high={high} palette={palette} rois={rois} tool={editable ? tool : 'none'} onDrawn={addRoi} />
+              <ThermalCanvas matrix={matrix.data} c={capture} low={low} high={high} palette={palette} rois={rois} tool={editable ? tool : 'none'} onDrawn={addRoi} hotspots={showFlags ? flags.data?.hotspots : undefined} />
               <div className="space-y-1">
                 <div className="h-3 rounded" style={{ background: paletteCss(palette) }} aria-hidden="true" />
                 <div className="flex justify-between text-xs tabular-nums text-ink-muted">
@@ -276,6 +297,7 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
                 ['Reflected temp (camera)', fmtC(capture.parameters.reflectedTempC)],
                 ['Camera', [capture.camera.make, capture.camera.model].filter(Boolean).join(' ') || '—'],
                 ['Extractor', `${capture.extractor.name} ${capture.extractor.version}`],
+                ['Data origin', <Badge tone={capture.dataOrigin === 'clinical' ? 'neutral' : 'notice'}>{DATA_ORIGIN_LABELS[capture.dataOrigin]}</Badge>],
                 ['Uploaded', `${fmtDateTime(capture.createdAt)} · ${capture.createdByName ?? ''}`],
                 ...(capture.review ? ([['Reviewed', `${fmtDateTime(capture.review.at)} · ${capture.review.byName ?? ''}${capture.review.note ? ` · ${capture.review.note}` : ''}`]] as [string, string][]) : []),
               ]}
@@ -362,6 +384,9 @@ export function ThermalViewer({ capture }: { capture: ThermalCapture }) {
           </div>
         )}
       </Card>
+
+      <ThermalFlagsCard shown={showFlags} onToggle={setShowFlags} flags={flags} unsaved={dirty} />
+      {capture.status === 'approved' && <ThermalLabelsCard capture={capture} />}
 
       {editable && me?.role === 'doctor' && !dirty && <ReviewPanel c={capture} onDone={(d) => (qc.setQueryData(thermalKey(d.id), d), setRois(fromCapture(d)))} />}
       {editable && me?.role === 'doctor' && dirty && <Alert tone="info">Save the regions before reviewing.</Alert>}

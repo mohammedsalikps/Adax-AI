@@ -6,7 +6,7 @@ import { expectNoAxeViolations, expectNoHorizontalOverflow, signIn, uniq } from 
 const SAMPLES = path.resolve(import.meta.dirname, '..', 'samples', 'thermal')
 test.skip(!fs.existsSync(path.join(SAMPLES, 'flir_example.jpg')), 'thermal sample images not fetched (npm run setup)')
 
-test('nurse uploads a radiometric image and measures regions; doctor approves; unsupported files are rejected', async ({ page, browser, isMobile }) => {
+test('nurse uploads and measures; doctor approves, runs experimental rules and labels; admin exports and evaluates', async ({ page, browser, isMobile }) => {
   const given = `Thermo${uniq()}`
   await signIn(page, 'nurse.anil')
   await page.goto('/nurse/register')
@@ -24,6 +24,10 @@ test('nurse uploads a radiometric image and measures regions; doctor approves; u
   await consentRow.getByRole('button', { name: 'Record consent' }).click()
   await page.getByRole('dialog', { name: /Record consent/ }).getByRole('button', { name: 'Patient agrees' }).click()
   await expect(consentRow).toContainText('Granted')
+  const researchRow = page.getByRole('listitem').filter({ hasText: 'De-identified research use' })
+  await researchRow.getByRole('button', { name: 'Record consent' }).click()
+  await page.getByRole('dialog', { name: /Record consent/ }).getByRole('button', { name: 'Patient agrees' }).click()
+  await expect(researchRow).toContainText('Granted')
 
   // An unsupported FLIR variant is rejected with a clear message.
   await thermalCard.getByRole('button', { name: 'Upload' }).click()
@@ -95,10 +99,65 @@ test('nurse uploads a radiometric image and measures regions; doctor approves; u
   await expect(doc.getByText('Approved', { exact: true })).toBeVisible()
   await expect(doc.getByRole('button', { name: 'Save regions' })).toHaveCount(0)
   await expect(doc.getByTestId('roi-Left knee').getByLabel('Label')).toBeDisabled()
+  await expect(doc.getByText('Public sample file')).toBeVisible()
+
+  // Clinician label from the doctor's own assessment.
+  const labels = doc.getByRole('region', { name: 'Clinician labels' })
+  await labels.getByLabel('Finding').selectOption({ label: 'Pattern consistent with inflammation' })
+  await labels.getByLabel('Certainty').selectOption('certain')
+  await labels.getByRole('button', { name: 'Add label' }).click()
+  await expect(doc.getByTestId('thermal-labels')).toContainText('Whole image: Pattern consistent with inflammation')
+  await labels.getByLabel('Applies to').selectOption('Left knee')
+  await labels.getByLabel('Finding').selectOption({ label: 'Warmer than expected' })
+  await labels.getByRole('button', { name: 'Add label' }).click()
+  await expect(doc.getByTestId('thermal-labels')).toContainText('Left knee: Warmer than expected')
+  // Withdrawing keeps the label on record.
+  await doc.getByTestId('thermal-labels').getByRole('listitem').filter({ hasText: 'Left knee' }).getByRole('button', { name: 'Withdraw' }).click()
+  const wd = doc.getByRole('dialog', { name: 'Withdraw label' })
+  await wd.getByLabel('Reason').fill('Region drawn too wide')
+  await wd.getByRole('button', { name: 'Withdraw label' }).click()
+  await expect(doc.getByTestId('thermal-labels').getByRole('listitem').filter({ hasText: 'Left knee' })).toContainText('Withdrawn')
+
+  // Experimental flags only on request, clearly not validated.
+  const flags = doc.getByRole('region', { name: /Experimental flags/ })
+  await expect(flags).toContainText('Not validated')
+  await flags.getByRole('button', { name: 'Run experimental rules' }).click()
+  await expect(doc.getByTestId('thermal-flags')).toContainText('Left knee − Right knee')
+  await expect(doc.getByTestId('thermal-flags')).toContainText('Not a diagnosis')
+  await expectNoAxeViolations(doc)
+  await expectNoHorizontalOverflow(doc)
   await docCtx.close()
 
   // The nurse now sees it as approved and read-only.
   await page.goto(captureUrl)
   await expect(page.getByText('Approved', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Add region' })).toHaveCount(0)
+  // Nurses see labels but cannot add them.
+  await expect(page.getByTestId('thermal-labels')).toContainText('Pattern consistent with inflammation')
+  await expect(page.getByRole('button', { name: 'Add label' })).toHaveCount(0)
+
+  // The administrator sees counts only, exports de-identified data and evaluates it.
+  const adminCtx = await browser.newContext(isMobile ? { viewport: page.viewportSize()!, isMobile: true, hasTouch: true } : {})
+  const admin = await adminCtx.newPage()
+  await signIn(admin, 'admin')
+  await admin.goto('/admin/thermal-data')
+  await expect(admin.getByText('With research consent', { exact: true })).toBeVisible()
+  await admin.getByRole('button', { name: 'Create export' }).click()
+  await expect(admin.getByText(/Export created: \d+ image/)).toBeVisible()
+  const row = admin.getByRole('table', { name: 'Dataset exports' }).getByRole('row').nth(1)
+  const href = await row.getByRole('link', { name: 'Download' }).getAttribute('href')
+  const zip = await admin.request.get(href!)
+  expect(zip.status()).toBe(200)
+  expect((await zip.body()).subarray(0, 2).toString()).toBe('PK')
+  await row.getByRole('button', { name: 'Evaluate' }).click()
+  const report = admin.getByTestId('evaluation-report')
+  await expect(report).toContainText('non-clinical')
+  await expect(report).toContainText('Not clinically validated')
+  await expect(report).toContainText(/Not trained\s*Insufficient labelled data/)
+  await expectNoAxeViolations(admin)
+  await expectNoHorizontalOverflow(admin)
+  // Admins cannot open the clinical image itself.
+  const direct = await admin.request.get(`/api${captureUrl.replace('/nurse', '')}`)
+  expect(direct.status()).toBe(403)
+  await adminCtx.close()
 })

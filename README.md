@@ -18,6 +18,7 @@ PostgreSQL, and a Python thermal-imaging service.
 | Doctor consultation | Start/continue from the queue, structured note (complaint, history, medical history, examination, assessment, plan, follow-up), diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid in this build), patient timeline |
 | AI consultation assistant | Patient consent (ongoing or per consultation), browser recording / audio upload / typed transcript, numbered transcript segments, speech-to-text (OpenAI-compatible endpoint) and note drafting with Claude (`claude-opus-5-5`, structured output, server-side refusal fallback) when keys are configured, identifiers replaced before sending, per-suggestion accept/edit/reject with cited transcript lines, unsourced suggestions flagged, every AI call logged (model, prompt version, tokens, outcome). Without keys the app states that AI is unavailable. |
 | FLIR thermal imaging | Consent-gated upload of radiometric JPEGs with capture protocol, extraction of the per-pixel °C matrix and camera settings (Python service, `flyr`), viewer with palettes, span/level and hover readout, rectangle/ellipse regions (drawn or typed) with min/max/mean/SD and paired differences computed by the service, doctor approve/reject (then frozen in the database), visible-light image without location data |
+| Thermal data workflow | Clinician labels on approved images (versioned taxonomy `thermal-labels-v1`, reference standard and certainty, several doctors per image, withdraw-only, enforced in the database), data origin recorded per image (`synthetic` by default, public sample files recognised by checksum), experimental rule-based flags on request (warm areas, paired-region asymmetry; labelled not validated), de-identified dataset export (ZIP: manifest + float32 matrices; approved images with research consent only), evaluation pipeline (rule agreement with Wilson intervals; logistic-regression baseline with subject-grouped cross-validation only when ≥ 20 cases per class from ≥ 10 subjects), admin Thermal data page |
 
 ## Accounts and security model
 
@@ -105,6 +106,27 @@ npm run db:stop
   commercial distribution.
 - Results depend on emissivity, distance, room temperature and acclimatisation; the upload form
   records these with every image.
+
+### Labels, flags, datasets and evaluation
+
+- **No trained model ships with ADAXAI, and nothing here is validated.** There is no labelled
+  clinical data yet. The evaluation pipeline refuses to train its baseline model below 20 positive
+  and 20 negative labelled images from 10 subjects, and says so in its report.
+- **Experimental flags** (`rules-v1`) are fixed thresholds: connected areas at least 2 SD above the
+  image mean (12+ pixels), and paired regions whose means differ by ≥ 1.0 °C. They are computed on
+  request, never stored, and shown under a “Not validated” label. Doctors should label from their
+  own assessment before opening them, to avoid anchoring.
+- **Data origin.** Each upload records `THERMAL_DATA_ORIGIN` (default `synthetic`; set `clinical`
+  only in a real clinical deployment). Uploads of the public sample files are recorded as
+  `public_sample` regardless. Exports and evaluation reports state prominently when any data is
+  non-clinical; the metrics then only show that the pipeline runs.
+- **Exports** contain only approved images of patients with active consent to de-identified
+  research use. Names, record numbers, dates of birth, contact details, dates, free-text notes and
+  original image files are removed; patients and raters get export-local pseudonyms; age is a
+  10-year band. Exports are audited, kept (never deleted) and available only to doctors and
+  administrators (`thermal:export`), not through the general file route.
+- **Evaluate offline:** `services/thermal/.venv/Scripts/python -m app.evaluate dataset.zip --md report.md`
+  (run from `services/thermal`).
 
 ## Services and ports
 

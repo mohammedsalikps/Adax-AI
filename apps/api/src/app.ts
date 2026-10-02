@@ -7,6 +7,7 @@ import { type AiProviders, providersFromConfig } from './ai/providers.ts'
 import { registerAiRoutes } from './ai/routes.ts'
 import { registerFileRoutes } from './files/routes.ts'
 import { httpThermalService, type ThermalService } from './thermal/client.ts'
+import { registerThermalDatasetRoutes } from './thermal/datasets.ts'
 import { registerThermalRoutes } from './thermal/routes.ts'
 import { registerActivationRoutes } from './auth/activation.ts'
 import { encounterIdsForVisits } from './encounters/service.ts'
@@ -53,7 +54,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerEncounterRoutes(app, { db })
   registerFileRoutes(app, { db, config: deps.config })
   registerAiRoutes(app, { db, config: deps.config, providers: deps.ai ?? providersFromConfig(deps.config) })
-  registerThermalRoutes(app, { db, config: deps.config, thermal: deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl) })
+  const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
+  registerThermalRoutes(app, { db, config: deps.config, thermal })
+  registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

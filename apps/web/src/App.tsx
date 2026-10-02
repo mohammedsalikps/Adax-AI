@@ -12,6 +12,7 @@ import { createQueryClient } from './lib/queryClient.ts'
 import { AdminAuditPage } from './pages/admin/AdminAuditPage.tsx'
 import { AdminDepartmentsPage } from './pages/admin/AdminDepartmentsPage.tsx'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.tsx'
+import { AdminThermalDataPage } from './pages/admin/AdminThermalDataPage.tsx'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx'
 import { ActivatePage } from './pages/ActivatePage.tsx'
 import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
@@ -62,7 +63,7 @@ const router = createBrowserRouter([
       { path: 'users', element: <AdminUsersPage /> },
       { path: 'departments', element: <AdminDepartmentsPage /> },
       { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device registry (band, stethoscope, thermal camera)']} /> },
-      { path: 'thermal-data', element: <NotYetBuiltPage title="Thermal data" planned={['Label taxonomy', 'Dataset export']} /> },
+      { path: 'thermal-data', element: <AdminThermalDataPage /> },
       { path: 'audit', element: <AdminAuditPage /> },
     ],
   },

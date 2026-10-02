@@ -16,7 +16,12 @@ def test_health_reports_ok_and_version():
 
 
 def test_health_lists_only_implemented_capabilities():
-    assert client.get("/health").json()["capabilities"] == ["flir_radiometric_jpeg", "roi_stats"]
+    assert client.get("/health").json()["capabilities"] == [
+        "flir_radiometric_jpeg",
+        "roi_stats",
+        "experimental_flags",
+        "dataset_evaluation",
+    ]
 
 
 def test_unknown_route_is_404():

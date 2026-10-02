@@ -28,6 +28,8 @@ const EnvSchema = z.object({
   DB_ADMIN_USER: identifier.default('adaxai_admin'),
   DB_ADMIN_PASSWORD: z.string().optional(),
   THERMAL_URL: z.url().default('http://127.0.0.1:8001'),
+  /** Origin recorded on every thermal upload. Only a real clinical deployment should set `clinical`. */
+  THERMAL_DATA_ORIGIN: z.enum(['clinical', 'synthetic']).default('synthetic'),
   /** Defaults to true in production; local HTTP development needs false. */
   COOKIE_SECURE: z.enum(['true', 'false', '']).optional(),
   STORAGE_DIR: z.string().min(1).default('storage'),
@@ -59,6 +61,7 @@ export interface Config {
   api: { host: string; port: number }
   db: DbConfig
   thermalUrl: string
+  thermalDataOrigin: 'clinical' | 'synthetic'
   cookieSecure: boolean
   /** Absolute path for uploaded files (git-ignored). */
   storageDir: string
@@ -93,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       adminPassword: e.DB_ADMIN_PASSWORD || undefined,
     },
     thermalUrl: e.THERMAL_URL.replace(/\/+$/, ''),
+    thermalDataOrigin: e.THERMAL_DATA_ORIGIN,
     cookieSecure: e.COOKIE_SECURE ? e.COOKIE_SECURE === 'true' : e.NODE_ENV === 'production',
     storageDir: path.resolve(REPO_ROOT, e.STORAGE_DIR),
     maxUploadBytes: e.MAX_UPLOAD_MB * 1024 * 1024,

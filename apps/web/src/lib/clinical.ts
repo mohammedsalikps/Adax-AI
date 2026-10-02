@@ -69,6 +69,9 @@ export function useVisitMutation<TBody>(visitId: string, path: string, method: '
   return useMutation({
     mutationFn: (body: TBody) => api<Visit>(`/visits/${visitId}${path}`, { method, body }),
     onSuccess: (v) => {
+      // Put the visit as the server returned it into the cached queue first: the row's next action then
+      // sends the visit's current status (e.g. after vitals moved it to intake), not the one before.
+      qc.setQueriesData<{ date: string; visits: Visit[] }>({ queryKey: ['visits'] }, (d) => (d ? { ...d, visits: d.visits.map((x) => (x.id === v.id ? v : x)) } : d))
       void qc.invalidateQueries({ queryKey: ['visits'] })
       void qc.invalidateQueries({ queryKey: ['patient', v.patient.id] })
     },

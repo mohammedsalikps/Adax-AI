@@ -6,9 +6,9 @@ import { audit } from '../audit/audit.ts'
 import { currentUser } from '../auth/plugin.ts'
 import type { DbOrTx, Db } from '../db/client.ts'
 import { aiDraftItems, aiDrafts, aiRecommendations, aiReviewActions, aiRuns, clinicalFacts, clinicalImages, encounters, imageAnalyses, manaQuestions, noteInsertions, users } from '../db/schema.ts'
-import { badRequest, conflict, forbidden, HttpError, notFound } from '../http/errors.ts'
+import { badRequest, conflict, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
-import { getEncounterOr404, loadEncounter } from './service.ts'
+import { assertOwnDraft, assertWithDoctor, getEncounterOr404, loadEncounter } from './service.ts'
 
 const IdParams = z.object({ id: z.uuid() })
 type EncounterRow = typeof encounters.$inferSelect
@@ -93,8 +93,8 @@ export function registerInsertionRoutes(app: FastifyInstance, { db }: { db: Db }
     const { id } = parse(IdParams, req.params)
     const body = parse(InsertIntoNoteRequest, req.body)
     const e = await getEncounterOr404(db, me, id)
-    if (e.status === 'signed') throw conflict('This consultation is signed. Add an amendment instead.', 'encounter_signed')
-    if (e.doctorId !== me.id) throw forbidden('Only the doctor who started this consultation can edit it')
+    assertOwnDraft(e, me, 'edit')
+    await assertWithDoctor(db, e)
     const { producedBy, expected } = await verifySubject(db, e, body.subjectType, body.subjectId)
     const text = body.text.trim()
     if (!text) throw badRequest('Nothing to insert')

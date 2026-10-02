@@ -27,7 +27,8 @@ import { registerVisitRoutes } from './visits/routes.ts'
 import { registerAuth } from './auth/plugin.ts'
 import { registerAuthRoutes } from './auth/routes.ts'
 import type { Config } from './config.ts'
-import { createDb } from './db/client.ts'
+import { createDb, pgCode } from './db/client.ts'
+import { LIFECYCLE_REFUSALS } from './db/lifecycle.ts'
 import { audit } from './audit/audit.ts'
 import { HttpError } from './http/errors.ts'
 import { RateLimiter } from './http/rate-limit.ts'
@@ -127,6 +128,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       }
       return reply.code(err.statusCode).send({ error: err.code, message: err.message, requestId: req.id, ...(err.issues && { issues: err.issues }) })
     }
+    // The database's own lifecycle guards (migration 0019) are the backstop for the checks in the routes.
+    const refusal = LIFECYCLE_REFUSALS[pgCode(err) ?? '']
+    if (refusal) return reply.code(409).send({ error: refusal.code, message: refusal.message, requestId: req.id })
     if (err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
       return reply.code(err.statusCode).send({ error: 'bad_request', message: err.statusCode === 413 ? 'Request too large' : 'Malformed request', requestId: req.id })
     }

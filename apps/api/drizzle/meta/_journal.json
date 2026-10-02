@@ -127,6 +127,34 @@
       "when": 1790966706984,
       "tag": "0017_consent_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790971624867,
+      "tag": "0018_lifecycle_enum",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790971748340,
+      "tag": "0019_record_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790975909854,
+      "tag": "0020_lifecycle_backstops",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790979579973,
+      "tag": "0021_discard_reason_check",
+      "breakpoints": true
     }
   ]
 }

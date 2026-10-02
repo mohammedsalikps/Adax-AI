@@ -126,7 +126,10 @@ Verified by tests; see [STATUS.md](STATUS.md) for the exact results.
 | Invariant 11: facility scope of admin and staff routes | **Fixed** (slice 2) |
 | Rate limiting; atomic lockout; patient account reset and switch-off | **Fixed** (slice 2) |
 | Over-broad views (admin device list, nurse AI photo descriptions, amendments, clinical text in audit details) | **Fixed** (slice 2) |
-| Visit/encounter lifecycle, signed-content verification, audit hash chain and app-role grants, test-DB name guard | Open (slice 3) |
+| Invariant 2: signed records immutable, **and the hash re-verified** | **Fixed** (slice 3): versioned fingerprints (v1 legacy, v2 current), amendments hash-linked, on-demand verification. The fingerprint is unkeyed, see ADR 0008. |
+| Visit/encounter lifecycle | **Fixed** (slice 3): state machines enforced by the API and by database triggers, status history with actor and reason, compare-and-set on every change, discard with reason, drafts worklist |
+| Audit log: no tamper evidence; app role keeps UPDATE/DELETE on `audit_events` (P0) | **Fixed** (slice 3): database-written SHA-256 hash chain with a digest of earlier events, independent verifier, anchors; UPDATE/DELETE/TRUNCATE revoked from the app role on all append-only tables. Limits in ADR 0009. |
+| Invariant 17: destructive DB operations guarded (test-DB name guard) | **Fixed for tests and scripts** (slice 3): distinct-name rules, a database identity marker, refusals in test helpers, `db.mjs reset`, the e2e configuration and `storage-orphans --delete`. Retention deletes remain hard deletes by policy. |
 | `data_processing` consent meaning | Open: needs legal review |
 
 ## 7. Order of work

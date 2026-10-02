@@ -5,6 +5,7 @@ import { buildApp } from '../src/app.ts'
 import { hashPassword } from '../src/auth/password.ts'
 import { type Config, loadConfig, loadDotEnv } from '../src/config.ts'
 import { createDb, type Db } from '../src/db/client.ts'
+import { assertDisposable, assertDistinctNames, UnsafeDatabaseError } from '../src/db/identity.ts'
 import { createAdminClient, createAppPool } from '../src/db/pool.ts'
 import { departments, facilities, users } from '../src/db/schema.ts'
 
@@ -39,11 +40,37 @@ export const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 /**
+ * Hard guard before any superuser access from tests (resetting, raw SQL): the
+ * process must be a test run, the target must be the configured test database
+ * (never DB_NAME) and the database must identify itself as "test". Checked
+ * once per process; fails closed.
+ */
+let disposableChecked: Promise<void> | null = null
+export function assertTestDatabase(): Promise<void> {
+  disposableChecked ??= (async () => {
+    if (process.env.VITEST !== 'true' || testConfig.env !== 'test') throw new UnsafeDatabaseError('superuser test helpers run only inside the test runner.')
+    const names = { name: base.db.name, testName: base.db.testName, e2eName: base.db.e2eName }
+    // Name checks first, so an ambiguous configuration never even connects.
+    assertDistinctNames(names)
+    if (testConfig.db.name === names.name) throw new UnsafeDatabaseError('the target is the development database.')
+    const c = createAdminClient(testConfig.db, testConfig.db.name)
+    await c.connect()
+    try {
+      await assertDisposable(c, names, testConfig.db.name, 'test')
+    } finally {
+      await c.end()
+    }
+  })()
+  return disposableChecked
+}
+
+/**
  * Empties every application table in the test database. Runs as the cluster
  * superuser with session_replication_role = replica, which is the only way
  * past the append-only triggers on audit_events (the app role cannot do this).
  */
 export async function resetDatabase(): Promise<void> {
+  await assertTestDatabase()
   const c = createAdminClient(testConfig.db, testConfig.db.name)
   await c.connect()
   try {
@@ -57,6 +84,7 @@ export async function resetDatabase(): Promise<void> {
 
 /** Runs SQL as the superuser on the test database (for simulating time passing etc.). */
 export async function adminQuery(sql: string, params: unknown[] = []) {
+  await assertTestDatabase()
   const c = createAdminClient(testConfig.db, testConfig.db.name)
   await c.connect()
   try {

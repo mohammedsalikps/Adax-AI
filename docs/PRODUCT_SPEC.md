@@ -24,7 +24,7 @@ The doctor works with **Mana AI**, a companion for the patient's record and the 
 | --- | --- | --- |
 | Patient | PWA (`/patient`) | Activate and sign in; book and follow appointments; read signed records, prescriptions, vitals, released reports and follow-ups; manage consents; read notifications. |
 | Nurse | `/nurse` | Appointments and queue; registration with duplicate warning and MRN; consent capture; check-in and intake; vitals with units and source; routing suggestion apply/override; device assignment; portal activation; alert escalation. |
-| Doctor | `/doctor` | Dashboard (today's appointments, waiting, active, completed, drafts awaiting review, alerts, follow-ups due); patient list and profile; **Mana AI**; three-panel consultation workspace; notes and prescriptions with immutable signed versions and amendments. |
+| Doctor | `/doctor` | Dashboard (today's appointments, waiting, active, completed, drafts awaiting review, alerts, follow-ups due); patient list and profile; **Mana AI**; three-panel consultation workspace; notes and prescriptions with immutable signed versions and amendments; **My consultations** (unsigned drafts from any day, records signed in the last 30 days); discarding a draft with a reason; record verification and status history. |
 | Admin | `/admin` | Staff and roles; facility and departments; routing and alert configuration viewers with versions; device registry; AI job and provider status; review metrics; audit search, filter and export; operational health. |
 
 ## 3. Domain entities (PostgreSQL)
@@ -33,10 +33,10 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 
 | Area | Entities |
 | --- | --- |
-| Identity | facilities, departments, users (roles: admin, doctor, nurse, patient), sessions, audit_events (append-only) |
+| Identity | facilities, departments, users (roles: admin, doctor, nurse, patient), sessions, audit_events (append-only, SHA-256 hash chain since migration 0019) |
 | Patient | patients (MRN sequence), allergies, consents (typed, versioned, withdrawable), patient_activation_codes |
-| Flow | visits (daily tokens), observations (vitals; `source`, `validation_status`, device), *(planned)* appointments, appointment_status_events, notifications |
-| Record | encounters (signed snapshot + content hash), diagnoses, prescription_items, encounter_amendments, **note_insertions** |
+| Flow | visits (daily tokens), **visit_status_events**, observations (vitals; `source`, `validation_status`, device), *(planned)* appointments, appointment_status_events, notifications |
+| Record | encounters (signed snapshot + versioned content hash, or discarded with who/when/why), **encounter_status_events**, diagnoses, prescription_items, encounter_amendments (numbered, hash-linked), **note_insertions** |
 | AI | ai_jobs, ai_runs, ai_prompt_versions, ai_settings_snapshots, ai_models, transcripts, transcript_segments, clinical_facts, ai_recommendations, ai_evidence, ai_review_actions, **mana_questions**, *(planned)* transcript_corrections |
 | Imaging and devices | clinical_images, image_analyses, thermal_* tables, devices, device_assignments, auscultation_recordings, *(planned)* device_batches, alert_rules, alerts, alert_events |
 | ML | evaluation_runs, dataset_memberships, *(planned)* model cards and evaluation datasets for text and speech |
@@ -47,12 +47,30 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 - From `booked` the appointment may also become `cancelled`, `rescheduled` (a new appointment linked to the old one) or `no_show`.
 - Every transition is appended to `appointment_status_events` with actor, time and reason.
 
-**Visit:** `waiting → in_triage → ready → in_consultation → completed`.
-- `cancelled` and `no_show` are reachable from open states.
+**Visit** (implemented, [ADR 0008](adr/0008-record-lifecycle-and-signed-record-verification.md)): `waiting → in_triage → ready → in_consultation → completed`.
+- **Manual moves** (queue, `VISIT_TRANSITIONS`):
+  - `waiting` → `in_triage`, `ready`, `cancelled` or `no_show`;
+  - `in_triage` → `ready`, `waiting` or `cancelled`;
+  - `ready` → `in_triage`, `cancelled` or `no_show`.
+- **The consultation's moves:**
+  - starting it (or its author continuing a paused draft) moves an open visit to `in_consultation`;
+  - signing moves `in_consultation` to `completed`;
+  - discarding the draft moves `in_consultation` back to `ready`.
+- **Rules:**
+  - closed visits (`completed`, `cancelled`, `no_show`) never change;
+  - while the patient is with the doctor, the visit's doctor and department do not change (editing, routing, database);
+  - a visit with an unsigned consultation cannot be cancelled or marked as a no-show;
+  - cancelling needs a reason.
+- **Enforcement:** the API checks first and the database enforces the same rules (trigger). Every change is compare-and-set.
+- **History:** every check-in and change is appended to `visit_status_events`, with the acting user, the source, the reason and the time.
 
-**Encounter:** `in_progress → signed`.
-- Signing is a separate doctor action with an attestation.
-- A signed encounter is frozen by triggers; corrections are appended as amendments.
+**Encounter (consultation):** `in_progress → signed` or `in_progress → discarded`.
+- At most one consultation per visit is not discarded.
+- **Signing** is a separate doctor action with an attestation. It needs the visit to be with the doctor.
+- **Discarding** is done by the author, with a reason. The draft is kept read-only and leaves the patient's record.
+- **Immutability:** signed and discarded encounters are frozen by triggers. Corrections to signed ones are appended as amendments.
+- **History:** every change is appended to `encounter_status_events`.
+- **Paused drafts:** a draft whose visit is back in the queue (only data from before migration 0019) is paused until its author continues it.
 
 **AI review item** (facts, recommendations, draft items, image analyses): `pending → accepted | edited | rejected | deferred`.
 - `superseded` applies when a newer run replaces the item.
@@ -159,8 +177,19 @@ The rules flag:
 | Failure keeps the record answer; retry works | `mana.test.ts` › "a failed summary keeps the record answer…" |
 | AI text enters the note only by recorded insertion of reviewed output; duplicates, stale versions and other doctors are refused; signed snapshot keeps references; append-only | `mana.test.ts` › "only by explicit insertion of reviewed output…" |
 | Browser: briefing with sources, labelled AI summary, follow-up question, insertion with provenance through signing, answers on the profile, axe and mobile layout | `e2e/mana.spec.ts` (desktop and mobile) |
+| Unsigned drafts from any day listed for their author only, in their facility; list reads audited with patient ids | `lifecycle.test.ts` › "lists only the doctor’s own drafts…", "is for doctors only…" |
+| Concurrent starts create one consultation; a paused draft is not editable or signable until its author continues it | `lifecycle.test.ts` › "concurrent starts…", "a draft whose visit is back in the queue is paused…" |
+| The database allows exactly the contract's visit transitions; open consultations block cancel and no-show; refused manual status changes audited | `lifecycle.test.ts` › "the database allows exactly the transitions…", "cannot cancel or mark as no-show…" |
+| Status history with actor, source and reason; append-only; no anonymous app changes | `lifecycle.test.ts` › "every change records who, how and why…" |
+| Discard: reason, author, version; read-only afterwards; visit back to the queue; new start possible; concurrent sign and discard | `lifecycle.test.ts` › "discarding an unsigned draft" |
+| Signed-record verification: valid, tampered content, rows or hash, unsupported version, missing hash, legacy v1, notes | `integrity.test.ts` › "signed-record verification" |
+| Amendments numbered, timed and hash-linked by the database; changed, removed or reordered ones detected; provenance of AI text preserved | `integrity.test.ts` › "amendments" |
+| Audit hash chain: concurrent writes, rollback, altered/deleted/reordered/unlinked events, pre-chain digest, anchors, isolation level, admin API, CLI | `integrity.test.ts` › "audit log hash chain" |
+| Application role has no UPDATE/DELETE/TRUNCATE on append-only tables | `integrity.test.ts` › "privileges of the application role" |
+| Tests and scripts cannot empty, reseed or migrate the development database | `db-safety.test.ts` |
+| Browser: worklist and discard, signed record verification and history, admin chain check with anchor, axe and mobile layout | `e2e/record-lifecycle.spec.ts` (desktop and mobile) |
 
-Acceptance criteria for the planned slices are written in [AUDIT.md](AUDIT.md) §6 and will move here as each slice lands.
+Acceptance criteria for the planned slices are written in [AUDIT.md](AUDIT.md) §7 and will move here as each slice lands.
 
 ## 7. Languages
 

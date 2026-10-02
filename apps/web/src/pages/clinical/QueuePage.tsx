@@ -22,7 +22,7 @@ import { useDepartments } from '../admin/AdminUsersPage.tsx'
 
 function StatusChangeButton({ visit, to, label, icon, variant = 'secondary' }: { visit: Visit; to: VisitStatus; label: string; icon: ReactNode; variant?: 'secondary' | 'ghost' | 'primary' }) {
   const toast = useToast()
-  const change = useVisitMutation<{ status: VisitStatus }>(visit.id, '/status')
+  const change = useVisitMutation<{ status: VisitStatus; from: VisitStatus }>(visit.id, '/status')
   return (
     <Button
       size="sm"
@@ -31,7 +31,7 @@ function StatusChangeButton({ visit, to, label, icon, variant = 'secondary' }: {
       loading={change.isPending}
       onClick={() =>
         change.mutate(
-          { status: to },
+          { status: to, from: visit.status },
           { onSuccess: () => toast('success', `Token ${visit.tokenNumber}: ${VISIT_STATUS_LABELS[to]}`), onError: (e) => toast('error', errorMessage(e)) },
         )
       }
@@ -44,7 +44,7 @@ function StatusChangeButton({ visit, to, label, icon, variant = 'secondary' }: {
 function CancelDialog({ visit, onClose }: { visit: Visit; onClose: () => void }) {
   const toast = useToast()
   const [reason, setReason] = useState('')
-  const change = useVisitMutation<{ status: VisitStatus; reason: string }>(visit.id, '/status')
+  const change = useVisitMutation<{ status: VisitStatus; from: VisitStatus; reason: string }>(visit.id, '/status')
   return (
     <Dialog
       open
@@ -59,7 +59,7 @@ function CancelDialog({ visit, onClose }: { visit: Visit; onClose: () => void })
             variant="danger"
             loading={change.isPending}
             disabled={reason.trim().length < 2}
-            onClick={() => change.mutate({ status: 'cancelled', reason }, { onSuccess: () => (toast('success', 'Visit cancelled'), onClose()) })}
+            onClick={() => change.mutate({ status: 'cancelled', from: visit.status, reason }, { onSuccess: () => (toast('success', 'Visit cancelled'), onClose()) })}
           >
             Cancel visit
           </Button>
@@ -189,7 +189,7 @@ function QueueRow({ visit, role, onOpen, consultationAction }: { visit: Visit; r
 
 const SUMMARY: VisitStatus[] = ['waiting', 'in_triage', 'ready', 'in_consultation', 'completed']
 
-export function QueuePage({ consultationAction }: { consultationAction?: (v: Visit) => ReactNode }) {
+export function QueuePage({ consultationAction, notice }: { consultationAction?: (v: Visit) => ReactNode; notice?: ReactNode }) {
   const { data: me } = useMe()
   const role = me?.role === 'doctor' ? 'doctor' : 'nurse'
   useDocumentTitle('OPD queue')
@@ -218,6 +218,7 @@ export function QueuePage({ consultationAction }: { consultationAction?: (v: Vis
           ) : undefined
         }
       />
+      {notice}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {role === 'doctor' && (
           <div role="group" aria-label="Whose patients" className="inline-flex rounded-md border border-line bg-surface p-0.5">

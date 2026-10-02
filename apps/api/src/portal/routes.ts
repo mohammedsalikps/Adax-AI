@@ -1,5 +1,5 @@
 import { CONSENT_LABELS, CONSENT_VERSIONS, CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT, type ConsentType, consentWording, type PortalConsent, WithdrawConsentRequest, type PortalHome, type PortalProfile, type PortalRecord, type PortalRecordSummary, type PortalThermalReport, type PortalVisit, type PortalVital } from '@adaxai/contracts'
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
@@ -76,7 +76,7 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
       .select({ v: visits, dept: departments.name, doctorName: doctor.fullName, encId: encounters.id, encStatus: encounters.status })
       .from(visits)
       .innerJoin(departments, eq(departments.id, visits.departmentId))
-      .leftJoin(encounters, eq(encounters.visitId, visits.id))
+      .leftJoin(encounters, and(eq(encounters.visitId, visits.id), ne(encounters.status, 'discarded')))
       .leftJoin(doctor, eq(doctor.id, encounters.doctorId))
       .where(eq(visits.patientId, patientId))
       .orderBy(desc(visits.visitDate), desc(visits.checkedInAt))

@@ -1,0 +1,3 @@
+-- A discard without a reason is refused: NULL in a CHECK expression passes, so the reason is coalesced.
+ALTER TABLE "encounters" DROP CONSTRAINT "encounters_discarded_complete";--> statement-breakpoint
+ALTER TABLE "encounters" ADD CONSTRAINT "encounters_discarded_complete" CHECK (status <> 'discarded' or (discarded_at is not null and discarded_by is not null and length(btrim(coalesce(discard_reason, ''))) > 0));

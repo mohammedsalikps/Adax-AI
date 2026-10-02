@@ -87,6 +87,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   async function editableEncounter(me: SessionUser, id: string) {
     const e = await getEncounterOr404(db, me, id)
     if (e.doctorId !== me.id) throw forbidden('Only the doctor who started this consultation can use the assistant on it')
+    if (e.status === 'discarded') throw conflict('This draft was discarded; the assistant is no longer available for it', 'encounter_discarded')
     if (e.status !== 'in_progress') throw conflict('This consultation is signed; the assistant is no longer available for it', 'encounter_signed')
     return e
   }

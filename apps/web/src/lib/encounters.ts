@@ -1,4 +1,4 @@
-import type { Encounter, TimelineEntry } from '@adaxai/contracts'
+import type { DiscardDraftRequest, Encounter, EncounterVerification, MyConsultationsResponse, StatusHistory, TimelineEntry } from '@adaxai/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { api } from './api.ts'
@@ -17,7 +17,7 @@ export function useTimeline(patientId: string) {
   })
 }
 
-/** Starts (or resumes) the consultation for a visit and opens it. Doctors only. */
+/** Starts the consultation for a visit, or continues the doctor's own paused draft, and opens it. Doctors only. */
 export function useStartConsultation() {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -26,7 +26,52 @@ export function useStartConsultation() {
     onSuccess: (e) => {
       qc.setQueryData(encounterKey(e.id), e)
       void qc.invalidateQueries({ queryKey: ['visits'] })
+      void qc.invalidateQueries({ queryKey: ['my-consultations'] })
       navigate(`/doctor/encounters/${e.id}`)
     },
   })
+}
+
+/** The doctor's own unsigned drafts (any day) or recently signed records. */
+export function useMyConsultations(status: 'in_progress' | 'signed', enabled = true) {
+  return useQuery({
+    queryKey: ['my-consultations', status],
+    queryFn: () => api<MyConsultationsResponse>('/encounters/mine', { query: { status } }),
+    enabled,
+  })
+}
+
+/** Closes an unsigned draft without signing; the draft is kept read-only. */
+export function useDiscardDraft(encounterId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    // A refusal (e.g. the draft changed meanwhile) refreshes what the dialog was based on.
+    onError: () => {
+      void qc.invalidateQueries({ queryKey: ['my-consultations'] })
+      void qc.invalidateQueries({ queryKey: encounterKey(encounterId) })
+    },
+    mutationFn: (body: DiscardDraftRequest) => api<Encounter>(`/encounters/${encounterId}/discard`, { method: 'POST', body }),
+    onSuccess: (e) => {
+      qc.setQueryData(encounterKey(e.id), e)
+      void qc.invalidateQueries({ queryKey: ['visits'] })
+      void qc.invalidateQueries({ queryKey: ['my-consultations'] })
+      void qc.invalidateQueries({ queryKey: ['patient', e.patient.id] })
+      void qc.invalidateQueries({ queryKey: ['encounter-history', e.id] })
+    },
+  })
+}
+
+/** Who changed the consultation's and visit's status, when, how and why (loaded on request). */
+export function useStatusHistory(encounterId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['encounter-history', encounterId],
+    queryFn: () => api<StatusHistory>(`/encounters/${encounterId}/history`),
+    enabled,
+    select: (d) => d.events,
+  })
+}
+
+/** Re-checks a signed record against its fingerprints (an explicit, audited action). */
+export function useVerifyRecord(encounterId: string) {
+  return useMutation({ mutationKey: ['encounter-verify', encounterId], mutationFn: () => api<EncounterVerification>(`/encounters/${encounterId}/verification`) })
 }

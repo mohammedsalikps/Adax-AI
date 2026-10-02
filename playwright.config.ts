@@ -1,11 +1,13 @@
 import { defineConfig, devices } from '@playwright/test'
+import { E2E_DB } from './e2e/db-names.ts'
 
 // The suite runs its own API, thermal service and web app on separate ports,
 // against the dedicated e2e database (reset and seeded in global-setup), so it
 // can run while `npm run dev` is up and never touches development data.
+// Importing db-names stops the run here, before any server starts, if the
+// database names are ambiguous (e.g. the e2e name equals the development one).
 const PORTS = { api: 4100, thermal: 8101, web: 5273, mockAnthropic: 4199 }
 const WEB = `http://127.0.0.1:${PORTS.web}`
-const E2E_DB = process.env.DB_E2E_NAME || 'adaxai_e2e'
 
 export default defineConfig({
   testDir: 'e2e',

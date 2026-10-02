@@ -23,6 +23,7 @@ const EnvSchema = z.object({
   DB_PORT: port.default(5433),
   DB_NAME: identifier.default('adaxai'),
   DB_TEST_NAME: identifier.default('adaxai_test'),
+  DB_E2E_NAME: identifier.default('adaxai_e2e'),
   DB_APP_USER: identifier.default('adaxai_app'),
   DB_APP_PASSWORD: z.string().min(1, 'is required (run `npm run setup`)'),
   DB_ADMIN_USER: identifier.default('adaxai_admin'),
@@ -50,6 +51,7 @@ export interface DbConfig {
   port: number
   name: string
   testName: string
+  e2eName: string
   appUser: string
   appPassword: string
   adminUser: string
@@ -92,6 +94,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       port: e.DB_PORT,
       name: e.DB_NAME,
       testName: e.DB_TEST_NAME,
+      e2eName: e.DB_E2E_NAME,
       appUser: e.DB_APP_USER,
       appPassword: e.DB_APP_PASSWORD,
       adminUser: e.DB_ADMIN_USER,

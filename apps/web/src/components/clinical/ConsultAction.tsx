@@ -12,7 +12,8 @@ export function ConsultAction({ visit }: { visit: Visit }) {
   const start = useStartConsultation()
   const toast = useToast()
   if (!OPEN_VISIT_STATUSES.includes(visit.status)) return null
-  const resuming = visit.status === 'in_consultation' && visit.encounterId
+  // A visit with a consultation (in progress, or paused back in the queue) is continued, not started again.
+  const resuming = !!visit.encounterId
   return (
     <Button
       size="sm"

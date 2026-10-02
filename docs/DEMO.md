@@ -118,11 +118,18 @@ Mana flags a **Conflict** with the recorded penicillin allergy (illustrative con
 
 Accepted assistant items use **Add to …** the same way.
 
-## 4. Signed record
+## 4. Signed record, drafts and integrity
 
-On the patient record, the visit links to the signed consultation. The signed view shows the
-content hash and **Print prescription** (labelled not valid in this build). Signed records cannot
-be edited; corrections are added with **Add amendment**.
+1. On the patient record, the visit links to the signed consultation.
+   - The signed view shows the content hash and **Print prescription**, labelled not valid in this build.
+   - Signed records cannot be edited. Corrections are added with **Add amendment**; each is numbered and linked to the record's fingerprint.
+2. **Record verification** → **Check now**. It shows the real result of re-checking the stored content, the record rows, the audit copy and the amendment chain against their fingerprints, with what that does and does not mean.
+3. **Status history** → **Show**: who moved the visit and the consultation, when, how and why.
+4. **My consultations** (doctor menu) lists your unsigned drafts from any day.
+   - Drafts from earlier days are flagged; the queue shows today only and warns about them too.
+   - **Continue** a draft, or **Discard…** it with a reason. The draft is kept read-only, leaves the patient's history, and the visit goes back to the queue as *Ready for doctor*.
+   - **Signed recently** lists the last 30 days.
+5. A visit with an unsigned consultation cannot be cancelled or marked as a no-show; the queue explains why.
 
 ## 5. Patient access
 
@@ -151,6 +158,9 @@ be edited; corrections are added with **Add amendment**.
 - **AI operations**: provider status, job counts, failures, review outcomes per model and prompt
   version (*Includes synthetic*), **Store snapshot**. Counts only, no patient data.
 - **Audit log**: sign-ins, record reads, AI review decisions, routing, portal reads, denials.
+  - **Audit log integrity → Check the chain** recomputes every hash link and shows the current head.
+  - Copy the head and keep it outside the system. Later, **Compare** it to detect removal of the newest events or a rewrite.
+  - The same check runs from the command line: `npm run audit:verify`.
 - **Devices**: registry and gateway tokens. No physical device is integrated
   ([DEVICES.md](DEVICES.md)).
 - **Thermal data**: dataset counts, de-identified export and evaluation (labelled non-clinical).
@@ -159,6 +169,7 @@ be edited; corrections are added with **Add amendment**.
 
 `npm test` runs the API tests (real PostgreSQL), the service-worker policy tests, the Python
 tests and the Playwright suite (desktop and mobile, axe WCAG 2.2 AA, phone-overflow checks). For
-this demonstration see `apps/api/test/mana.test.ts`, `e2e/mana.spec.ts`, `apps/api/test/ai-clinical.test.ts`, `portal.test.ts`, `routing.test.ts`,
+this demonstration see `apps/api/test/lifecycle.test.ts`, `integrity.test.ts`, `db-safety.test.ts`,
+`e2e/record-lifecycle.spec.ts`, `apps/api/test/mana.test.ts`, `e2e/mana.spec.ts`, `apps/api/test/ai-clinical.test.ts`, `portal.test.ts`, `routing.test.ts`,
 `images.test.ts`, `devices.test.ts`, `hardening.test.ts` and `e2e/*.spec.ts`. AI output in tests
 comes from test doubles or the test-only mock `e2e/mock-anthropic.mjs`.

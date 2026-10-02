@@ -15,6 +15,7 @@ import {
   pgSequence,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -105,7 +106,11 @@ export const sessions = pgTable(
 
 /**
  * Append-only audit trail. UPDATE, DELETE and TRUNCATE are blocked by
- * triggers (migration 0003), so even the application role cannot rewrite it.
+ * triggers (migration 0003), and the application role holds no UPDATE or
+ * DELETE privilege on it (migration 0019). Since migration 0019 every new
+ * event is linked into a SHA-256 hash chain by a database trigger
+ * (chain_seq, prev_hash, row_hash); events from before that are summarised by
+ * the `audit.chain_start` event. See docs/adr/0008.
  */
 export const auditEvents = pgTable(
   'audit_events',
@@ -125,8 +130,14 @@ export const auditEvents = pgTable(
     details: jsonb('details').notNull().default(sql`'{}'::jsonb`),
     /** Facility the event belongs to (actor's or patient's); null for anonymous events and rows before migration 0017. */
     facilityId: uuid('facility_id'),
+    /** Hash chain, set by the database (never by the application); null for events before migration 0019. */
+    chainSeq: bigint('chain_seq', { mode: 'number' }),
+    prevHash: text('prev_hash'),
+    rowHash: text('row_hash'),
+    chainVersion: smallint('chain_version'),
   },
   (t) => [
+    uniqueIndex('audit_events_chain_seq_uq').on(t.chainSeq),
     index('audit_events_occurred_idx').on(t.occurredAt),
     index('audit_events_facility_idx').on(t.facilityId, t.occurredAt),
     index('audit_events_actor_idx').on(t.actorUserId),
@@ -360,12 +371,15 @@ export const observations = pgTable(
 // Consultations (encounters), diagnoses, prescriptions, amendments
 // ---------------------------------------------------------------------------
 
-export const encounterStatus = pgEnum('encounter_status', ['in_progress', 'signed'])
+export const encounterStatus = pgEnum('encounter_status', ['in_progress', 'signed', 'discarded'])
 
 /**
- * One consultation per visit. Once signed, the row and its diagnoses and
- * prescription items are immutable (database triggers, migration 0006);
- * corrections are appended as amendments.
+ * A consultation for a visit: in_progress (an unsigned draft), then signed or
+ * discarded, never both and never back. A visit has at most one consultation
+ * that is not discarded. Signed and discarded rows, and their diagnoses and
+ * prescription items, are immutable (database triggers, migrations 0006 and
+ * 0019); signed records are corrected only by appending amendments. Every
+ * status change is recorded in encounter_status_events by the database.
  */
 export const encounters = pgTable(
   'encounters',
@@ -379,7 +393,6 @@ export const encounters = pgTable(
       .references(() => patients.id),
     visitId: uuid('visit_id')
       .notNull()
-      .unique()
       .references(() => visits.id),
     doctorId: uuid('doctor_id')
       .notNull()
@@ -399,8 +412,70 @@ export const encounters = pgTable(
     /** Canonical JSON of what was signed, and its SHA-256. */
     signedSnapshot: jsonb('signed_snapshot'),
     contentHash: text('content_hash'),
+    /** How content_hash was computed (e.g. adaxai.encounter.v2); null for records signed before migration 0019 (scheme v1). */
+    hashScheme: text('hash_scheme'),
+    /** A draft closed without signing: kept read-only with who, when and why. */
+    discardedAt: timestamp('discarded_at', { withTimezone: true }),
+    discardedBy: uuid('discarded_by').references(() => users.id),
+    discardReason: text('discard_reason'),
   },
-  (t) => [index('encounters_patient_idx').on(t.patientId), index('encounters_doctor_status_idx').on(t.doctorId, t.status)],
+  (t) => [
+    index('encounters_patient_idx').on(t.patientId),
+    index('encounters_doctor_status_idx').on(t.doctorId, t.status),
+    uniqueIndex('encounters_one_active_per_visit_uq').on(t.visitId).where(sql`status <> 'discarded'`),
+    index('encounters_visit_idx').on(t.visitId),
+    check('encounters_signed_complete', sql`status <> 'signed' or (signed_at is not null and signed_snapshot is not null and content_hash is not null)`),
+    check('encounters_discarded_complete', sql`status <> 'discarded' or (discarded_at is not null and discarded_by is not null and length(btrim(coalesce(discard_reason, ''))) > 0)`),
+    check('encounters_hash_scheme_format', sql`hash_scheme is null or hash_scheme ~ '^adaxai[.]encounter[.]v[0-9]+$'`),
+  ],
+)
+
+/**
+ * Status history of consultations, written by a database trigger on every
+ * insert and status change (append-only). Consultations from before
+ * migration 0019 have a single baseline event.
+ */
+export const encounterStatusEvents = pgTable(
+  'encounter_status_events',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    visitId: uuid('visit_id')
+      .notNull()
+      .references(() => visits.id),
+    fromStatus: encounterStatus('from_status'),
+    toStatus: encounterStatus('to_status').notNull(),
+    source: text('source').notNull(),
+    reason: text('reason'),
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('encounter_status_events_encounter_idx').on(t.encounterId, t.id)],
+)
+
+/**
+ * Status history of visits, written by a database trigger on check-in and on
+ * every status change (append-only), with the acting user, the source of the
+ * change and the reason. The same trigger refuses transitions that are not
+ * allowed (migration 0019). Visits from before 0019 have a baseline event.
+ */
+export const visitStatusEvents = pgTable(
+  'visit_status_events',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    visitId: uuid('visit_id')
+      .notNull()
+      .references(() => visits.id),
+    fromStatus: visitStatus('from_status'),
+    toStatus: visitStatus('to_status').notNull(),
+    source: text('source').notNull(),
+    reason: text('reason'),
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('visit_status_events_visit_idx').on(t.visitId, t.id)],
 )
 
 export const diagnosisKind = pgEnum('diagnosis_kind', ['provisional', 'primary', 'secondary'])
@@ -1117,7 +1192,12 @@ export const auscultationRecordings = pgTable(
   (t) => [index('auscultation_patient_idx').on(t.patientId)],
 )
 
-/** Post-signing corrections. Append-only (triggers block UPDATE/DELETE). */
+/**
+ * Post-signing corrections. Append-only (triggers block UPDATE/DELETE); they
+ * never change the signed record. Since migration 0019 the database numbers
+ * each amendment (seq) and links it into a hash chain that starts at the
+ * signed record's content_hash; older amendments have no hash.
+ */
 export const encounterAmendments = pgTable(
   'encounter_amendments',
   {
@@ -1131,8 +1211,12 @@ export const encounterAmendments = pgTable(
     reason: text('reason').notNull(),
     content: text('content').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    seq: integer('seq'),
+    prevHash: text('prev_hash'),
+    contentHash: text('content_hash'),
+    hashScheme: text('hash_scheme'),
   },
-  (t) => [index('amendments_encounter_idx').on(t.encounterId)],
+  (t) => [index('amendments_encounter_idx').on(t.encounterId), uniqueIndex('amendments_encounter_seq_uq').on(t.encounterId, t.seq)],
 )
 
 // ---------------------------------------------------------------------------

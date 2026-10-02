@@ -9,12 +9,14 @@ import {
   type NoteFields,
   type PrescriptionItemInput,
   signIssues,
+  VISIT_STATUS_LABELS,
 } from '@adaxai/contracts'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CircleAlert, CircleCheck, CloudUpload, FilePlus2, LoaderCircle, Plus, Printer, Sparkles, Trash2 } from 'lucide-react'
+import { CircleAlert, CircleCheck, CloudUpload, FilePlus2, LoaderCircle, Plus, Printer, Sparkles, Stethoscope, Trash2 } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { PatientBanner } from '../../components/clinical/PatientBanner.tsx'
+import { DiscardDraftDialog, RecordVerificationCard, StatusHistoryCard } from '../../components/clinical/RecordLifecycle.tsx'
 import { Timeline } from '../../components/clinical/Timeline.tsx'
 import { RecordVitalsDialog, VitalsInline } from '../../components/clinical/Vitals.tsx'
 import { Button } from '../../components/ui/Button.tsx'
@@ -26,7 +28,7 @@ import { useToast } from '../../components/ui/Toast.tsx'
 import { ApiError, api, errorMessage } from '../../lib/api.ts'
 import { useMe } from '../../lib/auth.tsx'
 import { usePortalBase } from '../../lib/clinical.ts'
-import { encounterKey, useEncounter } from '../../lib/encounters.ts'
+import { encounterKey, useEncounter, useStartConsultation } from '../../lib/encounters.ts'
 import { fmtDate, fmtDateTime, fmtTime } from '../../lib/format.ts'
 import type { NoteInserter } from '../../lib/insert.ts'
 import { useDocumentTitle } from '../../lib/useDocumentTitle.ts'
@@ -58,7 +60,10 @@ export function AiProvenance({ insertions, section }: { insertions: NoteInsertio
   )
 }
 
-type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict'
+type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict' | 'blocked'
+
+/** Refusals that retrying cannot fix: the draft was signed or discarded elsewhere, the visit left the doctor, or access ended. */
+const isTerminal = (err: unknown) => err instanceof ApiError && (['encounter_signed', 'encounter_discarded', 'visit_not_in_consultation'].includes(err.code) || err.status === 403 || err.status === 404)
 
 const emptyRx = (): PrescriptionItemInput => ({ drugName: '', strength: '', form: '', dose: '', route: 'Oral', frequency: '', duration: '', instructions: '' })
 
@@ -69,6 +74,7 @@ function SaveIndicator({ state, savedAt }: { state: SaveState; savedAt: Date | n
     saving: { icon: <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />, text: 'Saving…', cls: 'text-ink-muted' },
     error: { icon: <CircleAlert aria-hidden="true" className="size-4" />, text: 'Not saved — retrying', cls: 'text-down' },
     conflict: { icon: <CircleAlert aria-hidden="true" className="size-4" />, text: 'Changed elsewhere', cls: 'text-down' },
+    blocked: { icon: <CircleAlert aria-hidden="true" className="size-4" />, text: 'Not saved', cls: 'text-down' },
   }
   const m = map[state]
   return (
@@ -231,6 +237,9 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
   const [vitalsOpen, setVitalsOpen] = useState(false)
   const [insertions, setInsertions] = useState<NoteInsertion[]>(initial.aiInsertions)
   const [inserting, setInserting] = useState(false)
+  const [blocked, setBlocked] = useState<string | null>(null)
+  const blockedRef = useRef<string | null>(null)
+  const [discarding, setDiscarding] = useState(false)
   const pendingInsertsRef = useRef(0)
   const draftRef = useRef(draft)
   const versionRef = useRef(initial.version)
@@ -241,9 +250,15 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     stateRef.current = s
     setState(s)
   }
+  /** A refusal retrying cannot fix: stop saving and say why. */
+  const block = (err: unknown) => {
+    blockedRef.current = errorMessage(err)
+    setBlocked(blockedRef.current)
+    setSaveState('blocked')
+  }
 
   const update = (fn: (d: Draft) => Draft) => {
-    if (stateRef.current === 'conflict') return
+    if (stateRef.current === 'conflict' || stateRef.current === 'blocked') return
     const next = fn(draftRef.current)
     draftRef.current = next
     dirtyRef.current = true
@@ -254,7 +269,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
   /** Saves serially; resolves once nothing is pending. */
   const flush = useCallback((): Promise<void> => {
     chainRef.current = chainRef.current.then(async () => {
-      if (!dirtyRef.current || stateRef.current === 'conflict') return
+      if (!dirtyRef.current || stateRef.current === 'conflict' || stateRef.current === 'blocked') return
       dirtyRef.current = false
       setSaveState('saving')
       try {
@@ -262,9 +277,11 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
         versionRef.current = e.version
         setInsertions(e.aiInsertions)
         setSavedAt(new Date())
+        void qc.invalidateQueries({ queryKey: ['my-consultations'] })
         setSaveState(dirtyRef.current ? 'dirty' : 'saved')
       } catch (err) {
         if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
+        else if (isTerminal(err)) block(err)
         else {
           dirtyRef.current = true
           setSaveState('error')
@@ -272,7 +289,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
       }
     })
     return chainRef.current
-  }, [initial.id])
+  }, [initial.id, qc])
 
   // Debounced autosave; retry after errors.
   useEffect(() => {
@@ -280,6 +297,14 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     const t = setTimeout(() => void flush(), state === 'error' ? 5000 : 1200)
     return () => clearTimeout(t)
   }, [draft, state, flush])
+
+  // Leaving the page within the autosave delay (in-app navigation) still saves the last edits.
+  useEffect(
+    () => () => {
+      if (dirtyRef.current) void flush()
+    },
+    [flush],
+  )
 
   // Warn before leaving with unsaved changes.
   useEffect(() => {
@@ -300,6 +325,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
       qc.setQueryData(encounterKey(e.id), e)
       void qc.invalidateQueries({ queryKey: ['visits'] })
       void qc.invalidateQueries({ queryKey: ['patient', e.patient.id] })
+      void qc.invalidateQueries({ queryKey: ['my-consultations'] })
       toast('success', 'Consultation signed and visit completed')
       setReviewing(false)
     },
@@ -319,6 +345,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
         // Runs on the same serial chain as autosave, so a save and an insertion never use the same version.
         const run = chainRef.current.then(async () => {
           if (stateRef.current === 'conflict') throw new ApiError(409, 'version_conflict', 'This consultation was changed in another window. Reload to continue.')
+          if (stateRef.current === 'blocked') throw new ApiError(409, 'not_saved', blockedRef.current ?? 'Changes to this consultation cannot be saved. Reload it.')
           if (dirtyRef.current || stateRef.current === 'error') {
             // Diagnoses or prescription changed meanwhile: save them first (note fields are read-only now).
             dirtyRef.current = false
@@ -328,6 +355,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
               versionRef.current = saved.version
             } catch (err) {
               if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
+              else if (isTerminal(err)) block(err)
               else {
                 dirtyRef.current = true
                 setSaveState('error')
@@ -345,8 +373,10 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
             setInsertions(e.aiInsertions)
             setSavedAt(new Date())
             setSaveState(dirtyRef.current ? 'dirty' : 'saved')
+            void qc.invalidateQueries({ queryKey: ['my-consultations'] })
           } catch (err) {
             if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
+            else if (isTerminal(err)) block(err)
             else setSaveState(dirtyRef.current ? 'dirty' : 'saved')
             throw err
           }
@@ -365,6 +395,15 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     <>
       <PatientBanner patient={{ ...initial.patient }} />
       <h1 className="sr-only">Consultation for {initial.patient.fullName}</h1>
+      {state === 'blocked' && (
+        <Alert tone="error" title="Your latest changes cannot be saved" className="mb-4">
+          {blocked}{' '}
+          <button type="button" className="font-semibold underline" onClick={() => window.location.reload()}>
+            Reload the consultation
+          </button>
+          .
+        </Alert>
+      )}
       {state === 'conflict' && (
         <Alert tone="error" title="This consultation was changed in another window" className="mb-4">
           Your latest edits were not saved. Copy anything you need, then{' '}
@@ -385,9 +424,15 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
             <div className="mt-3">
               <VitalsInline vitals={initial.vitals} />
             </div>
-            <Button size="sm" variant="secondary" className="mt-3" onClick={() => setVitalsOpen(true)}>
-              Record vitals
-            </Button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setVitalsOpen(true)}>
+                Record vitals
+              </Button>
+              {/* Kept away from the save and sign buttons: closing a draft without signing is deliberate. */}
+              <Button size="sm" variant="ghost" icon={<Trash2 aria-hidden="true" className="size-4" />} onClick={() => void flush().then(() => setDiscarding(true))} disabled={state === 'conflict' || state === 'blocked'}>
+                Discard draft…
+              </Button>
+            </div>
           </Card>
           <Timeline patientId={initial.patient.id} />
         </aside>
@@ -402,7 +447,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
                     rows={s.rows}
                     value={draft.note[s.key]}
                     onChange={(e) => update((d) => ({ ...d, note: { ...d.note, [s.key]: e.target.value } }))}
-                    readOnly={state === 'conflict' || inserting}
+                    readOnly={state === 'conflict' || state === 'blocked' || inserting}
                   />
                   <AiProvenance insertions={insertions} section={s.key} />
                 </div>
@@ -416,15 +461,23 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
       </div>
       <div className="sticky bottom-0 z-20 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <SaveIndicator state={state} savedAt={savedAt} />
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => void flush()} disabled={state === 'saved' || state === 'conflict'}>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => void flush()} disabled={state === 'saved' || state === 'conflict' || state === 'blocked'}>
             Save now
           </Button>
-          <Button onClick={() => setReviewing(true)} disabled={state === 'conflict'}>
+          <Button onClick={() => setReviewing(true)} disabled={state === 'conflict' || state === 'blocked'}>
             Review and sign
           </Button>
         </div>
       </div>
+      {discarding && (
+        <DiscardDraftDialog
+          draft={{ id: initial.id, version: versionRef.current, patientName: initial.patient.fullName, visitStatus: initial.visit.status }}
+          onClose={() => setDiscarding(false)}
+          // Nothing more to save: the page now shows the discarded draft read-only.
+          onDiscarded={() => (dirtyRef.current = false)}
+        />
+      )}
       {reviewing && <ReviewAndSignDialog draft={draft} encounter={initial} insertions={insertions} onClose={() => setReviewing(false)} onSign={() => sign.mutate()} signing={sign.isPending} error={sign.error} />}
       {vitalsOpen && (
         <RecordVitalsDialog
@@ -440,7 +493,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
   )
 }
 
-function AmendmentDialog({ encounterId, onClose }: { encounterId: string; onClose: () => void }) {
+function AmendmentDialog({ encounterId, patientId, onClose }: { encounterId: string; patientId: string; onClose: () => void }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [v, setV] = useState({ reason: '', content: '' })
@@ -449,6 +502,8 @@ function AmendmentDialog({ encounterId, onClose }: { encounterId: string; onClos
     mutationFn: (body: AmendmentRequest) => api<Encounter>(`/encounters/${encounterId}/amendments`, { method: 'POST', body }),
     onSuccess: (e) => {
       qc.setQueryData(encounterKey(encounterId), e)
+      void qc.invalidateQueries({ queryKey: ['patient', patientId] })
+      void qc.invalidateQueries({ queryKey: ['my-consultations'] })
       toast('success', 'Amendment added')
       onClose()
     },
@@ -490,7 +545,10 @@ export function EncounterReadView({ e }: { e: Encounter }) {
   const { data: me } = useMe()
   const base = usePortalBase()
   const [amending, setAmending] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
+  const start = useStartConsultation()
   const signed = e.status === 'signed'
+  const own = me?.role === 'doctor' && me.id === e.doctor.id
   return (
     <>
       <PatientBanner patient={e.patient} />
@@ -502,7 +560,7 @@ export function EncounterReadView({ e }: { e: Encounter }) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {signed ? <Badge tone="ok">Signed {fmtDateTime(e.signedAt)}</Badge> : <Badge tone="warn">Draft — not signed</Badge>}
+          {signed ? <Badge tone="ok">Signed {fmtDateTime(e.signedAt)}</Badge> : e.status === 'discarded' ? <Badge>Discarded draft</Badge> : <Badge tone="warn">Draft — not signed</Badge>}
           {signed && (
             <Link to={`/print/encounters/${e.id}`} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line bg-surface px-4 text-sm font-medium hover:bg-canvas">
               <Printer aria-hidden="true" className="size-4" />
@@ -516,7 +574,34 @@ export function EncounterReadView({ e }: { e: Encounter }) {
           )}
         </div>
       </div>
-      {!signed && <Alert tone="info" className="mb-4">This consultation is still a draft by {e.doctor.fullName}. Only they can edit and sign it.</Alert>}
+      {e.discarded && (
+        <Alert tone="info" title="This draft was discarded" className="mb-4">
+          {e.discarded.byName} discarded it on {fmtDateTime(e.discarded.at)}. Reason: {e.discarded.reason}. It is kept read-only and is not part of the patient’s record.
+        </Alert>
+      )}
+      {e.status === 'in_progress' && own && (
+        <Alert tone="warning" title={e.canResume ? 'This draft is paused' : 'This draft cannot be signed'} className="mb-4">
+          <p>
+            {e.canResume
+              ? `The visit is back in the queue (${VISIT_STATUS_LABELS[e.visit.status]}). Continue the consultation to edit and sign it.`
+              : `The visit was closed (${VISIT_STATUS_LABELS[e.visit.status]}) while this draft was open. Discard it, with a reason, to close it.`}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {e.canResume && (
+              <Button size="sm" icon={<Stethoscope aria-hidden="true" className="size-4" />} loading={start.isPending} onClick={() => start.mutate(e.visit.id)}>
+                Continue consultation
+              </Button>
+            )}
+            {e.canDiscard && (
+              <Button size="sm" variant="secondary" icon={<Trash2 aria-hidden="true" className="size-4" />} onClick={() => setDiscarding(true)}>
+                Discard draft…
+              </Button>
+            )}
+          </div>
+          {start.isError && <p className="mt-2 font-medium">{errorMessage(start.error)}</p>}
+        </Alert>
+      )}
+      {e.status === 'in_progress' && !own && <Alert tone="info" className="mb-4">This consultation is still a draft by {e.doctor.fullName}. Only they can edit and sign it.</Alert>}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-6">
           <Card title="Consultation note">
@@ -563,8 +648,10 @@ export function EncounterReadView({ e }: { e: Encounter }) {
               <ol className="space-y-3 text-sm">
                 {e.amendments.map((a) => (
                   <li key={a.id} className="rounded-lg border border-notice/30 bg-notice-soft p-3">
-                    <p className="font-medium">
+                    <p className="flex flex-wrap items-center gap-2 font-medium">
+                      {a.seq !== null && <span>Amendment {a.seq} ·</span>}
                       {fmtDateTime(a.createdAt)} · {a.authorName}
+                      {a.contentHash === null && <Badge>Added before fingerprinting</Badge>}
                     </p>
                     <p className="text-ink-muted">Reason: {a.reason}</p>
                     <p className="mt-1 whitespace-pre-wrap">{a.content}</p>
@@ -574,6 +661,9 @@ export function EncounterReadView({ e }: { e: Encounter }) {
             </Card>
           )}
           {signed && e.contentHash && <p className="text-xs text-ink-muted">Integrity hash (SHA-256 of the signed content): <span className="font-mono break-all">{e.contentHash}</span></p>}
+          {/* A new amendment changes what is checked: start again from "Check now". */}
+          {signed && <RecordVerificationCard key={`${e.id}:${e.amendments.length}`} encounterId={e.id} />}
+          <StatusHistoryCard encounterId={e.id} />
         </div>
         <aside className="space-y-6" aria-label="Visit information">
           <Card title="Vitals at this visit">
@@ -585,7 +675,8 @@ export function EncounterReadView({ e }: { e: Encounter }) {
           </Link>
         </aside>
       </div>
-      {amending && <AmendmentDialog encounterId={e.id} onClose={() => setAmending(false)} />}
+      {amending && <AmendmentDialog encounterId={e.id} patientId={e.patient.id} onClose={() => setAmending(false)} />}
+      {discarding && <DiscardDraftDialog draft={{ id: e.id, version: e.version, patientName: e.patient.fullName, visitStatus: e.visit.status }} onClose={() => setDiscarding(false)} />}
     </>
   )
 }
@@ -598,12 +689,14 @@ export function ConsultationPage({ sidePanel }: { sidePanel?: SidePanel }) {
   if (q.isPending) return <Spinner />
   if (q.isError)
     return (
-      <Alert tone="error" title="Cannot open this consultation">
+      <Alert tone="error" title={q.error instanceof ApiError && q.error.status === 403 ? 'You do not have access to this consultation' : q.error instanceof ApiError && q.error.status === 404 ? 'Consultation not found' : 'Cannot open this consultation'}>
         {errorMessage(q.error)}{' '}
         <button type="button" className="underline" onClick={() => navigate(-1)}>
           Go back
         </button>
       </Alert>
     )
-  return q.data.canEdit ? <ConsultationEditor key={q.data.id} initial={q.data} sidePanel={sidePanel} /> : <EncounterReadView e={q.data} />
+  // The editor starts from the server's current version, never from a cached copy (another tab or an earlier visit may have saved since).
+  if (q.data.canEdit && !q.isFetchedAfterMount) return <Spinner label="Opening the latest version…" />
+  return q.data.canEdit ? <ConsultationEditor key={q.data.id} initial={q.data} sidePanel={sidePanel} /> : <EncounterReadView key={q.data.id} e={q.data} />
 }

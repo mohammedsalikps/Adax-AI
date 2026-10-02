@@ -254,6 +254,9 @@ const commands = {
         await c.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${app}`)
         await c.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${app}`)
         await c.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${app}`)
+        // ...except on append-only tables (audit log, amendments, status history...), listed by migration 0019.
+        const policy = await c.query("SELECT to_regprocedure('meta.enforce_append_only(text)') IS NOT NULL AS ok")
+        if (policy.rows[0].ok) await c.query('SELECT meta.enforce_append_only($1)', [app])
       })
     }
     say('grants applied')
@@ -267,7 +270,22 @@ const commands = {
     const target = process.argv[3]
     const db = target === 'test' ? cfg.db.testName : target === 'e2e' ? cfg.db.e2eName : null
     if (!db) throw new Error('usage: node scripts/db.mjs reset <test|e2e>  (the development database is never reset)')
+    // Fail closed unless the names are unambiguous and the database itself says it is the
+    // disposable test/e2e database (marker written by `npm run db:migrate -- --target <test|e2e>`).
+    const { name, testName, e2eName } = cfg.db
+    if (name === testName || name === e2eName || testName === e2eName) throw new Error('Refusing to reset: DB_NAME, DB_TEST_NAME and DB_E2E_NAME must all be different.')
+    if (!testName.endsWith('_test') || !e2eName.endsWith('_e2e')) throw new Error('Refusing to reset: DB_TEST_NAME must end with "_test" and DB_E2E_NAME with "_e2e".')
+    if (db === name) throw new Error('Refusing to reset the development database.')
     await withAdmin(assertIdentifier(db, 'database'), async (c) => {
+      const marker = await c.query("SELECT to_regclass('meta.database_identity') IS NOT NULL AS ok")
+      const identity = marker.rows[0].ok ? (await c.query('SELECT role FROM meta.database_identity')).rows[0]?.role : undefined
+      if (identity !== target) {
+        throw new Error(
+          identity
+            ? `Refusing to reset: the database identifies as "${identity}", not "${target}".`
+            : `Refusing to reset: the database has no identity marker; run "npm run db:migrate -- --target ${target}" first.`,
+        )
+      }
       await c.query('SET session_replication_role = replica')
       const { rows } = await c.query("SELECT quote_ident(tablename) AS t FROM pg_tables WHERE schemaname = 'public'")
       if (rows.length) await c.query(`TRUNCATE ${rows.map((r) => r.t).join(', ')} RESTART IDENTITY CASCADE`)

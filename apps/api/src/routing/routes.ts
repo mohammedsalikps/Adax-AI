@@ -1,5 +1,5 @@
 import { OPEN_VISIT_STATUSES, OverrideRoutingRequest, type RoutingResponse, type RoutingSuggestion, type VisitStatus, type VitalKind } from '@adaxai/contracts'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
@@ -11,20 +11,19 @@ import { aiReviewActions, departments, observations, patients, routingSuggestion
 import { conflict, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { ageOn } from '../patients/service.ts'
+import { getVisitOr404 } from '../visits/service.ts'
 import type { RoutingRulesSource } from '../settings/load.ts'
 import { suggestRouting } from './engine.ts'
 
 const IdParams = z.object({ id: z.uuid() })
+const WITH_DOCTOR = 'The patient is with the doctor; routing applies before the consultation starts'
 type Row = typeof routingSuggestions.$inferSelect
 
 export function registerRoutingRoutes(app: FastifyInstance, deps: { db: Db; routing: RoutingRulesSource }) {
   const { db, routing } = deps
 
-  async function visitOr404(me: SessionUser, id: string) {
-    const v = await db.query.visits.findFirst({ where: and(eq(visits.id, id), eq(visits.facilityId, me.facilityId)) })
-    if (!v) throw notFound('Visit')
-    return v
-  }
+  /** Visits of other facilities are "not found", and the lookup is audited (shared with the visit routes). */
+  const visitOr404 = (me: SessionUser, id: string) => getVisitOr404(db, me, id)
 
   async function toOut(r: Row): Promise<RoutingSuggestion> {
     const creator = alias(users, 'creator')
@@ -84,6 +83,7 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: { db: Db; rout
     const { id } = parse(IdParams, req.params)
     const v = await visitOr404(me, id)
     if (!OPEN_VISIT_STATUSES.includes(v.status as VisitStatus)) throw conflict('Closed visits cannot be routed', 'visit_closed')
+    if (v.status === 'in_consultation') throw conflict(WITH_DOCTOR, 'visit_in_consultation')
     const rules = routing.current()
     const p = (await db.query.patients.findFirst({ where: eq(patients.id, v.patientId) }))!
     const obs = await db.select().from(observations).where(and(eq(observations.visitId, id), eq(observations.enteredInError, false))).orderBy(desc(observations.measuredAt))
@@ -118,6 +118,8 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: { db: Db; rout
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const { r, v } = await pendingOr409(me, id)
+    // The consultation's author is fixed: no reassignment while the patient is with the doctor (database-enforced too).
+    if (v.status === 'in_consultation') throw conflict(WITH_DOCTOR, 'visit_in_consultation')
     const s = r.suggestion as RoutingSuggestion['suggestion']
     if (!s.departmentId) throw conflict('The suggested department is not available; edit the visit instead', 'department_unavailable')
     const dept = await db.query.departments.findFirst({ where: and(eq(departments.id, s.departmentId), eq(departments.isActive, true), eq(departments.facilityId, me.facilityId)) })
@@ -133,7 +135,7 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: { db: Db; rout
       const [updated] = await tx
         .update(visits)
         .set({ departmentId: s.departmentId!, assignedDoctorId: s.doctorId, priority: s.priority, updatedAt: sql`now()` })
-        .where(and(eq(visits.id, v.id), eq(visits.status, v.status)))
+        .where(and(eq(visits.id, v.id), eq(visits.status, v.status), ne(visits.status, 'in_consultation')))
         .returning({ id: visits.id })
       if (!updated) throw conflict('The visit was changed by someone else. Refresh and try again.', 'stale_status')
       await recordReview(req, me, r, 'accepted', null, tx)

@@ -15,6 +15,7 @@ import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.tsx'
 import { AdminAiOperationsPage } from './pages/admin/AdminAiOperationsPage.tsx'
 import { AdminThermalDataPage } from './pages/admin/AdminThermalDataPage.tsx'
 import { AiReviewPage } from './pages/doctor/AiReviewPage.tsx'
+import { EarlierDraftsNotice, MyConsultationsPage } from './pages/doctor/MyConsultationsPage.tsx'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx'
 import { ActivatePage } from './pages/ActivatePage.tsx'
 import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
@@ -87,7 +88,8 @@ const router = createBrowserRouter([
     path: '/doctor',
     element: portal('doctor'),
     children: [
-      { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} /> },
+      { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
+      { path: 'consultations', element: <MyConsultationsPage /> },
       { path: 'patients', element: <PatientsPage /> },
       { path: 'patients/:patientId', element: doctorProfile },
       {

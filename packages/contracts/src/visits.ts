@@ -19,14 +19,18 @@ export const VISIT_STATUS_LABELS: Record<VisitStatus, string> = {
 export const OPEN_VISIT_STATUSES: VisitStatus[] = ['waiting', 'in_triage', 'ready', 'in_consultation']
 
 /**
- * Allowed manual status changes. `completed` is not here on purpose: a visit
- * completes only when the doctor signs the encounter.
+ * Allowed manual status changes (queue). The consultation makes the others:
+ * starting or continuing it moves an open visit to `in_consultation`,
+ * signing it completes the visit, and discarding an unsigned draft returns
+ * the visit to `ready`. A visit with an unsigned consultation cannot be
+ * cancelled or marked as no-show, and cancelling needs a reason. The database
+ * enforces the same rules (migration 0019; a test checks they agree).
  */
 export const VISIT_TRANSITIONS: Record<VisitStatus, VisitStatus[]> = {
   waiting: ['in_triage', 'ready', 'cancelled', 'no_show'],
   in_triage: ['ready', 'waiting', 'cancelled'],
   ready: ['in_triage', 'cancelled', 'no_show'],
-  in_consultation: ['ready'],
+  in_consultation: [],
   completed: [],
   cancelled: [],
   no_show: [],
@@ -49,7 +53,9 @@ export const UpdateVisitRequest = z
   .refine((v) => Object.keys(v).length > 0, 'No changes supplied')
 export type UpdateVisitRequest = z.input<typeof UpdateVisitRequest>
 
-export const ChangeVisitStatusRequest = z.object({ status: VisitStatus, reason: OptionalText(200) })
+/** `from` is the status the user saw; the change is refused if the visit has moved on since. */
+export const ChangeVisitStatusRequest = z.object({ status: VisitStatus, from: VisitStatus.optional(), reason: OptionalText(200) })
+export type ChangeVisitStatusRequest = z.input<typeof ChangeVisitStatusRequest>
 
 export const Visit = z.object({
   id: z.uuid(),

@@ -90,8 +90,14 @@ describe('status changes', () => {
     expect((await go('cancelled')).statusCode).toBe(400)
     expect((await go('cancelled', 'Patient left')).json().status).toBe('cancelled')
     expect((await go('waiting')).statusCode).toBe(409)
-    const audit = await adminQuery("SELECT details FROM audit_events WHERE action = 'visit.status' ORDER BY id")
-    expect(audit.rows.map((r) => `${r.details.from}>${r.details.to}`)).toEqual(['waiting>in_triage', 'in_triage>ready', 'ready>cancelled'])
+    const audit = await adminQuery("SELECT outcome, details FROM audit_events WHERE action = 'visit.status' ORDER BY id")
+    expect(audit.rows.filter((r) => r.outcome === 'success').map((r) => `${r.details.from}>${r.details.to}`)).toEqual(['waiting>in_triage', 'in_triage>ready', 'ready>cancelled'])
+    // Refused changes leave a trace too (slice 3).
+    expect(audit.rows.filter((r) => r.outcome === 'failure').map((r) => `${r.details.from}>${r.details.to}:${r.details.code}`)).toEqual([
+      'ready>completed:invalid_transition',
+      'ready>in_consultation:invalid_transition',
+      'cancelled>waiting:invalid_transition',
+    ])
   })
 
   it('a cancelled visit frees the patient for a new check-in the same day', async () => {

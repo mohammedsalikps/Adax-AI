@@ -17,7 +17,7 @@ decisions: [docs/adr/](docs/adr/).
 | Area | What is real today |
 | --- | --- |
 | Foundation | PostgreSQL 17.10 (UTF-8), checksummed migrations, API, web app, Python service, YAML settings validated at start-up |
-| Sign-in and access | Session sign-in, roles (admin, doctor, nurse, patient), server-side default-deny permissions, forced temporary-password change, lockout, append-only audit log |
+| Sign-in and access | Session sign-in, roles (admin, doctor, nurse, patient), server-side default-deny permissions, forced temporary-password change, lockout, append-only audit log linked by a SHA-256 hash chain (check from the admin portal or `npm run audit:verify`) |
 | Admin portal | Users, departments, audit log viewer, operational overview, system status, devices registry, thermal data, AI operations (counts only) |
 | Patients | Registration (auto MRN, duplicate warning), search by name/MRN/phone (incl. non-Latin scripts), profile, allergies with explicit “no known allergies”, consents (grant/withdraw, versioned wording, history kept), patient-portal activation codes |
 | OPD queue and nurse workflow | Check-in with atomic daily tokens, one open visit per patient per day, priority, department/doctor assignment, server-enforced status transitions, vitals with plausibility checks and adult reference-range flags (not applied under 18; display aid only), entered-in-error corrections, auto-refresh |
@@ -32,7 +32,8 @@ decisions: [docs/adr/](docs/adr/).
 | AI oversight | Admin AI operations (counts only), doctor review list of rejected/edited AI output, review-outcome snapshots as evaluation runs, checksummed prompt versions, model registry, settings snapshots |
 | Patient portal (PWA) | Activation with MRN + one-time code; the patient's own signed records with prescriptions and amendments, visits, vital signs, consents, profile and allergies, approved thermal measurements; installable (manifest, icons, service worker that caches only the app shell, never `/api/`) |
 | Devices | **Integration boundary only, no hardware integrated**: registry, assignment to consenting patients, token-authenticated gateway ingestion API (readings stored as *device, unverified*), stethoscope audio upload and playback. See [docs/DEVICES.md](docs/DEVICES.md) |
-| Operations | Cold backup / verify / restore, audio retention, orphan-file check, synthetic demo seed |
+| Record lifecycle | Visit and consultation state machines enforced by the API and the database, with status history (who, when, how, why); **My consultations** worklist of unsigned drafts from any day and recent signed records; discarding a draft with a reason (kept read-only); versioned signed-record verification including the amendment chain; see [ADR 0008](docs/adr/0008-record-lifecycle-and-signed-record-verification.md) |
+| Operations | Cold backup / verify / restore, audio retention, orphan-file check, synthetic demo seed, audit-chain verification, database identity guard for test tooling |
 
 ## Accounts and security model
 
@@ -93,8 +94,19 @@ decisions: [docs/adr/](docs/adr/).
   - the patients each list or search disclosed;
   - every change and every AI review decision;
   - consent grants, renewals, withdrawals and refusals.
-  Each row carries its facility. Database triggers make the log append-only. Request logs record
-  paths only (never search terms).
+  Each row carries its facility. Database triggers make the log append-only, and the API's
+  database role has no UPDATE or DELETE on it (or on any other append-only table).
+  Since migration 0019 every event is linked into a SHA-256 hash chain by the database. Events
+  from before that are summarised by a digest in the chain's first event.
+  - Changed, removed, reordered or unlinked events are reported by the check.
+  - Removal of the newest events, or a full rewrite by someone with database superuser access,
+    is detected only against a head recorded outside the system. It is tamper evidence, not
+    tamper proofing. See [ADR 0009](docs/adr/0009-audit-hash-chain-and-append-only-privileges.md).
+
+  Request logs record paths only (never search terms).
+- **Signed records** carry a versioned SHA-256 fingerprint (`adaxai.encounter.v2`; older records
+  `v1`); amendments are hash-linked to it. **Record verification** re-checks them on request.
+  A match is not a digital signature and says nothing about clinical correctness.
 
 ## Requirements
 
@@ -216,7 +228,7 @@ All services listen on localhost only.
 | `npm run demo:seed` | Add the synthetic demo patient (idempotent) |
 | `npm run db:start` / `db:stop` / `db:status` | PostgreSQL lifecycle |
 | `npm run db:selftest` | Persistence check: write → clean stop → start → read, plus UTF-8 round-trip |
-| `npm run db:migrate` | Apply migrations to the dev database (`-- --target test` or `e2e`) |
+| `npm run db:migrate` | Apply migrations to the dev database (`-- --target test` or `e2e`). Also marks what the database is for (development, test or e2e) and refuses a database marked for something else |
 | `npm run db:seed` | Synthetic staff and departments (idempotent) |
 | `npm run db:generate` | Generate a new SQL migration from `apps/api/src/db/schema.ts` |
 | `npm run backup` | Cold backup of the database and uploaded files to `backups/` (stop the app first) |
@@ -224,7 +236,8 @@ All services listen on localhost only.
 | `npm run backup:restore -- <dir> --yes` | Restore; the current data is moved aside, not deleted |
 | `npm run user:reset-password -- <username> [--seed-password]` | Local recovery of a staff account (lockout or lost password): a one-time temporary password, or back to `SEED_DEMO_PASSWORD`; clears lockout, ends sessions, audited with the OS user and host, never touches patient data. On production or clinical installations `--seed-password` is refused and a reset needs `--break-glass --reason "…"` |
 | `npm run retention [-- --dry-run]` | Delete consultation audio of signed consultations older than the configured days |
-| `node scripts/storage-orphans.mjs [--delete]` | List (or remove) stored files the dev database does not reference |
+| `npm run audit:verify -- [--target test\|e2e] [--anchor <seq>:<hash>]` | Check the audit log's hash chain (read-only) and print its head; with an anchor recorded earlier, detect removal of the newest events |
+| `node scripts/storage-orphans.mjs [--delete]` | List (or remove) stored files the dev database does not reference (`--delete` only on a database marked as development) |
 | `npm test` | API, web, Python and end-to-end tests |
 | `npm run test:api` | Vitest against the real test database `adaxai_test` |
 | `npm run test:web` | Service-worker caching policy (node --test) |
@@ -236,8 +249,31 @@ All services listen on localhost only.
 **Test isolation:** API tests use `adaxai_test` and `storage-test/`; the end-to-end suite starts
 its own API (4100), Python service (8101) and web app (5273) against `adaxai_e2e` and
 `storage-e2e/`. Neither touches the development database or `storage/`, and both can run while
-`npm run dev` is up. AI output in tests comes from test doubles or the test-only mock server
-`e2e/mock-anthropic.mjs`.
+`npm run dev` is up.
+
+This is enforced, not only configured:
+- `DB_NAME`, `DB_TEST_NAME` and `DB_E2E_NAME` must all differ, and the test and e2e names must end
+  in `_test` and `_e2e`;
+- each database carries an identity marker (`meta.database_identity`) set by `db:migrate`;
+- the test helpers' reset, `db.mjs reset` and `storage-orphans --delete` refuse unless the database
+  identifies as the expected one;
+- the e2e configuration stops before starting any server if the names are ambiguous.
+
+Nothing prints connection secrets.
+
+**Upgrading an installation made before this guard existed.** The test and e2e databases already
+hold data but carry no identity marker, so setup and the test commands refuse to treat them as
+disposable. After checking that they are the test databases, mark them once:
+
+```bash
+npm run db:migrate -- --target test --claim-existing
+```
+
+```bash
+npm run db:migrate -- --target e2e --claim-existing
+```
+
+AI output in tests comes from test doubles or the test-only mock server `e2e/mock-anthropic.mjs`.
 
 ## Backup and restore
 
@@ -273,7 +309,10 @@ encrypted and access-controlled.
 - **Roles:** `DB_ADMIN_USER` (superuser, scripts and migrations only); the API connects as
   `DB_APP_USER` (data only).
 - **Databases:** `adaxai` (development), `adaxai_test`, `adaxai_e2e`.
-- **Integrity in the database:** triggers keep signed records, amendments, audit events, AI
+- **Lifecycle in the database:** visit and consultation status changes are validated by triggers
+  (the same transitions as the API) and recorded in `visit_status_events` and
+  `encounter_status_events` with the acting user.
+- **Integrity in the database:** triggers keep signed and discarded records, amendments, audit events, status history, AI
   evidence, review history, transcript segments, evaluation runs, photographs and stethoscope
   recordings append-only or frozen, and allow reviewed AI output, labels, routing suggestions and
   device assignments to change only in their single permitted way.
@@ -324,6 +363,14 @@ and thermal images; set `clinical` only in a real clinical deployment.
 - Audit coverage is extensive but has not been assessed against a specific regulation; no
   regulatory compliance is claimed.
 - Rate limits are kept in memory by the single API process (a restart clears them).
+- The audit hash chain and record fingerprints are unkeyed SHA-256: tamper evidence within this
+  database, not proof. Someone with the database superuser password (stored in the local `.env`)
+  could rewrite records and recompute every hash. Only a head recorded outside the system reveals
+  that, or the removal of the newest events.
+- Every audited request waits briefly for the audit chain's lock; this has not been measured under
+  load.
+- Unsigned drafts can be edited, signed or discarded only by their author; there is no supervised
+  reassignment yet.
 - "Care records" (`data_processing`) consent is recorded and shown but not enforced: whether care
   depends on it is a legal decision that needs qualified review.
 

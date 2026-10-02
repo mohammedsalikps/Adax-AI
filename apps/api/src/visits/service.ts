@@ -1,11 +1,24 @@
 import { flagVital, type Observation, VITALS, type Visit, type VitalKind } from '@adaxai/contracts'
 import { and, asc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
+import type { SessionUser } from '../auth/sessions.ts'
 import type { DbOrTx } from '../db/client.ts'
 import { allergies, departments, observations, patients, users, visits } from '../db/schema.ts'
+import { deniedNotFound } from '../http/errors.ts'
 import { ageOn, fullName } from '../patients/service.ts'
 
 type ObservationRow = typeof observations.$inferSelect
+export type VisitRow = typeof visits.$inferSelect
+
+/** A visit of the caller's facility; lookups of other facilities' visits are refused as not found, and audited. */
+export async function getVisitOr404(db: DbOrTx, me: SessionUser, id: string): Promise<VisitRow> {
+  const v = await db.query.visits.findFirst({ where: and(eq(visits.id, id), eq(visits.facilityId, me.facilityId)) })
+  if (!v) {
+    const elsewhere = await db.query.visits.findFirst({ columns: { id: true }, where: eq(visits.id, id) })
+    throw deniedNotFound('Visit', { entityType: 'visit', entityId: id, reason: elsewhere ? 'other_facility' : 'not_found' })
+  }
+  return v
+}
 
 export function toObservation(o: ObservationRow, ageYears: number | null, recordedByName: string | null, deviceLabel: string | null = null): Observation {
   return {

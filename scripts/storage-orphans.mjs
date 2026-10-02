@@ -15,8 +15,16 @@ const cfg = loadEnv()
 requireSecrets(cfg)
 const c = new pg.Client({ host: cfg.db.host, port: cfg.db.port, user: cfg.db.adminUser, password: cfg.db.adminPassword, database: cfg.db.name })
 await c.connect()
+// Deleting is allowed only against the database that identifies as the development one,
+// so a leftover DB_NAME pointing at a test database cannot empty the development store.
+const marked = (await c.query("select to_regclass('meta.database_identity') is not null as ok")).rows[0].ok
+const identity = marked ? (await c.query('select role from meta.database_identity')).rows[0]?.role : undefined
 const referenced = new Set((await c.query('select storage_key from files')).rows.map((r) => path.normalize(r.storage_key)))
 await c.end()
+if (process.argv.includes('--delete') && identity !== 'development') {
+  console.error(`[storage] Refusing to delete: database ${cfg.db.name} does not identify as the development database (run "npm run db:migrate" to mark it).`)
+  process.exit(2)
+}
 
 const files = []
 if (fs.existsSync(cfg.storageDir)) for (const e of fs.readdirSync(cfg.storageDir, { withFileTypes: true, recursive: true })) if (e.isFile()) files.push(path.join(e.parentPath, e.name))

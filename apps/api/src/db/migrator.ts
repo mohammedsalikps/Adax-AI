@@ -83,6 +83,10 @@ export async function migrate(client: pg.Client, dir: string = MIGRATIONS_DIR, o
       result.applied.push(m.name)
       log(`applied ${m.name}`)
     }
+    // Append-only tables: the app role keeps INSERT and SELECT only (migration 0019 lists them).
+    if (opts.appRole && (await client.query("SELECT to_regprocedure('meta.enforce_append_only(text)') IS NOT NULL AS ok")).rows[0].ok) {
+      await client.query('SELECT meta.enforce_append_only($1)', [opts.appRole])
+    }
     return result
   } finally {
     await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY])

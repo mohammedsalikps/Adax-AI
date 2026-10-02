@@ -1,4 +1,5 @@
 import {
+  AuditChainQuery,
   AuditQuery,
   CreateUserRequest,
   DepartmentInput,
@@ -13,6 +14,7 @@ import { and, asc, desc, eq, gte, lt, ne, sql, type SQL } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
+import { verifyAuditChain } from '../audit/chain.ts'
 import { hashPassword } from '../auth/password.ts'
 import { currentUser } from '../auth/plugin.ts'
 import { revokeUserSessions, type SessionUser } from '../auth/sessions.ts'
@@ -257,6 +259,19 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
       details: { filters: { action: q.action ?? null, actorUserId: q.actorUserId ?? null, patientId: q.patientId ?? null, outcome: q.outcome ?? null, from: q.from ?? null, to: q.to ?? null }, results: events.length },
     })
     return { events, nextBefore: rows.length > q.limit ? (page.at(-1)?.e.id ?? null) : null }
+  })
+
+  /**
+   * Checks the audit log's hash chain end to end (audit/chain.ts). The chain
+   * spans all facilities; the report holds counts, sequence numbers and hashes
+   * only, never event content. Optionally compares with an anchor (an earlier
+   * head recorded outside the system).
+   */
+  app.get('/api/admin/audit-integrity', { config: { permission: 'audit:read' } }, async (req) => {
+    const q = parse(AuditChainQuery, req.query)
+    const report = await verifyAuditChain(db, q.anchorSeq !== undefined && q.anchorHash ? { seq: q.anchorSeq, hash: q.anchorHash } : undefined)
+    await audit(db, req, { action: 'audit.verify', details: { status: report.status, chained: report.events.chained, problems: report.problemCount, headSeq: report.head?.seq ?? null, anchor: report.anchor?.result ?? null } })
+    return report
   })
 
   // ---- Operational overview (counts only; no clinical content) ----

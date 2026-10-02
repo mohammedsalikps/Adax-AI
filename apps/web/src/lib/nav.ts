@@ -1,6 +1,7 @@
 import type { Role } from '@adaxai/contracts'
 import {
   ClipboardList,
+  FileSignature,
   FileClock,
   FileText,
   HeartPulse,
@@ -39,6 +40,7 @@ export const NAV: Record<Role, NavItem[]> = {
   ],
   doctor: [
     { to: '/doctor', label: 'OPD queue', icon: Stethoscope, end: true },
+    { to: '/doctor/consultations', label: 'My consultations', icon: FileSignature },
     { to: '/doctor/patients', label: 'Patients', icon: Search },
     { to: '/doctor/thermal', label: 'Thermal', icon: ScanLine },
     { to: '/doctor/ai-review', label: 'AI review', icon: BrainCircuit },

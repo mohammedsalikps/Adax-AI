@@ -13,6 +13,8 @@ PostgreSQL, and a Python thermal-imaging service.
 | Foundation | PostgreSQL 17.10 (UTF-8), migrations, API, thermal-service health, web app |
 | Sign-in and access | Session sign-in, roles (admin, doctor, nurse, patient), server-side permissions, forced temporary-password change, lockout, append-only audit log |
 | Admin portal | Users (create, edit, deactivate, reset password), departments, audit log viewer, operational overview, system status |
+| Patients | Registration (auto MRN, duplicate warning with audited override), search by name/MRN/phone (incl. non-Latin scripts), profile, allergies with explicit “no known allergies”, consents (grant/withdraw, history kept), patient-portal activation codes |
+| OPD queue and nurse workflow | Check-in with atomic daily tokens, one open visit per patient per day, priority, department/doctor assignment, server-enforced status transitions, vitals with plausibility checks and adult reference-range flags (not applied under 18; display aid only), entered-in-error corrections, doctor “my patients” view, auto-refresh |
 
 ## Accounts and security model
 

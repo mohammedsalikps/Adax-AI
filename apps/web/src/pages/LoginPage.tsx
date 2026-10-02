@@ -58,7 +58,7 @@ export function LoginPage() {
       </form>
       <p className="mt-4 border-t border-line pt-4 text-center text-sm text-ink-muted">
         Patient with an activation code?{' '}
-        <Link to="/activate" className="font-medium text-brand-strong underline-offset-2 hover:underline">
+        <Link to="/activate" className="font-medium text-brand-strong underline underline-offset-2">
           Activate your account
         </Link>
       </p>

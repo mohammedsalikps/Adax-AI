@@ -38,7 +38,7 @@ export function PortalLayout({ role }: { role: Role }) {
             <img src="/favicon.svg" alt="" className="size-7" />
             <span className="font-semibold tracking-tight">ADAXAI</span>
           </Link>
-          <span className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand-strong">{ROLE_LABELS[role]} portal</span>
+          <span className="hidden rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium whitespace-nowrap text-brand-strong sm:inline">{ROLE_LABELS[role]} portal</span>
           <div className="ml-auto flex items-center gap-1">
             <span className="hidden text-sm text-ink-muted sm:inline" data-testid="signed-in-user">
               {me?.fullName}
@@ -47,7 +47,7 @@ export function PortalLayout({ role }: { role: Role }) {
               <KeyRound aria-hidden="true" className="size-5" />
               <span className="sr-only">Change password</span>
             </Link>
-            <button type="button" onClick={signOut} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm font-medium text-ink-muted hover:bg-canvas hover:text-ink">
+            <button type="button" onClick={signOut} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm font-medium whitespace-nowrap text-ink-muted hover:bg-canvas hover:text-ink">
               <LogOut aria-hidden="true" className="size-4" />
               Sign out
             </button>

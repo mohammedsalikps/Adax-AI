@@ -1,0 +1,90 @@
+import { z } from 'zod'
+
+export const VitalKind = z.enum(['heart_rate', 'respiratory_rate', 'systolic_bp', 'diastolic_bp', 'temperature', 'spo2', 'weight', 'height', 'blood_glucose', 'pain_score'])
+export type VitalKind = z.infer<typeof VitalKind>
+
+export interface VitalDefinition {
+  label: string
+  short: string
+  unit: string
+  /** Values outside this range are rejected as implausible (likely entry errors). */
+  plausible: [number, number]
+  /** Adult reference range; outside it the value is flagged. Not a diagnosis. */
+  reference?: [number, number]
+  /** Outside these the flag is "critical". */
+  critical?: [number, number]
+  decimals: number
+  /** LOINC code for interoperability (informational). */
+  loinc: string
+}
+
+export const VITALS: Record<VitalKind, VitalDefinition> = {
+  heart_rate: { label: 'Heart rate', short: 'HR', unit: 'bpm', plausible: [20, 250], reference: [60, 100], critical: [40, 140], decimals: 0, loinc: '8867-4' },
+  respiratory_rate: { label: 'Respiratory rate', short: 'RR', unit: '/min', plausible: [4, 80], reference: [12, 20], critical: [8, 30], decimals: 0, loinc: '9279-1' },
+  systolic_bp: { label: 'Systolic BP', short: 'SBP', unit: 'mmHg', plausible: [50, 260], reference: [90, 139], critical: [80, 180], decimals: 0, loinc: '8480-6' },
+  diastolic_bp: { label: 'Diastolic BP', short: 'DBP', unit: 'mmHg', plausible: [30, 160], reference: [60, 89], critical: [40, 120], decimals: 0, loinc: '8462-4' },
+  temperature: { label: 'Temperature', short: 'Temp', unit: '°C', plausible: [30, 44], reference: [36.1, 37.8], critical: [35, 40], decimals: 1, loinc: '8310-5' },
+  spo2: { label: 'SpO₂', short: 'SpO₂', unit: '%', plausible: [50, 100], reference: [95, 100], critical: [90, 101], decimals: 0, loinc: '59408-5' },
+  weight: { label: 'Weight', short: 'Wt', unit: 'kg', plausible: [0.3, 400], decimals: 1, loinc: '29463-7' },
+  height: { label: 'Height', short: 'Ht', unit: 'cm', plausible: [20, 250], decimals: 0, loinc: '8302-2' },
+  blood_glucose: { label: 'Blood glucose (random)', short: 'Glu', unit: 'mg/dL', plausible: [10, 1000], reference: [70, 140], critical: [54, 300], decimals: 0, loinc: '2339-0' },
+  pain_score: { label: 'Pain score', short: 'Pain', unit: '/10', plausible: [0, 10], reference: [0, 3], decimals: 0, loinc: '72514-3' },
+}
+
+export const VITAL_ORDER: VitalKind[] = ['temperature', 'heart_rate', 'respiratory_rate', 'systolic_bp', 'diastolic_bp', 'spo2', 'blood_glucose', 'pain_score', 'weight', 'height']
+
+export type VitalFlag = 'normal' | 'low' | 'high' | 'critical_low' | 'critical_high'
+
+/**
+ * Flags a value against the ADULT reference range. Returns null when there is
+ * no range, or for patients under 18 (paediatric ranges differ by age and are
+ * not implemented). This is a display aid, not clinical decision support.
+ */
+export function flagVital(kind: VitalKind, value: number, ageYears: number | null): VitalFlag | null {
+  const d = VITALS[kind]
+  if (!d.reference || ageYears === null || ageYears < 18) return null
+  if (d.critical && value < d.critical[0]) return 'critical_low'
+  if (d.critical && value > d.critical[1]) return 'critical_high'
+  if (value < d.reference[0]) return 'low'
+  if (value > d.reference[1]) return 'high'
+  return 'normal'
+}
+
+export const VitalItem = z
+  .object({ kind: VitalKind, value: z.number().finite() })
+  .superRefine((v, ctx) => {
+    const d = VITALS[v.kind]
+    if (v.value < d.plausible[0] || v.value > d.plausible[1]) {
+      ctx.addIssue({ code: 'custom', path: ['value'], message: `${d.label} must be between ${d.plausible[0]} and ${d.plausible[1]} ${d.unit}` })
+    }
+    if (v.kind === 'pain_score' && !Number.isInteger(v.value)) ctx.addIssue({ code: 'custom', path: ['value'], message: 'Pain score is a whole number 0–10' })
+  })
+
+export const RecordVitalsRequest = z.object({
+  items: z
+    .array(VitalItem)
+    .min(1, 'Enter at least one measurement')
+    .max(10)
+    .refine((xs) => new Set(xs.map((x) => x.kind)).size === xs.length, 'Each measurement can appear once'),
+  measuredAt: z.iso.datetime({ offset: true }).optional(),
+})
+export type RecordVitalsRequest = z.infer<typeof RecordVitalsRequest>
+
+export const Observation = z.object({
+  id: z.uuid(),
+  kind: VitalKind,
+  value: z.number(),
+  unit: z.string(),
+  flag: z.enum(['normal', 'low', 'high', 'critical_low', 'critical_high']).nullable(),
+  measuredAt: z.string(),
+  source: z.enum(['manual', 'device']),
+  /** How far the value can be trusted: typed by staff, or from a device not validated in this deployment. */
+  validationStatus: z.enum(['manual_entry', 'device_unverified']),
+  deviceLabel: z.string().nullable(),
+  recordedByName: z.string().nullable(),
+  visitId: z.uuid().nullable(),
+  enteredInError: z.boolean(),
+})
+export type Observation = z.infer<typeof Observation>
+
+export const EnteredInErrorRequest = z.object({ reason: z.string().trim().min(3, 'Give a short reason').max(200) })

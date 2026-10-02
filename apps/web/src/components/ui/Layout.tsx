@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useId } from 'react'
 
 export function PageHeader({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
@@ -12,12 +12,18 @@ export function PageHeader({ title, description, actions }: { title: ReactNode; 
   )
 }
 
+/** A titled section; its heading names the region for assistive technology. */
 export function Card({ title, actions, children, className = '', bodyClassName = 'p-5' }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string }) {
+  const headingId = useId()
   return (
-    <section className={`rounded-xl border border-line bg-surface ${className}`}>
+    <section aria-labelledby={title ? headingId : undefined} className={`rounded-xl border border-line bg-surface ${className}`}>
       {(title || actions) && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3">
-          {title && <h2 className="text-base font-semibold">{title}</h2>}
+          {title && (
+            <h2 id={headingId} className="text-base font-semibold">
+              {title}
+            </h2>
+          )}
           {actions}
         </div>
       )}

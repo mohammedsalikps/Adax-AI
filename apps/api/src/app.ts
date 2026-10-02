@@ -2,6 +2,9 @@ import crypto from 'node:crypto'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
+import { registerActivationRoutes } from './auth/activation.ts'
+import { registerPatientRoutes } from './patients/routes.ts'
+import { registerVisitRoutes } from './visits/routes.ts'
 import { registerAuth } from './auth/plugin.ts'
 import { registerAuthRoutes } from './auth/routes.ts'
 import type { Config } from './config.ts'
@@ -30,7 +33,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerAuth(app, { db, cookieSecure: deps.config.cookieSecure })
   registerHealthRoutes(app, { config: deps.config, pool: deps.pool, fetchImpl })
   registerAuthRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
+  registerActivationRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
   registerAdminRoutes(app, { db })
+  registerPatientRoutes(app, { db })
+  registerVisitRoutes(app, { db })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

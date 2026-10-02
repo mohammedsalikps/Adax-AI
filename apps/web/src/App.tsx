@@ -10,7 +10,12 @@ import { AdminAuditPage } from './pages/admin/AdminAuditPage.tsx'
 import { AdminDepartmentsPage } from './pages/admin/AdminDepartmentsPage.tsx'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.tsx'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx'
+import { ActivatePage } from './pages/ActivatePage.tsx'
 import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
+import { PatientProfilePage } from './pages/clinical/PatientProfilePage.tsx'
+import { PatientsPage } from './pages/clinical/PatientsPage.tsx'
+import { QueuePage } from './pages/clinical/QueuePage.tsx'
+import { RegisterPatientPage } from './pages/clinical/RegisterPatientPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { NotYetBuiltPage } from './pages/NotYetBuiltPage.tsx'
@@ -24,7 +29,7 @@ const portal = (role: Role) => (
 const router = createBrowserRouter([
   { path: '/', element: <RoleRedirect /> },
   { path: '/login', element: <LoginPage /> },
-  { path: '/activate', element: <NotYetBuiltPage title="Activate patient account" planned={['Activate with your MRN and the code from the clinic']} /> },
+  { path: '/activate', element: <ActivatePage /> },
   {
     path: '/change-password',
     element: (
@@ -49,16 +54,22 @@ const router = createBrowserRouter([
     path: '/doctor',
     element: portal('doctor'),
     children: [
-      { index: true, element: <NotYetBuiltPage title="OPD queue" planned={["Today's patients waiting for you"]} /> },
-      { path: '*', element: <NotYetBuiltPage title="Doctor portal" planned={['Patients, consultations, thermal']} /> },
+      { index: true, element: <QueuePage /> },
+      { path: 'patients', element: <PatientsPage /> },
+      { path: 'patients/:patientId', element: <PatientProfilePage /> },
+      { path: 'register', element: <RegisterPatientPage /> },
+      { path: 'thermal', element: <NotYetBuiltPage title="Thermal" planned={['FLIR image upload and analysis']} /> },
     ],
   },
   {
     path: '/nurse',
     element: portal('nurse'),
     children: [
-      { index: true, element: <NotYetBuiltPage title="OPD queue" planned={['Check-in, tokens and vitals']} /> },
-      { path: '*', element: <NotYetBuiltPage title="Nurse portal" planned={['Registration, patients, devices']} /> },
+      { index: true, element: <QueuePage /> },
+      { path: 'register', element: <RegisterPatientPage /> },
+      { path: 'patients', element: <PatientsPage /> },
+      { path: 'patients/:patientId', element: <PatientProfilePage /> },
+      { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device assignment and readings']} /> },
     ],
   },
   {

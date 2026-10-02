@@ -134,3 +134,14 @@ export async function login(app: FastifyInstance, username: string, password = T
   if (!c) throw new Error('no session cookie')
   return `adaxai_session=${c.value}`
 }
+
+/** A synthetic patient registration body. */
+export const samplePatient = (over: Record<string, unknown> = {}) => ({
+  givenName: 'Lakshmi',
+  familyName: 'Narayanan',
+  dateOfBirth: '1985-04-12',
+  sex: 'female',
+  phone: '98400 12345',
+  city: 'Chennai',
+  ...over,
+})

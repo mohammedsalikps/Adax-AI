@@ -12,6 +12,8 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly issues: FieldIssue[] = [],
+    /** The full error response body (some errors carry extra data, e.g. duplicate candidates). */
+    readonly body: unknown = null,
   ) {
     super(message)
   }
@@ -51,8 +53,8 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   const data: unknown = res.status === 204 ? null : await res.json().catch(() => null)
   if (!res.ok) {
     const parsed = ApiErrorBody.safeParse(data)
-    if (parsed.success) throw new ApiError(res.status, parsed.data.error, parsed.data.message ?? `Request failed (${res.status})`, parsed.data.issues)
-    throw new ApiError(res.status, 'http_error', `Request failed (${res.status})`)
+    if (parsed.success) throw new ApiError(res.status, parsed.data.error, parsed.data.message ?? `Request failed (${res.status})`, parsed.data.issues, data)
+    throw new ApiError(res.status, 'http_error', `Request failed (${res.status})`, [], data)
   }
   return data as T
 }

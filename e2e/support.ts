@@ -28,11 +28,13 @@ export async function expectNoHorizontalOverflow(page: Page) {
   expect(await page.evaluate(() => innerWidth)).toBe(viewport.width)
 }
 
-export async function signIn(page: Page, username: string, password = DEMO_PASSWORD) {
+/** Signs in through the UI and waits until the app has left the sign-in page (unless failure is expected). */
+export async function signIn(page: Page, username: string, password = DEMO_PASSWORD, opts: { expectFailure?: boolean } = {}) {
   await page.goto('/login')
   await page.getByLabel('Username').fill(username)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
+  if (!opts.expectFailure) await page.waitForURL((u) => !u.pathname.startsWith('/login'))
 }
 
 export async function signOut(page: Page) {

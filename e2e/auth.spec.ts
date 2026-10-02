@@ -25,7 +25,7 @@ test('anonymous visitors are sent to sign-in; the page is accessible', async ({ 
 })
 
 test('a wrong password shows an error and does not sign in', async ({ page }) => {
-  await signIn(page, 'nurse.anil', 'definitely-not-the-password')
+  await signIn(page, 'nurse.anil', 'definitely-not-the-password', { expectFailure: true })
   await expect(page.getByRole('alert')).toContainText('Invalid username or password')
   await expect(page).toHaveURL(/\/login/)
 })
@@ -85,7 +85,9 @@ test('signing out ends the session server-side', async ({ page }) => {
 test('the skip link moves focus to the main content', async ({ page, isMobile }) => {
   test.skip(isMobile, 'keyboard navigation is checked on desktop')
   await signIn(page, 'admin')
-  await expect(page).toHaveURL(/\/admin$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Operational overview' })).toBeVisible()
+  // Start from the top of the document, as a keyboard user arriving on the page would.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Tab')
   await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeFocused()
   await page.keyboard.press('Enter')

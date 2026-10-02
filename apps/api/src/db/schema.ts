@@ -1,7 +1,24 @@
 // Drizzle schema. Source of truth for generated migrations in ../../drizzle.
 // Tables are added milestone by milestone; never edit an applied migration.
 import { sql } from 'drizzle-orm'
-import { bigint, boolean, customType, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import {
+  bigint,
+  boolean,
+  customType,
+  date,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgEnum,
+  pgSequence,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core'
 
 /** Case-insensitive text (extension `citext`, created in 0000_extensions). */
 export const citext = customType<{ data: string }>({ dataType: () => 'citext' })
@@ -111,4 +128,210 @@ export const auditEvents = pgTable(
     index('audit_events_patient_idx').on(t.patientId),
     index('audit_events_action_idx').on(t.action),
   ],
+)
+
+// ---------------------------------------------------------------------------
+// Patients
+// ---------------------------------------------------------------------------
+
+export const sex = pgEnum('sex', ['female', 'male', 'other', 'unknown'])
+
+/** MRNs come from this sequence: ADX-001001, ADX-001002, ... */
+export const patientMrnSeq = pgSequence('patient_mrn_seq', { startWith: 1001, minValue: 1 })
+
+export const patients = pgTable(
+  'patients',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    mrn: citext('mrn')
+      .notNull()
+      .unique()
+      .default(sql`'ADX-' || lpad(nextval('patient_mrn_seq')::text, 6, '0')`),
+    givenName: text('given_name').notNull(),
+    familyName: text('family_name'),
+    /** Lower-cased full name for search (trigram index). */
+    searchName: text('search_name').generatedAlwaysAs(sql`lower(given_name || ' ' || coalesce(family_name, ''))`),
+    dateOfBirth: date('date_of_birth').notNull(),
+    dateOfBirthEstimated: boolean('date_of_birth_estimated').notNull().default(false),
+    sex: sex('sex').notNull(),
+    phone: text('phone').notNull(),
+    email: text('email'),
+    addressLine: text('address_line'),
+    city: text('city'),
+    state: text('state'),
+    postalCode: text('postal_code'),
+    /** ABHA number as entered (digits). Not verified with ABDM. */
+    abhaNumber: text('abha_number'),
+    bloodGroup: text('blood_group'),
+    preferredLanguage: text('preferred_language'),
+    emergencyContactName: text('emergency_contact_name'),
+    emergencyContactPhone: text('emergency_contact_phone'),
+    noKnownAllergies: boolean('no_known_allergies').notNull().default(false),
+    createdBy: uuid('created_by').references(() => users.id),
+    ...timestamps,
+  },
+  (t) => [
+    index('patients_search_name_trgm').using('gin', sql`${t.searchName} gin_trgm_ops`),
+    index('patients_phone_idx').on(t.phone),
+    index('patients_dob_idx').on(t.dateOfBirth),
+  ],
+)
+
+export const allergySeverity = pgEnum('allergy_severity', ['mild', 'moderate', 'severe', 'unknown'])
+
+export const allergies = pgTable(
+  'allergies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    substance: text('substance').notNull(),
+    reaction: text('reaction'),
+    severity: allergySeverity('severity').notNull().default('unknown'),
+    status: text('status').notNull().default('active'),
+    recordedBy: uuid('recorded_by').references(() => users.id),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('allergies_patient_idx').on(t.patientId)],
+)
+
+export const consentType = pgEnum('consent_type', ['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use'])
+export const consentMethod = pgEnum('consent_method', ['verbal', 'written', 'digital'])
+
+/** Consent records are never deleted; withdrawal is recorded on the row. */
+export const consents = pgTable(
+  'consents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    type: consentType('type').notNull(),
+    status: text('status').notNull().default('granted'),
+    method: consentMethod('method').notNull(),
+    scope: text('scope').notNull().default('ongoing'),
+    /** Set for encounter-scoped consent (FK added with encounters). */
+    encounterId: uuid('encounter_id'),
+    /** Version of the consent wording shown or read to the patient. */
+    version: text('version').notNull().default('2026-10-v1'),
+    notes: text('notes'),
+    recordedBy: uuid('recorded_by').references(() => users.id),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+    withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
+    withdrawnBy: uuid('withdrawn_by').references(() => users.id),
+  },
+  (t) => [index('consents_patient_idx').on(t.patientId, t.type)],
+)
+
+/** One-time codes a patient uses to activate their portal account. Only a hash is stored. */
+export const patientActivationCodes = pgTable(
+  'patient_activation_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    codeHash: text('code_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    failedAttempts: integer('failed_attempts').notNull().default(0),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('activation_codes_patient_idx').on(t.patientId)],
+)
+
+// ---------------------------------------------------------------------------
+// OPD visits (queue) and observations
+// ---------------------------------------------------------------------------
+
+export const visitStatus = pgEnum('visit_status', ['waiting', 'in_triage', 'ready', 'in_consultation', 'completed', 'cancelled', 'no_show'])
+export const visitPriority = pgEnum('visit_priority', ['normal', 'urgent'])
+
+export const visits = pgTable(
+  'visits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id),
+    assignedDoctorId: uuid('assigned_doctor_id').references(() => users.id),
+    /** Calendar day in the facility's timezone. */
+    visitDate: date('visit_date').notNull(),
+    tokenNumber: integer('token_number').notNull(),
+    status: visitStatus('status').notNull().default('waiting'),
+    priority: visitPriority('priority').notNull().default('normal'),
+    chiefComplaint: text('chief_complaint'),
+    statusReason: text('status_reason'),
+    createdBy: uuid('created_by').references(() => users.id),
+    checkedInAt: timestamp('checked_in_at', { withTimezone: true }).notNull().defaultNow(),
+    statusChangedAt: timestamp('status_changed_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('visits_token_uq').on(t.facilityId, t.visitDate, t.tokenNumber),
+    // At most one open visit per patient per day.
+    uniqueIndex('visits_one_open_per_day_uq')
+      .on(t.patientId, t.visitDate)
+      .where(sql`status in ('waiting', 'in_triage', 'ready', 'in_consultation')`),
+    index('visits_date_status_idx').on(t.facilityId, t.visitDate, t.status),
+    index('visits_patient_idx').on(t.patientId),
+  ],
+)
+
+/** Atomic per-day token numbers (INSERT ... ON CONFLICT DO UPDATE ... RETURNING). */
+export const dailyTokenCounters = pgTable(
+  'daily_token_counters',
+  {
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    visitDate: date('visit_date').notNull(),
+    lastToken: integer('last_token').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.facilityId, t.visitDate] })],
+)
+
+export const vitalKind = pgEnum('vital_kind', ['heart_rate', 'respiratory_rate', 'systolic_bp', 'diastolic_bp', 'temperature', 'spo2', 'weight', 'height', 'blood_glucose', 'pain_score'])
+export const observationSource = pgEnum('observation_source', ['manual', 'device'])
+
+/**
+ * Measurements. Never deleted or edited: a wrong value is marked
+ * entered-in-error (with a reason) and the corrected value is recorded anew.
+ */
+export const observations = pgTable(
+  'observations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    visitId: uuid('visit_id').references(() => visits.id),
+    kind: vitalKind('kind').notNull(),
+    value: numeric('value', { precision: 8, scale: 2, mode: 'number' }).notNull(),
+    unit: text('unit').notNull(),
+    measuredAt: timestamp('measured_at', { withTimezone: true }).notNull().defaultNow(),
+    source: observationSource('source').notNull().default('manual'),
+    validationStatus: text('validation_status').notNull().default('manual_entry'),
+    /** Device that produced the value (FK added with devices). */
+    deviceId: uuid('device_id'),
+    recordedBy: uuid('recorded_by').references(() => users.id),
+    enteredInError: boolean('entered_in_error').notNull().default(false),
+    enteredInErrorReason: text('entered_in_error_reason'),
+    enteredInErrorBy: uuid('entered_in_error_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('observations_patient_kind_idx').on(t.patientId, t.kind, t.measuredAt), index('observations_visit_idx').on(t.visitId)],
 )

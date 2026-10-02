@@ -4,7 +4,10 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
 import { type AiProviders, providersFromConfig } from './ai/providers.ts'
-import { registerAiRoutes } from './ai/routes.ts'
+import { JobService } from './ai/jobs.ts'
+import { type JobExecutor, registerAiRoutes } from './ai/routes.ts'
+import { effectiveSettings, loadAppSettings, RoutingRulesSource } from './settings/load.ts'
+import type { AppSettings } from './settings/schema.ts'
 import { registerFileRoutes } from './files/routes.ts'
 import { httpThermalService, type ThermalService } from './thermal/client.ts'
 import { registerThermalDatasetRoutes } from './thermal/datasets.ts'
@@ -30,6 +33,10 @@ export interface AppDeps {
   ai?: AiProviders
   /** Thermal processing service; tests inject a fake. Defaults to the HTTP service at THERMAL_URL. */
   thermal?: ThermalService
+  /** config/adaxai.yaml; tests may pass their own. */
+  settings?: AppSettings
+  /** config/routing.yaml (re-read on change). */
+  routing?: RoutingRulesSource
   logger?: FastifyServerOptions['logger']
 }
 
@@ -53,7 +60,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
   registerEncounterRoutes(app, { db })
   registerFileRoutes(app, { db, config: deps.config })
-  registerAiRoutes(app, { db, config: deps.config, providers: deps.ai ?? providersFromConfig(deps.config) })
+  const settings = effectiveSettings(deps.settings ?? loadAppSettings(), deps.config)
+  const routing = deps.routing ?? new RoutingRulesSource(undefined, (m) => app.log.error(`routing.yaml: ${m} (previous rules kept)`))
+  const providers = deps.ai ?? providersFromConfig(deps.config, settings)
+  const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety } })
+  const executors = new Map<string, JobExecutor>()
+  registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })

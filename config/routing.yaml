@@ -1,0 +1,61 @@
+# Operational routing rules (deterministic; no AI).
+#
+# Suggestions only: a nurse or doctor reviews every suggestion and applies or
+# overrides it. Red flags show the configured instruction and require a human
+# to act; they are never a diagnosis or an automatic emergency disposition.
+#
+# Re-read at RUNTIME: the API reloads this file when it changes (no restart).
+# An invalid edit is rejected and the last valid rules stay in use (logged).
+# Bump `version` whenever the rules change; it is stored with every suggestion.
+version: routing-rules-v1
+
+# Department codes must exist (Admin > Departments). First match wins.
+departments:
+  - id: paediatrics-by-age
+    when: { ageBelow: 18 }
+    department: PED
+    reason: Patient is under 18.
+  - id: orthopaedics-by-complaint
+    when: { complaintAny: [fracture, sprain, joint pain, back pain, knee pain, shoulder pain, injury, fall] }
+    department: ORTH
+    reason: Reason for visit mentions a musculoskeletal complaint.
+  - id: default
+    when: {}
+    department: GEN
+    reason: No specific rule matched.
+
+# Phrases matched (case-insensitive, whole words) in the reason for visit and,
+# during a consultation, in the patient's transcript lines.
+redFlags:
+  - id: chest-pain
+    phrases: [chest pain, chest tightness, pressure in my chest]
+    instruction: Inform the duty doctor now for immediate review. Do not leave the patient waiting in the queue.
+  - id: breathlessness
+    phrases: [short of breath, shortness of breath, breathless, can't breathe, cannot breathe]
+    instruction: Check oxygen saturation now and inform the duty doctor.
+  - id: stroke-signs
+    phrases: [face drooping, slurred speech, weakness on one side, sudden weakness]
+    instruction: Inform the duty doctor now; note the time symptoms started.
+  - id: severe-bleeding
+    phrases: [heavy bleeding, vomiting blood, blood in vomit, black stools]
+    instruction: Inform the duty doctor now.
+  - id: unconscious
+    phrases: [fainted, unconscious, passed out, seizure, fits]
+    instruction: Inform the duty doctor now.
+
+# Vital signs measured today that are outside the critical limits
+# (packages/contracts/src/vitals.ts, adults only) raise a red flag.
+criticalVitalsInstruction: Critical vital sign recorded. Repeat the measurement and inform the duty doctor.
+
+# Suggest "urgent" priority for staff review when any red flag is present.
+urgentWhenRedFlag: true
+
+# Intake items that should be present before the patient sees the doctor.
+requiredIntake:
+  reasonForVisit: true
+  vitals: [temperature, heart_rate, systolic_bp, spo2]
+  phone: true
+
+# Clinician suggestion: the active doctor in the suggested department with the
+# fewest patients waiting or in consultation today.
+clinician: least-busy

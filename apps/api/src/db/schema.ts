@@ -19,6 +19,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 
 /** Case-insensitive text (extension `citext`, created in 0000_extensions). */
@@ -201,7 +202,7 @@ export const allergies = pgTable(
   (t) => [index('allergies_patient_idx').on(t.patientId)],
 )
 
-export const consentType = pgEnum('consent_type', ['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use'])
+export const consentType = pgEnum('consent_type', ['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis'])
 export const consentMethod = pgEnum('consent_method', ['verbal', 'written', 'digital'])
 
 /** Consent records are never deleted; withdrawal is recorded on the row. */
@@ -445,6 +446,9 @@ export const files = pgTable(
     sha256: text('sha256').notNull(),
     uploadedBy: uuid('uploaded_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Set when the stored bytes were removed (retention); the row is kept. */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedReason: text('deleted_reason'),
   },
   (t) => [index('files_encounter_idx').on(t.encounterId), index('files_patient_idx').on(t.patientId)],
 )
@@ -454,9 +458,10 @@ export const aiRuns = pgTable(
   'ai_runs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    encounterId: uuid('encounter_id')
-      .notNull()
-      .references(() => encounters.id),
+    /** Null only for runs recorded before jobs existed (migration 0011). */
+    jobId: uuid('job_id').references((): AnyPgColumn => aiJobs.id),
+    patientId: uuid('patient_id').references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
     kind: text('kind').notNull(),
     provider: text('provider').notNull(),
     model: text('model').notNull(),
@@ -473,7 +478,7 @@ export const aiRuns = pgTable(
     createdBy: uuid('created_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('ai_runs_encounter_idx').on(t.encounterId)],
+  (t) => [index('ai_runs_encounter_idx').on(t.encounterId), index('ai_runs_job_idx').on(t.jobId)],
 )
 
 export const transcripts = pgTable(
@@ -486,8 +491,9 @@ export const transcripts = pgTable(
     source: text('source').notNull(),
     audioFileId: uuid('audio_file_id').references(() => files.id),
     sttRunId: uuid('stt_run_id').references(() => aiRuns.id),
-    /** [{ id: "S1", speaker: "Doctor" | null, text }] */
-    segments: jsonb('segments').notNull(),
+    /** final | live (recording in progress; segments still being added) */
+    status: text('status').notNull().default('final'),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -531,6 +537,361 @@ export const aiDraftItems = pgTable(
     sortOrder: integer('sort_order').notNull().default(0),
   },
   (t) => [index('ai_draft_items_draft_idx').on(t.draftId)],
+)
+
+/**
+ * One numbered part of a transcript (S1, S2, ...). AI output cites these
+ * labels. Append-only (trigger, migration 0011): the transcript is evidence.
+ */
+export const transcriptSegments = pgTable(
+  'transcript_segments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    transcriptId: uuid('transcript_id')
+      .notNull()
+      .references(() => transcripts.id),
+    seq: integer('seq').notNull(),
+    label: text('label').notNull(),
+    speaker: text('speaker'),
+    /** typed_label (a "Doctor:" prefix) | provider (speech-to-text diarisation) | none */
+    speakerSource: text('speaker_source').notNull().default('none'),
+    text: text('text').notNull(),
+    /** Live recording: which chunk produced it (display order is chunk, then seq). */
+    chunkIndex: integer('chunk_index'),
+    startMs: integer('start_ms'),
+    endMs: integer('end_ms'),
+    confidence: numeric('confidence', { precision: 4, scale: 3, mode: 'number' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('transcript_segments_label_uq').on(t.transcriptId, t.label), index('transcript_segments_order_idx').on(t.transcriptId, t.chunkIndex, t.seq)],
+)
+
+/** Prompt text versions, registered at start-up; an id can never change its text (checksum). */
+export const aiPromptVersions = pgTable('ai_prompt_versions', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  sha256: text('sha256').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** Non-secret AI settings in effect for a job (config/adaxai.yaml + env model overrides). */
+export const aiSettingsSnapshots = pgTable('ai_settings_snapshots', {
+  sha256: text('sha256').primaryKey(),
+  settings: jsonb('settings').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** Providers and models that have actually been called (or rule sets that ran). */
+export const aiModels = pgTable(
+  'ai_models',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    /** llm | stt | vision | rules */
+    capability: text('capability').notNull(),
+    firstUsedAt: timestamp('first_used_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('ai_models_uq').on(t.provider, t.model, t.capability)],
+)
+
+/**
+ * A requested piece of AI or rules processing (transcription, extraction,
+ * note draft, recommendations, image analysis). Each attempt is an ai_run.
+ * A failed job can be retried; an idempotency key stops double submission.
+ */
+export const aiJobs = pgTable(
+  'ai_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    kind: text('kind').notNull(),
+    /** running | succeeded | failed */
+    status: text('status').notNull().default('running'),
+    /** What the job worked on, e.g. { transcriptId } or { imageId } or { fileId, chunkIndex }. */
+    input: jsonb('input').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastErrorCode: text('last_error_code'),
+    lastErrorMessage: text('last_error_message'),
+    retryable: boolean('retryable').notNull().default(false),
+    /** Short outcome summary, e.g. { facts: 7 } or { recommendations: 0, insufficientData: "..." }. No patient text. */
+    summary: jsonb('summary'),
+    idempotencyKey: text('idempotency_key'),
+    dataOrigin: text('data_origin').notNull(),
+    settingsSha256: text('settings_sha256').references(() => aiSettingsSnapshots.sha256),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('ai_jobs_encounter_idx').on(t.encounterId),
+    index('ai_jobs_patient_idx').on(t.patientId),
+    index('ai_jobs_created_idx').on(t.facilityId, t.createdAt),
+    uniqueIndex('ai_jobs_idempotency_uq').on(t.createdBy, t.idempotencyKey),
+    check('ai_jobs_status_check', sql`${t.status} in ('running', 'succeeded', 'failed')`),
+    check('ai_jobs_origin_check', sql`${t.dataOrigin} in ('clinical', 'synthetic')`),
+  ],
+)
+
+/**
+ * A clinical fact extracted from a transcript. Never part of the record by
+ * itself: the doctor accepts, edits, rejects or defers it.
+ */
+export const clinicalFacts = pgTable(
+  'clinical_facts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => aiJobs.id),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => aiRuns.id),
+    transcriptId: uuid('transcript_id')
+      .notNull()
+      .references(() => transcripts.id),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    category: text('category').notNull(),
+    text: text('text').notNull(),
+    /** Who the transcript attributes it to: patient_reported | clinician_stated | other_speaker */
+    attribution: text('attribution').notNull(),
+    /** stated | uncertain (unclear speech, hedged or ambiguous) */
+    certainty: text('certainty').notNull(),
+    uncertaintyReason: text('uncertainty_reason'),
+    negated: boolean('negated').notNull().default(false),
+    /** Normalised details used for record comparison, e.g. { substance } or { vitalKind, value, unit }. */
+    attributes: jsonb('attributes').notNull().default(sql`'{}'::jsonb`),
+    /** Review flags: uncertain, no_source, conflicts_with_record, not_in_record, speaker_mismatch, red_flag */
+    flags: jsonb('flags').notNull().default(sql`'[]'::jsonb`),
+    status: text('status').notNull().default('pending'),
+    finalText: text('final_text'),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('clinical_facts_encounter_idx').on(t.encounterId), index('clinical_facts_job_idx').on(t.jobId)],
+)
+
+/** Decision-support suggestions (rules or language model). Drafts only, until a doctor acts. */
+export const aiRecommendations = pgTable(
+  'ai_recommendations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => aiJobs.id),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => aiRuns.id),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    /** rules | llm */
+    source: text('source').notNull(),
+    kind: text('kind').notNull(),
+    /** routine | attention */
+    urgency: text('urgency').notNull().default('routine'),
+    text: text('text').notNull(),
+    rationale: text('rationale').notNull(),
+    /** [{ text }] what the system could not find. */
+    missingInformation: jsonb('missing_information').notNull().default(sql`'[]'::jsonb`),
+    /** True when none of the cited support could be verified. */
+    unsupported: boolean('unsupported').notNull().default(false),
+    instruction: text('instruction'),
+    status: text('status').notNull().default('pending'),
+    finalText: text('final_text'),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_recommendations_encounter_idx').on(t.encounterId)],
+)
+
+/**
+ * Provenance: links an AI output (fact, recommendation, image analysis) to the
+ * transcript segment or record item that supports or conflicts with it, with
+ * a snapshot of that source as it was. Append-only.
+ */
+export const aiEvidence = pgTable(
+  'ai_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    subjectType: text('subject_type').notNull(),
+    subjectId: uuid('subject_id').notNull(),
+    /** supports | conflicts */
+    relation: text('relation').notNull(),
+    /** transcript_segment | allergy | observation | diagnosis | prescription_item | encounter_note | prior_encounter | thermal_capture | clinical_image | patient */
+    sourceType: text('source_type').notNull(),
+    sourceId: uuid('source_id'),
+    /** Reference as shown to the model and the doctor, e.g. S3, A1, V2. */
+    sourceRef: text('source_ref').notNull(),
+    /** patient_reported | clinician_stated | record | device_measured | staff_measured | ai_generated */
+    provenance: text('provenance').notNull(),
+    excerpt: text('excerpt').notNull(),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_evidence_subject_idx').on(t.subjectType, t.subjectId)],
+)
+
+/** Every doctor review action on an AI output. Append-only. */
+export const aiReviewActions = pgTable(
+  'ai_review_actions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** fact | recommendation | draft_item | image_analysis | routing_suggestion */
+    subjectType: text('subject_type').notNull(),
+    subjectId: uuid('subject_id').notNull(),
+    action: text('action').notNull(),
+    text: text('text'),
+    reason: text('reason'),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_review_actions_subject_idx').on(t.subjectType, t.subjectId), index('ai_review_actions_encounter_idx').on(t.encounterId)],
+)
+
+/** A clinical photograph. The original file is kept unchanged; a metadata-free preview is shown. */
+export const clinicalImages = pgTable(
+  'clinical_images',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id),
+    previewFileId: uuid('preview_file_id')
+      .notNull()
+      .references(() => files.id),
+    imageType: text('image_type').notNull(),
+    /** upload | camera */
+    source: text('source').notNull(),
+    bodySite: text('body_site'),
+    description: text('description'),
+    width: integer('width').notNull(),
+    height: integer('height').notNull(),
+    /** { format, hadExif, hadGps, ... } from the image service. */
+    metadata: jsonb('metadata').notNull(),
+    dataOrigin: text('data_origin').notNull(),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('clinical_images_patient_idx').on(t.patientId), index('clinical_images_encounter_idx').on(t.encounterId)],
+)
+
+/** AI description of an image: unverified until a doctor reviews it. */
+export const imageAnalyses = pgTable(
+  'image_analyses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    imageId: uuid('image_id')
+      .notNull()
+      .references(() => clinicalImages.id),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => aiJobs.id),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => aiRuns.id),
+    /** { quality, observations[], limitations[], summary } */
+    result: jsonb('result').notNull(),
+    status: text('status').notNull().default('pending'),
+    finalText: text('final_text'),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('image_analyses_image_idx').on(t.imageId)],
+)
+
+/** Deterministic routing suggestion for a visit, and what staff did with it. */
+export const routingSuggestions = pgTable(
+  'routing_suggestions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    visitId: uuid('visit_id')
+      .notNull()
+      .references(() => visits.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    rulesVersion: text('rules_version').notNull(),
+    /** { departmentId, departmentCode, priority, doctorId, missingIntake[], redFlags[], reasons[] } */
+    suggestion: jsonb('suggestion').notNull(),
+    /** pending | applied | overridden | dismissed | superseded */
+    status: text('status').notNull().default('pending'),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    reviewReason: text('review_reason'),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('routing_suggestions_visit_idx').on(t.visitId)],
+)
+
+/** Stored evaluation results (thermal dataset evaluation, AI review metrics). Append-only. */
+export const evaluationRuns = pgTable(
+  'evaluation_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    /** thermal_dataset | ai_review */
+    kind: text('kind').notNull(),
+    subjectId: uuid('subject_id'),
+    pipelineVersion: text('pipeline_version').notNull(),
+    nonClinical: boolean('non_clinical').notNull(),
+    metrics: jsonb('metrics').notNull(),
+    reportMarkdown: text('report_markdown'),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('evaluation_runs_kind_idx').on(t.facilityId, t.kind, t.createdAt)],
+)
+
+/** Which records went into which dataset export (internal ids stay here, never in the export). */
+export const datasetMemberships = pgTable(
+  'dataset_memberships',
+  {
+    exportId: uuid('export_id')
+      .notNull()
+      .references(() => thermalDatasetExports.id),
+    entityType: text('entity_type').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    exportLocalId: text('export_local_id').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.exportId, t.entityType, t.entityId] })],
 )
 
 // ---------------------------------------------------------------------------
@@ -640,7 +1001,7 @@ export const thermalLabels = pgTable(
   ],
 )
 
-/** De-identified dataset exports (the ZIP is a stored file) and their evaluation report. */
+/** De-identified dataset exports (the ZIP is a stored file). Never changed or deleted; evaluations are evaluation_runs. */
 export const thermalDatasetExports = pgTable('thermal_dataset_exports', {
   id: uuid('id').primaryKey().defaultRandom(),
   facilityId: uuid('facility_id')
@@ -650,9 +1011,6 @@ export const thermalDatasetExports = pgTable('thermal_dataset_exports', {
     .notNull()
     .references(() => files.id),
   summary: jsonb('summary').notNull(),
-  evaluation: jsonb('evaluation'),
-  evaluationMarkdown: text('evaluation_markdown'),
-  evaluatedAt: timestamp('evaluated_at', { withTimezone: true }),
   createdBy: uuid('created_by').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })

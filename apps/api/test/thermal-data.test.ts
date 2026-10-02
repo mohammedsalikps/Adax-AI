@@ -33,7 +33,10 @@ beforeEach(async () => {
   if (!haveThermal) return
   await resetDatabase()
   await createFixture(ctx.db)
-  ;[nurse, doctor, doctor2, admin] = await Promise.all(['t.nurse', 't.doctor', 't.doctor2', 't.admin'].map((u) => login(ctx.app, u)))
+  nurse = await login(ctx.app, 't.nurse')
+  doctor = await login(ctx.app, 't.doctor')
+  doctor2 = await login(ctx.app, 't.doctor2')
+  admin = await login(ctx.app, 't.admin')
 })
 
 const ROIS = [

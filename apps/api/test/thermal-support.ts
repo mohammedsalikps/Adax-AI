@@ -32,7 +32,7 @@ export function multipart(fields: Record<string, string>, file: { name: string; 
 
 export const sampleProtocol = { bodyRegion: 'Knees', view: 'anterior', roomTempC: 22, acclimatisationMin: 15, distanceM: 1 }
 
-export function uploadThermal(app: FastifyInstance, patientId: string, name: string, cookie: string, data = fs.readFileSync(path.join(SAMPLES, name)), protocol: object = sampleProtocol) {
+export function uploadThermal(app: FastifyInstance, patientId: string, name: string, cookie: string, data: Buffer = fs.readFileSync(path.join(SAMPLES, name)), protocol: object = sampleProtocol) {
   const m = multipart({ protocol: JSON.stringify(protocol) }, { name, type: 'image/jpeg', data })
   return app.inject({ method: 'POST', url: `/api/patients/${patientId}/thermal`, headers: { ...m.headers, cookie, 'x-adaxai-csrf': '1' }, payload: m.payload })
 }

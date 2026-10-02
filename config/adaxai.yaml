@@ -1,0 +1,91 @@
+# ADAXAI application settings.
+#
+# NO SECRETS HERE. API keys and passwords live only in .env (git-ignored).
+# Validated at API start-up (apps/api/src/settings/schema.ts); an invalid file
+# stops the API with a message naming the setting.
+#
+# Changes to this file take effect after an API restart.
+# (Routing rules in routing.yaml are re-read at runtime; see that file.)
+version: 1
+
+ai:
+  # Feature switches. A disabled feature reports itself unavailable; it never
+  # produces placeholder output.
+  features:
+    noteDraft: true
+    extraction: true
+    recommendations: true
+    imageAnalysis: true
+    liveTranscription: true
+
+  # Language model for drafting, extraction and recommendations.
+  # Env AI_NOTE_MODEL overrides `model`. Key: ANTHROPIC_API_KEY.
+  llm:
+    provider: anthropic
+    model: claude-opus-5-5
+    effort: medium
+    maxOutputTokens: 16000
+    timeoutSeconds: 120
+
+  # Image description. Key: ANTHROPIC_API_KEY.
+  vision:
+    provider: anthropic
+    model: claude-opus-5-5
+    effort: medium
+
+  # Speech-to-text through an OpenAI-compatible /audio/transcriptions endpoint.
+  # Env AI_STT_BASE_URL / AI_STT_MODEL / AI_STT_PROVIDER_NAME override these.
+  # Key: AI_STT_API_KEY.
+  stt:
+    provider: openai-compatible
+    baseUrl: https://api.openai.com/v1
+    model: gpt-4o-transcribe
+    # Live recording is sent in chunks of this length and each chunk is
+    # transcribed as it arrives (the configured provider has no streaming
+    # interim results).
+    liveChunkSeconds: 20
+
+  # How much of the patient's record the recommendation step may see.
+  context:
+    priorEncounters: 5
+    observationDays: 30
+
+uploads:
+  audio:
+    maxMb: 25
+    types: [audio/webm, audio/ogg, audio/mpeg, audio/mp4, audio/x-m4a, audio/wav, audio/x-wav, audio/wave]
+  images:
+    maxMb: 20
+    # Formats the validation service and the configured vision provider both
+    # handle. DICOM and other medical formats are NOT supported.
+    types: [image/jpeg, image/png, image/webp]
+    maxPixels: 40000000
+    previewMaxSide: 2048
+
+retention:
+  # Consultation audio of SIGNED consultations is deleted after this many days
+  # by `npm run retention` (the transcript and the signed note are kept).
+  # 0 disables deletion.
+  consultationAudioDays: 90
+
+safety:
+  # Illustrative, INCOMPLETE groups used only to flag a possible
+  # allergy/prescription match for the doctor to check. This is not a drug
+  # interaction or cross-reactivity database.
+  allergyGroups:
+    penicillin: [penicillin, amoxicillin, ampicillin, amoxycillin, cloxacillin, flucloxacillin, piperacillin]
+    sulfonamide: [sulfamethoxazole, sulphamethoxazole, co-trimoxazole, cotrimoxazole, sulfasalazine]
+    nsaid: [ibuprofen, diclofenac, naproxen, aspirin, ketorolac, aceclofenac, mefenamic]
+  # Difference between a value said in the consultation and the measured
+  # value above which the two are shown as conflicting.
+  vitalTolerance:
+    temperature: 0.5
+    heart_rate: 10
+    respiratory_rate: 4
+    systolic_bp: 10
+    diastolic_bp: 10
+    spo2: 2
+    blood_glucose: 20
+    pain_score: 2
+    weight: 2
+    height: 3

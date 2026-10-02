@@ -129,7 +129,7 @@ describe('consents', () => {
   it('grants, refuses a duplicate grant, and keeps withdrawn consents in history', async () => {
     const p = PatientDetail.parse((await register(samplePatient())).json())
     const granted = PatientDetail.parse((await call(ctx.app, 'POST', `/api/patients/${p.id}/consents`, { cookie: nurse, body: { type: 'ai_recording', method: 'verbal' } })).json())
-    expect(granted.consents[0]).toMatchObject({ type: 'ai_recording', status: 'granted', method: 'verbal', version: '2026-10-v1' })
+    expect(granted.consents[0]).toMatchObject({ type: 'ai_recording', status: 'granted', method: 'verbal', version: '2026-10-v2' })
     expect((await call(ctx.app, 'POST', `/api/patients/${p.id}/consents`, { cookie: nurse, body: { type: 'ai_recording', method: 'written' } })).statusCode).toBe(409)
     const withdrawn = PatientDetail.parse((await call(ctx.app, 'POST', `/api/patients/${p.id}/consents/${granted.consents[0]!.id}/withdraw`, { cookie: nurse })).json())
     expect(withdrawn.consents[0]).toMatchObject({ status: 'withdrawn' })

@@ -7,7 +7,7 @@ import { audit } from '../audit/audit.ts'
 import { currentUser } from '../auth/plugin.ts'
 import type { Config } from '../config.ts'
 import type { Db } from '../db/client.ts'
-import { consents, files, patients, thermalCaptures, thermalDatasetExports, thermalLabels, thermalRois, users } from '../db/schema.ts'
+import { consents, datasetMemberships, evaluationRuns, files, patients, thermalCaptures, thermalDatasetExports, thermalLabels, thermalRois, users } from '../db/schema.ts'
 import { readStoredBytes, storeBytes } from '../files/storage.ts'
 import { createZip } from '../files/zip.ts'
 import { conflict, notFound } from '../http/errors.ts'
@@ -67,6 +67,13 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
       .from(files)
       .leftJoin(users, eq(users.id, row.createdBy ?? sql`null`))
       .where(eq(files.id, row.fileId))
+    // Evaluations are append-only evaluation runs; the latest is shown.
+    const [latest] = await db
+      .select()
+      .from(evaluationRuns)
+      .where(and(eq(evaluationRuns.kind, 'thermal_dataset'), eq(evaluationRuns.subjectId, row.id)))
+      .orderBy(desc(evaluationRuns.createdAt))
+      .limit(1)
     return {
       id: row.id,
       createdAt: row.createdAt.toISOString(),
@@ -74,7 +81,7 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
       fileSha256: extra!.sha256,
       sizeBytes: extra!.sizeBytes,
       summary: row.summary as ThermalDatasetExport['summary'],
-      evaluation: row.evaluatedAt ? { at: row.evaluatedAt.toISOString(), report: row.evaluation as Record<string, unknown>, markdown: row.evaluationMarkdown ?? '' } : null,
+      evaluation: latest ? { at: latest.createdAt.toISOString(), report: latest.metrics as Record<string, unknown>, markdown: latest.reportMarkdown ?? '' } : null,
     }
   }
 
@@ -137,10 +144,12 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
     }
     const entries: { name: string; data: Buffer }[] = []
     const captures = []
+    const members: { entityId: string; exportLocalId: string }[] = []
     const origins: Record<string, number> = {}
     let labelled = 0
     for (const [i, r] of rows.entries()) {
       const cid = `C${String(i + 1).padStart(4, '0')}`
+      members.push({ entityId: r.c.id, exportLocalId: cid })
       const matrix = await readStoredBytes(config.storageDir, r.matrixKey)
       if (matrix.length !== r.c.width * r.c.height * 4) throw new Error(`stored matrix of capture ${r.c.id} has the wrong size`)
       entries.push({ name: `matrices/${cid}.f32`, data: matrix })
@@ -196,6 +205,8 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
         .values({ facilityId: me.facilityId, kind: 'dataset_export', storageKey: stored.storageKey, originalName: `adaxai-thermal-dataset-${manifest.createdAt.slice(0, 10)}.zip`, mimeType: 'application/zip', sizeBytes: stored.sizeBytes, sha256: stored.sha256, uploadedBy: me.id })
         .returning({ id: files.id })
       const [created] = await tx.insert(thermalDatasetExports).values({ id: exportId, facilityId: me.facilityId, fileId: file!.id, summary, createdBy: me.id }).returning()
+      // Provenance: which internal records are in this export (never written into the export itself).
+      await tx.insert(datasetMemberships).values(members.map((m) => ({ exportId, entityType: 'thermal_capture', ...m })))
       await audit(tx, req, { action: 'thermal.dataset_export', entityType: 'thermal_dataset_export', entityId: exportId, details: { ...summary, sha256: stored.sha256 } })
       return created!
     })
@@ -225,12 +236,14 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
     const row = await getExportOr404(me.facilityId, id)
     const file = (await db.query.files.findFirst({ where: eq(files.id, row.fileId) }))!
     const result = await thermal.evaluate(await readStoredBytes(config.storageDir, file.storageKey))
-    const [updated] = await db.transaction(async (tx) => {
-      const u = await tx.update(thermalDatasetExports).set({ evaluation: result.report, evaluationMarkdown: result.markdown, evaluatedAt: new Date() }).where(eq(thermalDatasetExports.id, id)).returning()
+    await db.transaction(async (tx) => {
+      const [run] = await tx
+        .insert(evaluationRuns)
+        .values({ facilityId: me.facilityId, kind: 'thermal_dataset', subjectId: id, pipelineVersion: String(result.report.pipelineVersion ?? 'unknown'), nonClinical: result.report.nonClinical !== false, metrics: result.report, reportMarkdown: result.markdown, createdBy: me.id })
+        .returning({ id: evaluationRuns.id })
       const model = result.report.model as { status?: string } | undefined
-      await audit(tx, req, { action: 'thermal.dataset_evaluate', entityType: 'thermal_dataset_export', entityId: id, details: { pipelineVersion: result.report.pipelineVersion, model: model?.status ?? null, nonClinical: result.report.nonClinical } })
-      return u
+      await audit(tx, req, { action: 'thermal.dataset_evaluate', entityType: 'thermal_dataset_export', entityId: id, details: { evaluationRunId: run!.id, pipelineVersion: result.report.pipelineVersion, model: model?.status ?? null, nonClinical: result.report.nonClinical } })
     })
-    return toExport(updated!)
+    return toExport(row)
   })
 }

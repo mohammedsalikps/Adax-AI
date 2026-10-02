@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import {
   type ActivationCodeResponse,
   AllergyInput,
+  CONSENT_VERSIONS,
   CreatePatientRequest,
   type DuplicateCandidate,
   RecordConsentRequest,
@@ -168,7 +169,7 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
     await getPatientOr404(db, me.facilityId, id)
     if (await activeConsent(db, id, body.type)) throw conflict('This consent is already recorded as granted', 'already_granted')
     await db.transaction(async (tx) => {
-      const [c] = await tx.insert(consents).values({ patientId: id, type: body.type, method: body.method, notes: body.notes ?? null, recordedBy: me.id }).returning({ id: consents.id })
+      const [c] = await tx.insert(consents).values({ patientId: id, type: body.type, method: body.method, notes: body.notes ?? null, version: CONSENT_VERSIONS[body.type], recordedBy: me.id }).returning({ id: consents.id })
       await audit(tx, req, { action: 'consent.grant', entityType: 'consent', entityId: c!.id, patientId: id, details: { type: body.type, method: body.method } })
     })
     return reply.code(201).send(await loadPatientDetail(db, await getPatientOr404(db, me.facilityId, id)))

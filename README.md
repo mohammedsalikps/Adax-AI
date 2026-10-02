@@ -116,7 +116,7 @@ npm run db:stop
   image mean (12+ pixels), and paired regions whose means differ by ≥ 1.0 °C. They are computed on
   request, never stored, and shown under a “Not validated” label. Doctors should label from their
   own assessment before opening them, to avoid anchoring.
-- **Data origin.** Each upload records `THERMAL_DATA_ORIGIN` (default `synthetic`; set `clinical`
+- **Data origin.** Each upload records `DATA_ORIGIN` (default `synthetic`; set `clinical`
   only in a real clinical deployment). Uploads of the public sample files are recorded as
   `public_sample` regardless. Exports and evaluation reports state prominently when any data is
   non-clinical; the metrics then only show that the pipeline runs.

@@ -78,6 +78,27 @@
       "when": 1790931949677,
       "tag": "0010_thermal_labels_and_datasets",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790933270739,
+      "tag": "0011_ai_data_layer",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790933322715,
+      "tag": "0012_drop_moved_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790934028709,
+      "tag": "0013_ai_job_summary",
+      "breakpoints": true
     }
   ]
 }

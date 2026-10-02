@@ -162,7 +162,7 @@ export function registerThermalRoutes(app: FastifyInstance, deps: { db: Db; conf
           parameters: ex.parameters,
           extractor: ex.extractor,
           protocol,
-          dataOrigin: PUBLIC_SAMPLE_SHA256.has(raw.sha256) ? 'public_sample' : config.thermalDataOrigin,
+          dataOrigin: PUBLIC_SAMPLE_SHA256.has(raw.sha256) ? 'public_sample' : config.dataOrigin,
           createdBy: me.id,
         })
         .returning()

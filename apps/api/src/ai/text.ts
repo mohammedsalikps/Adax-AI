@@ -41,13 +41,33 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  * server for an external AI provider. Best effort: it covers the registered
  * names, MRN and phone number, not every identifier a conversation can contain.
  */
-export function pseudonymize(segments: TranscriptSegment[], p: { givenName: string; familyName: string | null; mrn: string; phone: string }): TranscriptSegment[] {
+export function pseudonymize(segments: TranscriptSegment[], p: PatientIdentifiers): TranscriptSegment[] {
+  const scrub = makeScrubber(p)
+  return segments.map((s) => ({ ...s, text: scrub(s.text) }))
+}
+
+export interface PatientIdentifiers {
+  givenName: string
+  familyName: string | null
+  mrn: string
+  phone: string
+  emergencyContactName?: string | null
+  emergencyContactPhone?: string | null
+}
+
+/** The same replacement for any free text (notes, record fields) sent to a provider. */
+export function makeScrubber(p: PatientIdentifiers): (text: string) => string {
   const patterns: [RegExp, string][] = []
-  for (const name of [p.givenName, p.familyName]) {
-    if (name && name.trim().length >= 2) patterns.push([new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(name.trim())}(?![\\p{L}\\p{N}])`, 'giu'), '[PATIENT]'])
+  const name = (n: string | null | undefined, tag: string) => {
+    if (n && n.trim().length >= 2) patterns.push([new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(n.trim())}(?![\\p{L}\\p{N}])`, 'giu'), tag])
   }
+  name(p.givenName, '[PATIENT]')
+  name(p.familyName, '[PATIENT]')
+  for (const part of (p.emergencyContactName ?? '').split(/\s+/)) name(part, '[CONTACT]')
   patterns.push([new RegExp(escapeRe(p.mrn), 'gi'), '[MRN]'])
-  const digits = p.phone.replace(/\D/g, '').slice(-10)
-  if (digits.length === 10) patterns.push([new RegExp(digits.split('').join('[\\s-]?'), 'g'), '[PHONE]'])
-  return segments.map((s) => ({ ...s, text: patterns.reduce((t, [re, rep]) => t.replace(re, rep), s.text) }))
+  for (const phone of [p.phone, p.emergencyContactPhone ?? '']) {
+    const digits = phone.replace(/\D/g, '').slice(-10)
+    if (digits.length === 10) patterns.push([new RegExp(digits.split('').join('[\\s-]?'), 'g'), '[PHONE]'])
+  }
+  return (text) => patterns.reduce((t, [re, rep]) => t.replace(re, rep), text)
 }

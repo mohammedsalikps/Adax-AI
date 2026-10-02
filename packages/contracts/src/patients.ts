@@ -131,15 +131,35 @@ export type Allergy = z.infer<typeof Allergy>
 export const AllergyInput = z.object({ substance: Text(120), reaction: OptionalText(200), severity: AllergySeverity.default('unknown') })
 export type AllergyInput = z.input<typeof AllergyInput>
 
-export const ConsentType = z.enum(['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use'])
+export const ConsentType = z.enum(['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis'])
 export type ConsentType = z.infer<typeof ConsentType>
 export const CONSENT_LABELS: Record<ConsentType, { title: string; description: string }> = {
   data_processing: { title: 'Care records', description: 'Store and use health records for this clinic’s care of the patient.' },
-  ai_recording: { title: 'Consultation recording & AI drafting', description: 'Record the consultation audio and process it with external speech-to-text and AI services to draft notes for the doctor to review.' },
+  ai_recording: {
+    title: 'Consultation recording & AI assistance',
+    description: 'Record the consultation audio and process it, with relevant parts of the patient’s record (without name or contact details), using external speech-to-text and AI services to draft notes, extract findings and suggest points for the doctor to review.',
+  },
   thermal_imaging: { title: 'Thermal imaging', description: 'Capture and store thermal images for review by the care team.' },
   device_monitoring: { title: 'Device readings', description: 'Store readings from wearable or bedside devices.' },
   portal_access: { title: 'Patient portal', description: 'Online access to the patient’s own approved records.' },
   research_use: { title: 'De-identified research use', description: 'Use de-identified data to develop and evaluate tools. Optional; care is not affected.' },
+  clinical_photography: { title: 'Clinical photographs', description: 'Take and store photographs (for example of a wound or skin condition) for the care team.' },
+  ai_image_analysis: { title: 'AI description of photographs', description: 'Send clinical photographs (without name or contact details) to an external AI service that describes them for the doctor to review.' },
+}
+
+/**
+ * Version of the wording read to the patient. Bump when the wording changes in
+ * substance; features that rely on the new wording require that version.
+ */
+export const CONSENT_VERSIONS: Record<ConsentType, string> = {
+  data_processing: '2026-10-v1',
+  ai_recording: '2026-10-v2',
+  thermal_imaging: '2026-10-v1',
+  device_monitoring: '2026-10-v1',
+  portal_access: '2026-10-v1',
+  research_use: '2026-10-v1',
+  clinical_photography: '2026-10-v1',
+  ai_image_analysis: '2026-10-v1',
 }
 export const ConsentMethod = z.enum(['verbal', 'written', 'digital'])
 export const Consent = z.object({

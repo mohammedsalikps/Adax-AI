@@ -1,0 +1,19 @@
+{
+  "name": "adaxai-spike-postgres",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Isolated feasibility spike: can embedded-postgres run a real PostgreSQL server on this Windows machine without admin rights?",
+  "type": "module",
+  "scripts": {
+    "phase1": "node spike.mjs phase1",
+    "phase2": "node spike.mjs phase2",
+    "crash": "node spike.mjs crash",
+    "recover": "node spike.mjs recover",
+    "bad-migration": "node spike.mjs bad-migration",
+    "info": "node spike.mjs info"
+  },
+  "dependencies": {
+    "embedded-postgres": "17.10.0-beta.17",
+    "pg": "8.23.1"
+  }
+}

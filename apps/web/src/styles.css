@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. Neutral surfaces, one brand accent, and semantic status
+ * colours that are always paired with an icon and text (never colour alone).
+ * Text colours meet WCAG AA contrast on their intended backgrounds.
+ */
+@theme {
+  --font-sans: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Tamil', Arial, sans-serif;
+
+  --color-canvas: #f5f7f9;
+  --color-surface: #ffffff;
+  --color-ink: #111827;
+  --color-ink-muted: #4b5563;
+  --color-line: #e2e6eb;
+
+  --color-brand: #0e7490;
+  --color-brand-strong: #155e75;
+  --color-brand-soft: #ecfeff;
+
+  --color-ok: #166534;
+  --color-ok-soft: #dcfce7;
+  --color-down: #991b1b;
+  --color-down-soft: #fee2e2;
+  --color-pending: #92400e;
+  --color-pending-soft: #fef3c7;
+  --color-notice: #1e3a8a;
+  --color-notice-soft: #eff6ff;
+}
+
+@layer base {
+  html {
+    @apply bg-canvas text-ink antialiased;
+    font-family: var(--font-sans);
+  }
+  body {
+    @apply min-h-screen;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

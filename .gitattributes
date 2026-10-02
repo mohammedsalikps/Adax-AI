@@ -1,0 +1,6 @@
+# Normalise line endings so migration checksums and scripts behave the same
+# on Windows and Unix checkouts.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary

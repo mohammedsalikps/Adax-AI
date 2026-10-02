@@ -1,0 +1,3 @@
+# Runtime dependencies (pinned). Radiometric/image libraries arrive in Step 7.
+fastapi==0.142.2
+uvicorn==0.54.0

@@ -1,0 +1,28 @@
+{
+  "name": "@adaxai/api",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ADAXAI API: Fastify + PostgreSQL (Drizzle).",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "start": "tsx src/server.ts",
+    "migrate": "tsx src/db/migrate-cli.ts",
+    "seed": "tsx src/db/seed.ts",
+    "generate": "drizzle-kit generate",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@adaxai/contracts": "*",
+    "drizzle-orm": "0.45.3",
+    "fastify": "5.12.5",
+    "pg": "8.23.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.11",
+    "tsx": "4.23.15",
+    "vitest": "5.0.3"
+  }
+}

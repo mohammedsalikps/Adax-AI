@@ -1,0 +1,16 @@
+[project]
+name = "adaxai-thermal"
+version = "0.1.0"
+description = "ADAXAI thermal image service (FLIR radiometric processing from Step 7)."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

@@ -1,0 +1,47 @@
+{
+  "name": "adaxai-mvp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ADAXAI MVP: role-based clinical web platform, API, PostgreSQL and thermal service.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/db.mjs start && concurrently --kill-others-on-fail --names api,web,thermal --prefix-colors blue,magenta,green \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:thermal\"",
+    "dev:api": "npm run dev --workspace @adaxai/api",
+    "dev:web": "npm run dev --workspace @adaxai/web",
+    "dev:thermal": "node scripts/thermal.mjs dev",
+    "db:init": "node scripts/db.mjs init",
+    "db:start": "node scripts/db.mjs start",
+    "db:stop": "node scripts/db.mjs stop",
+    "db:status": "node scripts/db.mjs status",
+    "db:provision": "node scripts/db.mjs provision",
+    "db:selftest": "node scripts/db.mjs selftest",
+    "db:migrate": "npm run migrate --workspace @adaxai/api",
+    "db:seed": "npm run seed --workspace @adaxai/api",
+    "db:generate": "npm run generate --workspace @adaxai/api",
+    "lint": "oxlint --deny-warnings apps packages scripts e2e && node scripts/thermal.mjs lint",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.e2e.json",
+    "test": "npm run test:api && npm run test:thermal && npm run test:e2e",
+    "test:api": "node scripts/db.mjs start && npm run migrate --workspace @adaxai/api -- --target test && npm run test --workspace @adaxai/api",
+    "test:thermal": "node scripts/thermal.mjs test",
+    "test:e2e": "node scripts/db.mjs start && playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.1",
+    "@types/pg": "8.23.1",
+    "concurrently": "10.0.5",
+    "embedded-postgres": "17.10.0-beta.17",
+    "oxlint": "1.86.0",
+    "pg": "8.23.1",
+    "typescript": "6.0.3"
+  }
+}

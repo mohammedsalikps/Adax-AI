@@ -532,6 +532,75 @@ export const aiDraftItems = pgTable(
   (t) => [index('ai_draft_items_draft_idx').on(t.draftId)],
 )
 
+// ---------------------------------------------------------------------------
+// Thermal imaging
+// ---------------------------------------------------------------------------
+
+/**
+ * A radiometric thermal image and its extracted temperature matrix. Draft
+ * until a doctor approves or rejects it; then it and its ROIs are frozen
+ * (trigger, migration 0009).
+ */
+export const thermalCaptures = pgTable(
+  'thermal_captures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    rawFileId: uuid('raw_file_id')
+      .notNull()
+      .references(() => files.id),
+    matrixFileId: uuid('matrix_file_id')
+      .notNull()
+      .references(() => files.id),
+    visibleFileId: uuid('visible_file_id').references(() => files.id),
+    width: integer('width').notNull(),
+    height: integer('height').notNull(),
+    minC: numeric('min_c', { precision: 6, scale: 2, mode: 'number' }).notNull(),
+    maxC: numeric('max_c', { precision: 6, scale: 2, mode: 'number' }).notNull(),
+    meanC: numeric('mean_c', { precision: 6, scale: 2, mode: 'number' }).notNull(),
+    camera: jsonb('camera').notNull(),
+    parameters: jsonb('parameters').notNull(),
+    extractor: jsonb('extractor').notNull(),
+    protocol: jsonb('protocol').notNull(),
+    pairStats: jsonb('pair_stats').notNull().default(sql`'[]'::jsonb`),
+    status: text('status').notNull().default('draft'),
+    reviewNote: text('review_note'),
+    reviewedBy: uuid('reviewed_by').references(() => users.id),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id),
+    ...timestamps,
+  },
+  (t) => [index('thermal_captures_patient_idx').on(t.patientId), index('thermal_captures_encounter_idx').on(t.encounterId)],
+)
+
+export const thermalRois = pgTable(
+  'thermal_rois',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    captureId: uuid('capture_id')
+      .notNull()
+      .references(() => thermalCaptures.id),
+    label: text('label').notNull(),
+    shape: text('shape').notNull(),
+    x: numeric('x', { precision: 10, scale: 2, mode: 'number' }).notNull(),
+    y: numeric('y', { precision: 10, scale: 2, mode: 'number' }).notNull(),
+    width: numeric('width', { precision: 10, scale: 2, mode: 'number' }).notNull(),
+    height: numeric('height', { precision: 10, scale: 2, mode: 'number' }).notNull(),
+    pairWith: text('pair_with'),
+    stats: jsonb('stats').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('thermal_rois_capture_idx').on(t.captureId)],
+)
+
 /** Post-signing corrections. Append-only (triggers block UPDATE/DELETE). */
 export const encounterAmendments = pgTable(
   'encounter_amendments',

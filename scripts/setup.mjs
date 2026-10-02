@@ -86,6 +86,10 @@ try {
   step('Thermal service virtualenv')
   await run('node', ['scripts/thermal.mjs', 'venv'])
 
+  step('Thermal sample images (third-party, MIT)')
+  // Optional: without network the thermal sample tests are skipped, setup continues.
+  await run('node', ['scripts/fetch-thermal-samples.mjs']).catch((e) => say(`samples not fetched: ${e.message}`))
+
   if (skipBrowsers) say('skipping Playwright browser install (--skip-browsers)')
   else {
     step('Playwright browser (Chromium)')

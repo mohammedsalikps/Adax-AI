@@ -352,7 +352,7 @@ function VisitsCard({ patientId, extra }: { patientId: string; extra?: (v: Visit
   )
 }
 
-export function PatientProfilePage({ visitAction, timeline }: { visitAction?: (v: Visit) => ReactNode; timeline?: (patientId: string) => ReactNode }) {
+export function PatientProfilePage({ visitAction, timeline, extra }: { visitAction?: (v: Visit) => ReactNode; timeline?: (patientId: string) => ReactNode; extra?: (p: PatientDetail) => ReactNode }) {
   const { patientId } = useParams()
   const base = usePortalBase()
   const [params, setParams] = useSearchParams()
@@ -409,6 +409,7 @@ export function PatientProfilePage({ visitAction, timeline }: { visitAction?: (v
         <div className="xl:col-span-2">
           <VisitsCard patientId={p.id} extra={visitAction} />
         </div>
+        {extra && <div className="xl:col-span-2">{extra(p)}</div>}
         <ConsentsCard p={p} />
         <PortalCard p={p} />
       </div>

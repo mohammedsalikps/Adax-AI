@@ -15,9 +15,8 @@ def test_health_reports_ok_and_version():
     assert body["version"] == __version__
 
 
-def test_health_claims_no_thermal_capabilities_yet():
-    # Step 1 must not advertise FLIR/radiometric features that do not exist.
-    assert client.get("/health").json()["capabilities"] == []
+def test_health_lists_only_implemented_capabilities():
+    assert client.get("/health").json()["capabilities"] == ["flir_radiometric_jpeg", "roi_stats"]
 
 
 def test_unknown_route_is_404():

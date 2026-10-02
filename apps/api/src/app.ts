@@ -6,6 +6,8 @@ import { registerAdminRoutes } from './admin/routes.ts'
 import { type AiProviders, providersFromConfig } from './ai/providers.ts'
 import { registerAiRoutes } from './ai/routes.ts'
 import { registerFileRoutes } from './files/routes.ts'
+import { httpThermalService, type ThermalService } from './thermal/client.ts'
+import { registerThermalRoutes } from './thermal/routes.ts'
 import { registerActivationRoutes } from './auth/activation.ts'
 import { encounterIdsForVisits } from './encounters/service.ts'
 import { registerEncounterRoutes } from './encounters/routes.ts'
@@ -25,6 +27,8 @@ export interface AppDeps {
   fetchImpl?: typeof fetch
   /** AI providers; tests inject fakes. Defaults to the configured real providers (or none). */
   ai?: AiProviders
+  /** Thermal processing service; tests inject a fake. Defaults to the HTTP service at THERMAL_URL. */
+  thermal?: ThermalService
   logger?: FastifyServerOptions['logger']
 }
 
@@ -49,6 +53,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerEncounterRoutes(app, { db })
   registerFileRoutes(app, { db, config: deps.config })
   registerAiRoutes(app, { db, config: deps.config, providers: deps.ai ?? providersFromConfig(deps.config) })
+  registerThermalRoutes(app, { db, config: deps.config, thermal: deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl) })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

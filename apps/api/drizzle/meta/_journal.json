@@ -57,6 +57,20 @@
       "when": 1790929074822,
       "tag": "0007_files_and_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790930126474,
+      "tag": "0008_thermal",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790930128199,
+      "tag": "0009_thermal_review_freeze",
+      "breakpoints": true
     }
   ]
 }

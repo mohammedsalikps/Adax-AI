@@ -17,6 +17,7 @@ PostgreSQL, and a Python thermal-imaging service.
 | OPD queue and nurse workflow | Check-in with atomic daily tokens, one open visit per patient per day, priority, department/doctor assignment, server-enforced status transitions, vitals with plausibility checks and adult reference-range flags (not applied under 18; display aid only), entered-in-error corrections, doctor “my patients” view, auto-refresh |
 | Doctor consultation | Start/continue from the queue, structured note (complaint, history, medical history, examination, assessment, plan, follow-up), diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid in this build), patient timeline |
 | AI consultation assistant | Patient consent (ongoing or per consultation), browser recording / audio upload / typed transcript, numbered transcript segments, speech-to-text (OpenAI-compatible endpoint) and note drafting with Claude (`claude-opus-5-5`, structured output, server-side refusal fallback) when keys are configured, identifiers replaced before sending, per-suggestion accept/edit/reject with cited transcript lines, unsourced suggestions flagged, every AI call logged (model, prompt version, tokens, outcome). Without keys the app states that AI is unavailable. |
+| FLIR thermal imaging | Consent-gated upload of radiometric JPEGs with capture protocol, extraction of the per-pixel °C matrix and camera settings (Python service, `flyr`), viewer with palettes, span/level and hover readout, rectangle/ellipse regions (drawn or typed) with min/max/mean/SD and paired differences computed by the service, doctor approve/reject (then frozen in the database), visible-light image without location data |
 
 ## Accounts and security model
 
@@ -87,6 +88,23 @@ npm run db:stop
   identifiers mentioned in conversation may still be present. Audio is stored locally under
   `storage/`. Sending data to a provider requires the patient’s recorded consent and an
   appropriate data-processing agreement with that provider.
+
+## Thermal imaging: what is and is not real
+
+- **Measurements only.** The viewer shows temperatures decoded from the camera’s radiometric data
+  and region statistics. It does not diagnose, and nothing about it is clinically validated.
+- **Correctness check.** For the sample files, temperatures from `flyr` match an independent
+  implementation of the published FLIR raw-to-temperature formula to within 0.0001 °C. That shows
+  the conversion is implemented consistently; it is **not** an absolute-accuracy measurement
+  (that needs a blackbody reference and the clinic’s own camera).
+- **Camera compatibility is unverified.** Tests use public sample images (FLIR AX8, a generic FLIR
+  file, and a DJI Zenmuse XT-R file that is rejected because its little-endian FFF variant is not
+  supported by `flyr`). Run `node scripts/fetch-thermal-samples.mjs` to fetch them (MIT licence,
+  see `samples/thermal/SOURCE.txt`). Test with your camera’s own exported files before use.
+- **Licence to review.** `flyr` is licensed EUPL-1.2 (copyleft). Have its use reviewed before any
+  commercial distribution.
+- Results depend on emissivity, distance, room temperature and acclimatisation; the upload form
+  records these with every image.
 
 ## Services and ports
 

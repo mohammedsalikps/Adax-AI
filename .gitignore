@@ -32,3 +32,6 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Third-party sample images (fetched by scripts/fetch-thermal-samples.mjs; see samples/README)
+samples/

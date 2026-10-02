@@ -19,6 +19,7 @@ import { PatientProfilePage } from './pages/clinical/PatientProfilePage.tsx'
 import { PatientsPage } from './pages/clinical/PatientsPage.tsx'
 import { QueuePage } from './pages/clinical/QueuePage.tsx'
 import { RegisterPatientPage } from './pages/clinical/RegisterPatientPage.tsx'
+import { PatientThermalCard, ThermalDetailPage, ThermalListPage } from './pages/clinical/ThermalPages.tsx'
 import { ConsultationPage } from './pages/doctor/ConsultationPage.tsx'
 import { PrescriptionPrintPage } from './pages/doctor/PrescriptionPrintPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
@@ -31,7 +32,7 @@ const portal = (role: Role) => (
   </RequireAuth>
 )
 
-const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} />
+const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={(p) => <PatientThermalCard patient={p} />} />
 
 const router = createBrowserRouter([
   {
@@ -74,7 +75,8 @@ const router = createBrowserRouter([
       { path: 'patients/:patientId', element: profile },
       { path: 'encounters/:encounterId', element: <ConsultationPage sidePanel={(e, append) => <AiAssistantPanel encounter={e} append={append} />} /> },
       { path: 'register', element: <RegisterPatientPage /> },
-      { path: 'thermal', element: <NotYetBuiltPage title="Thermal" planned={['FLIR image upload and analysis']} /> },
+      { path: 'thermal', element: <ThermalListPage /> },
+      { path: 'thermal/:captureId', element: <ThermalDetailPage /> },
     ],
   },
   {
@@ -86,6 +88,7 @@ const router = createBrowserRouter([
       { path: 'patients', element: <PatientsPage /> },
       { path: 'patients/:patientId', element: profile },
       { path: 'encounters/:encounterId', element: <ConsultationPage /> },
+      { path: 'thermal/:captureId', element: <ThermalDetailPage /> },
       { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device assignment and readings']} /> },
     ],
   },

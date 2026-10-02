@@ -4,6 +4,8 @@ node_modules/
 # Local PostgreSQL data, logs and uploaded files: never committed
 .data/
 storage/
+storage-test/
+storage-e2e/
 
 # Secrets: only .env.example is tracked
 .env
@@ -35,3 +37,7 @@ Thumbs.db
 
 # Third-party sample images (fetched by scripts/fetch-thermal-samples.mjs; see samples/README)
 samples/
+
+# Backups contain the database and uploaded files (sensitive)
+backups/
+storage.before-restore-*/

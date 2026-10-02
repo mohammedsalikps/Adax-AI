@@ -1,6 +1,7 @@
 // Synthetic demonstration patient for the AI-assisted consultation demo
 // (docs/DEMO.md). Everything here is fictional. Run after `npm run db:seed`:
-//   npm run demo:seed
+//   npm run demo:seed               (once; does nothing if the demo patient exists)
+//   npm run demo:seed -- --fresh    (another demo patient, e.g. for a clean re-run)
 // It drives the real API in-process (sign-in, registration, consent,
 // signing, audit), so the data is created exactly as a user would create it.
 // Idempotent: if the demo patient already exists, nothing is changed.
@@ -17,7 +18,9 @@ if (!password) {
   process.exit(2)
 }
 
-const DEMO = { givenName: 'Ravi', familyName: 'Demo-Synthetic', dateOfBirth: '1971-03-14', sex: 'male', phone: '90000 00071', city: 'Synthetic City' }
+const fresh = process.argv.includes('--fresh')
+const suffix = fresh ? `-${Date.now().toString(36).slice(-4).toUpperCase()}` : ''
+const DEMO = { givenName: 'Ravi', familyName: `Demo-Synthetic${suffix}`, dateOfBirth: '1971-03-14', sex: 'male', phone: fresh ? `90000 ${String(Date.now()).slice(-5)}` : '90000 00071', city: 'Synthetic City', confirmNotDuplicate: fresh }
 
 const pool = createAppPool(config.db)
 // The thermal service is not needed for this seed.

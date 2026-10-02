@@ -11,8 +11,8 @@ import { departments, facilities, users } from '../src/db/schema.ts'
 loadDotEnv()
 const base = loadConfig()
 
-/** Same settings as development, pointed at the dedicated test database. */
-export const testConfig: Config = { ...base, env: 'test', db: { ...base.db, name: base.db.testName }, cookieSecure: false }
+/** Same settings as development, pointed at the dedicated test database and a separate file store. */
+export const testConfig: Config = { ...base, env: 'test', db: { ...base.db, name: base.db.testName }, storageDir: `${base.storageDir}-test`, cookieSecure: false }
 
 /** A localhost port with nothing listening on it (connections are refused). */
 export async function closedPort(): Promise<number> {

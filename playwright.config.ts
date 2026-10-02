@@ -41,6 +41,8 @@ export default defineConfig({
       url: `http://127.0.0.1:${PORTS.api}/api/health`,
       env: {
         DB_NAME: E2E_DB,
+        // Uploaded files of the end-to-end run stay out of the development store.
+        STORAGE_DIR: 'storage-e2e',
         API_PORT: String(PORTS.api),
         THERMAL_URL: `http://127.0.0.1:${PORTS.thermal}`,
         // Points the real Anthropic SDK at the local mock; the key is a placeholder, not a credential.

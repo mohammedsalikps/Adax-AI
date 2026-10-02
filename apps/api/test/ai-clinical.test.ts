@@ -167,7 +167,7 @@ describe('clinical fact extraction', () => {
     expect(job).toMatchObject({ status: 'succeeded', attempts: 1, dataOrigin: 'synthetic', summary: { facts: 7 } })
     expect(job.runs[0]).toMatchObject({ provider: 'fake', model: 'fake-extract', promptVersion: 'extract-v1', status: 'succeeded' })
     const { rows: prompts } = await adminQuery('SELECT id FROM ai_prompt_versions ORDER BY id')
-    expect(prompts.map((r) => r.id)).toEqual(['extract-v1', 'image-describe-v1', 'note-draft-v1', 'recommend-v1'])
+    expect(prompts.map((r) => r.id)).toEqual(['extract-v1', 'image-describe-v1', 'mana-qa-v1', 'note-draft-v1', 'recommend-v1'])
     expect((await adminQuery("SELECT count(*)::int AS n FROM ai_models WHERE model = 'fake-extract'")).rows[0].n).toBe(1)
     expect((await adminQuery('SELECT count(*)::int AS n FROM ai_settings_snapshots')).rows[0].n).toBe(1)
     expect(ai.audit.map((a) => a.action)).toEqual(expect.arrayContaining(['ai.extraction', 'ai.job_create', 'ai.transcript_create']))

@@ -1,4 +1,4 @@
-import type { Role } from '@adaxai/contracts'
+import type { PatientDetail, Role } from '@adaxai/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router'
@@ -31,6 +31,7 @@ import { AdminDevicesPage, StaffDevicesPage } from './pages/DevicesPages.tsx'
 import { AuscultationCard } from './components/clinical/AuscultationCard.tsx'
 import { PortalConsentsPage, PortalHomePage, PortalProfilePage, PortalRecordPage, PortalRecordsPage, PortalVisitsPage, PortalVitalsPage } from './pages/patient/PortalPages.tsx'
 import { ClinicalImagesCard } from './components/clinical/ClinicalImagesCard.tsx'
+import { ManaPanel } from './components/mana/ManaPanel.tsx'
 
 const portal = (role: Role) => (
   <RequireAuth roles={[role]}>
@@ -38,14 +39,16 @@ const portal = (role: Role) => (
   </RequireAuth>
 )
 
-const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={(p) => (
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <PatientThermalCard patient={p} />
-        <ClinicalImagesCard patientId={p.id} />
-        <AuscultationCard patientId={p.id} />
-      </div>
-    )}
-  />
+const profileExtra = (p: PatientDetail) => (
+  <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+    <PatientThermalCard patient={p} />
+    <ClinicalImagesCard patientId={p.id} />
+    <AuscultationCard patientId={p.id} />
+  </div>
+)
+const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={profileExtra} />
+/** Doctors also get Mana AI on the patient record. */
+const doctorProfile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={profileExtra} companion={(p) => <ManaPanel patientId={p.id} />} />
 
 const router = createBrowserRouter([
   {
@@ -86,15 +89,16 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} /> },
       { path: 'patients', element: <PatientsPage /> },
-      { path: 'patients/:patientId', element: profile },
+      { path: 'patients/:patientId', element: doctorProfile },
       {
         path: 'encounters/:encounterId',
         element: (
           <ConsultationPage
-            sidePanel={(e, append) => (
+            sidePanel={(e, inserter) => (
               <>
-                <AiAssistantPanel encounter={e} append={append} />
-                <ClinicalImagesCard patientId={e.patient.id} encounter={e} append={append} />
+                <ManaPanel patientId={e.patient.id} encounterId={e.id} inserter={inserter} />
+                <AiAssistantPanel encounter={e} inserter={inserter} />
+                <ClinicalImagesCard patientId={e.patient.id} encounter={e} inserter={inserter} />
                 <AuscultationCard patientId={e.patient.id} encounterId={e.id} />
               </>
             )}

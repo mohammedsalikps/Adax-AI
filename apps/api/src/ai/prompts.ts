@@ -8,7 +8,7 @@ import crypto from 'node:crypto'
  */
 export interface PromptDef {
   id: string
-  kind: 'note_draft' | 'extraction' | 'recommendations' | 'image_analysis'
+  kind: 'note_draft' | 'extraction' | 'recommendations' | 'image_analysis' | 'patient_qa'
   /** System prompt plus a description of the output schema (both affect behaviour). */
   text: string
   schemaVersion: string
@@ -92,6 +92,24 @@ Rules:
 ${SHARED_RULES}`,
 }
 
-export const ALL_PROMPTS: PromptDef[] = [NOTE_PROMPT, EXTRACTION_PROMPT, RECOMMENDATION_PROMPT, IMAGE_PROMPT]
+export const MANA_QA_PROMPT: PromptDef = {
+  id: 'mana-qa-v1',
+  kind: 'patient_qa',
+  schemaVersion: 'mana-answer-v1',
+  text: `You answer a doctor's question about one patient, using only the items from the patient's record that you are given. Each item has a reference ([A1] allergy or allergy status, [N1] note field of a signed consultation, [D1] diagnosis, [M1] prescribed medicine, [X1] amendment to a signed consultation, [C1] today's draft note or diagnosis, [P1] today's draft prescription, [V1] vital sign, [R1] reason for visit, [T1] approved thermal measurement), followed by its date, record field and status (signed, amended, draft, active, inactive, recorded).
+
+Answer as a short list of statements for the doctor, who will check them against the cited items.
+
+Rules:
+- Use only the given items. Never add facts, values, dates, diagnoses, medicines or advice that are not in them. Do not diagnose, interpret results as a diagnosis, or recommend treatment.
+- Every statement must cite in refs the references of the items it is based on. Leave out anything you cannot cite.
+- Say when something was documented and whether it comes from a draft or a signed record when that matters.
+- If the items do not answer part of the question, list what is missing in notFound instead of guessing.
+- Put disagreements between items (for example a recorded allergy and a prescribed medicine of the same group, two different values for the same measurement, or an amendment that corrects an earlier note) in conflicts, each citing the items involved.
+- At most 8 statements, each one or two sentences.
+${SHARED_RULES}`,
+}
+
+export const ALL_PROMPTS: PromptDef[] = [NOTE_PROMPT, EXTRACTION_PROMPT, RECOMMENDATION_PROMPT, IMAGE_PROMPT, MANA_QA_PROMPT]
 
 export const promptSha256 = (p: PromptDef) => crypto.createHash('sha256').update(`${p.schemaVersion}\n${p.text}`).digest('hex')

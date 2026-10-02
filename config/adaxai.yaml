@@ -17,6 +17,9 @@ ai:
     recommendations: true
     imageAnalysis: true
     liveTranscription: true
+    # Mana AI summaries of the patient record (answers read directly from the
+    # record by explicit rules are always available and need no AI provider).
+    patientQa: true
 
   # Language model for drafting, extraction and recommendations.
   # Env AI_NOTE_MODEL overrides `model`. Key: ANTHROPIC_API_KEY.
@@ -61,6 +64,18 @@ uploads:
     types: [image/jpeg, image/png, image/webp]
     maxPixels: 40000000
     previewMaxSide: 2048
+
+# Mana AI: how much of one patient's record a question can draw on.
+mana:
+  # Signed consultations included, newest first.
+  maxEncounters: 10
+  # Vital signs from this many days back.
+  observationDays: 365
+  # Records older than this are flagged "possibly outdated" (a display aid,
+  # not clinical guidance).
+  outdatedDays: 180
+  # Upper bound on record text sent to the AI provider for one question.
+  maxContextChars: 30000
 
 retention:
   # Consultation audio of SIGNED consultations is deleted after this many days

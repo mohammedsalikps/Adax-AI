@@ -26,3 +26,20 @@ describe('loadConfig', () => {
     expect(message).not.toContain(secret)
   })
 })
+
+describe('test isolation from real AI providers', () => {
+  it('the test configuration never carries provider keys, whatever .env contains', async () => {
+    const { testConfig, createTestApp } = await import('./helpers.ts')
+    expect(testConfig.ai.anthropicApiKey).toBeUndefined()
+    expect(testConfig.ai.stt.apiKey).toBeUndefined()
+    const ctx = createTestApp()
+    try {
+      const { providersFromConfig } = await import('../src/ai/providers.ts')
+      const { loadAppSettings } = await import('../src/settings/load.ts')
+      const p = providersFromConfig(testConfig, loadAppSettings())
+      expect([p.drafter, p.extractor, p.recommender, p.describer, p.qa, p.transcriber]).toEqual([null, null, null, null, null, null])
+    } finally {
+      await ctx.close()
+    }
+  })
+})

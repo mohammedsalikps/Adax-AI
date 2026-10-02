@@ -20,6 +20,8 @@ import { registerThermalRoutes } from './thermal/routes.ts'
 import { registerActivationRoutes } from './auth/activation.ts'
 import { encounterIdsForVisits } from './encounters/service.ts'
 import { registerEncounterRoutes } from './encounters/routes.ts'
+import { registerInsertionRoutes } from './encounters/insertions.ts'
+import { registerManaRoutes } from './mana/routes.ts'
 import { registerPatientRoutes } from './patients/routes.ts'
 import { registerVisitRoutes } from './visits/routes.ts'
 import { registerAuth } from './auth/plugin.ts'
@@ -64,14 +66,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerPatientRoutes(app, { db })
   registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
   registerEncounterRoutes(app, { db })
+  registerInsertionRoutes(app, { db })
   registerFileRoutes(app, { db, config: deps.config })
   const settings = effectiveSettings(deps.settings ?? loadAppSettings(), deps.config)
   const routing = deps.routing ?? new RoutingRulesSource(undefined, (m) => app.log.error(`routing.yaml: ${m} (previous rules kept)`))
   const providers = deps.ai ?? providersFromConfig(deps.config, settings)
-  const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety } })
+  const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety, mana: settings.mana } })
   const executors = new Map<string, JobExecutor>()
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
   registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
+  registerManaRoutes(app, { db, providers, settings, jobs, executors, dataOrigin: deps.config.dataOrigin })
   registerImageRoutes(app, { db, config: deps.config, settings, providers, thermal, jobs, executors })
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })

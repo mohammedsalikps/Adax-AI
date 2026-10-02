@@ -1,19 +1,23 @@
 import { z } from 'zod'
 import { Text } from './common.ts'
+import { NoteInsertion } from './mana.ts'
 import { Sex } from './patients.ts'
 import { Observation } from './vitals.ts'
 
 const NoteText = (max: number) => z.string().max(max, `At most ${max} characters`)
 
+/** Maximum length of each note section (characters). */
+export const NOTE_SECTION_MAX = { chiefComplaint: 1000, history: 8000, pastHistory: 4000, examination: 8000, assessment: 4000, plan: 8000, followUp: 1000 } as const
+
 /** Free-text sections of the consultation note (SOAP-style). */
 export const NoteFields = z.object({
-  chiefComplaint: NoteText(1000),
-  history: NoteText(8000),
-  pastHistory: NoteText(4000),
-  examination: NoteText(8000),
-  assessment: NoteText(4000),
-  plan: NoteText(8000),
-  followUp: NoteText(1000),
+  chiefComplaint: NoteText(NOTE_SECTION_MAX.chiefComplaint),
+  history: NoteText(NOTE_SECTION_MAX.history),
+  pastHistory: NoteText(NOTE_SECTION_MAX.pastHistory),
+  examination: NoteText(NOTE_SECTION_MAX.examination),
+  assessment: NoteText(NOTE_SECTION_MAX.assessment),
+  plan: NoteText(NOTE_SECTION_MAX.plan),
+  followUp: NoteText(NOTE_SECTION_MAX.followUp),
 })
 export type NoteFields = z.infer<typeof NoteFields>
 export const NOTE_SECTIONS: { key: keyof NoteFields; label: string; rows: number; hint?: string }[] = [
@@ -123,6 +127,8 @@ export const Encounter = z.object({
   prescription: z.array(PrescriptionItemInput.required()),
   vitals: z.array(Observation),
   amendments: z.array(Amendment),
+  /** AI-produced text the doctor inserted into the note, with a reference to its source. */
+  aiInsertions: z.array(NoteInsertion),
   startedAt: z.string(),
   updatedAt: z.string(),
   signedAt: z.string().nullable(),

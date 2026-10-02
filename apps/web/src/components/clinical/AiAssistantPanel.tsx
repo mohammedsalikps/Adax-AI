@@ -1,12 +1,14 @@
-import { type AiDraftItem, type Encounter, type EncounterAi, NOTE_SECTIONS, type NoteFields, type Transcript } from '@adaxai/contracts'
+import { type AiDraftItem, type Encounter, type EncounterAi, type Transcript } from '@adaxai/contracts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, FileAudio, ListChecks, Mic, Pencil, ShieldAlert, Sparkles, Square, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { type AiResponse, aiKey, newIdempotencyKey, useAiMutation } from '../../lib/ai.ts'
 import { api, ApiError, errorMessage } from '../../lib/api.ts'
 import { fmtDateTime } from '../../lib/format.ts'
+import type { NoteInserter } from '../../lib/insert.ts'
 import { ActivityView } from '../ai/ActivityView.tsx'
 import { FactsView } from '../ai/FactsView.tsx'
+import { InsertButton, SECTION_LABEL } from '../ai/InsertButton.tsx'
 import { LiveRecorder } from '../ai/LiveRecorder.tsx'
 import { RecommendationsView } from '../ai/RecommendationsView.tsx'
 import { Button } from '../ui/Button.tsx'
@@ -15,8 +17,6 @@ import { TextAreaField } from '../ui/Form.tsx'
 import { Card } from '../ui/Layout.tsx'
 import { useToast } from '../ui/Toast.tsx'
 
-type Append = (section: keyof NoteFields, text: string) => void
-const SECTION_LABEL = Object.fromEntries(NOTE_SECTIONS.map((s) => [s.key, s.label])) as Record<keyof NoteFields, string>
 const MAX_RECORDING_S = 15 * 60
 
 /** Browser recording with MediaRecorder. Audio is uploaded only when the doctor stops the recording. */
@@ -100,7 +100,7 @@ function TranscriptView({ t, highlight }: { t: Transcript; highlight: Set<string
   )
 }
 
-function SuggestionCard({ item, transcript, encounterId, append, onFocusSources }: { item: AiDraftItem; transcript?: Transcript; encounterId: string; append: Append; onFocusSources: (ids: string[]) => void }) {
+function SuggestionCard({ item, transcript, encounterId, inserter, onFocusSources }: { item: AiDraftItem; transcript?: Transcript; encounterId: string; inserter: NoteInserter; onFocusSources: (ids: string[]) => void }) {
   const toast = useToast()
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(item.text)
@@ -112,8 +112,11 @@ function SuggestionCard({ item, transcript, encounterId, append, onFocusSources 
     decide.mutate(decision === 'edited' ? { decision, text } : { decision }, {
       onSuccess: (r) => {
         if (decision !== 'rejected' && r.item?.finalText) {
-          append(item.section, r.item.finalText)
-          toast('success', `Added to ${SECTION_LABEL[item.section]}. Review it in the note.`)
+          // Accepting a note suggestion inserts it (recorded on the server with a reference to this suggestion).
+          inserter.insert(item.section, r.item.finalText, { type: 'draft_item', id: item.id }).then(
+            () => toast('success', `Added to ${SECTION_LABEL[item.section]}. Review it in the note.`),
+            (e: unknown) => toast('error', `Accepted, but not added to the note: ${errorMessage(e)}`),
+          )
         }
         setEditing(false)
       },
@@ -184,6 +187,8 @@ function SuggestionCard({ item, transcript, encounterId, append, onFocusSources 
           )}
         </div>
       )}
+      {/* Accepting inserts automatically; if that failed (or after a reload), the doctor can insert it here. */}
+      {(item.decision === 'accepted' || item.decision === 'edited') && <InsertButton inserter={inserter} section={item.section} text={item.finalText ?? item.text} subject={{ type: 'draft_item', id: item.id }} />}
     </li>
   )
 }
@@ -196,7 +201,7 @@ type Tab = 'draft' | 'facts' | 'recommendations' | 'activity'
  * item by item. Nothing reaches the note without the doctor's Accept/Edit,
  * and signing stays a separate action.
  */
-export function AiAssistantPanel({ encounter, append }: { encounter: Encounter; append: Append }) {
+export function AiAssistantPanel({ encounter, inserter }: { encounter: Encounter; inserter: NoteInserter }) {
   const toast = useToast()
   const qc = useQueryClient()
   const id = encounter.id
@@ -259,7 +264,7 @@ export function AiAssistantPanel({ encounter, append }: { encounter: Encounter; 
         </span>
       }
     >
-      <div className="space-y-4">
+      <div className="@container space-y-4">
         <p className="text-xs text-ink-muted">Everything here is a draft for you to review. Nothing is added to the note until you accept or edit it, and signing is always your separate action. The assistant is not clinically validated.</p>
         <ul className="flex flex-wrap gap-2 text-xs">
           <li>
@@ -306,7 +311,7 @@ export function AiAssistantPanel({ encounter, append }: { encounter: Encounter; 
                 </span>
               </Alert>
             )}
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
               <div className="space-y-3">
                 <p className="text-sm font-medium">Record or upload audio</p>
                 {ai.status.stt.available && ai.status.features.liveTranscription && <LiveRecorder encounterId={id} chunkSeconds={ai.status.liveChunkSeconds} onUpdate={onLiveUpdate} disabled={uploadAudio.isPending} />}
@@ -443,15 +448,15 @@ export function AiAssistantPanel({ encounter, append }: { encounter: Encounter; 
                   {latestDraft.items
                     .filter((i) => i.decision !== 'superseded')
                     .map((i) => (
-                      <SuggestionCard key={i.id} item={i} transcript={draftTranscript} encounterId={id} append={append} onFocusSources={focus} />
+                      <SuggestionCard key={i.id} item={i} transcript={draftTranscript} encounterId={id} inserter={inserter} onFocusSources={focus} />
                     ))}
                 </ul>
               </section>
             ) : (
               <p className="text-sm text-ink-muted">No note draft yet. Use “Generate draft” on a transcript.</p>
             ))}
-          {tab === 'facts' && <FactsView facts={ai.facts} encounterId={id} append={append} onFocus={focus} />}
-          {tab === 'recommendations' && <RecommendationsView recommendations={ai.recommendations} jobs={ai.jobs} encounterId={id} append={append} onFocus={focus} />}
+          {tab === 'facts' && <FactsView facts={ai.facts} encounterId={id} inserter={inserter} onFocus={focus} />}
+          {tab === 'recommendations' && <RecommendationsView recommendations={ai.recommendations} jobs={ai.jobs} encounterId={id} inserter={inserter} onFocus={focus} />}
           {tab === 'activity' && <ActivityView ai={ai} encounterId={id} />}
         </div>
       </div>

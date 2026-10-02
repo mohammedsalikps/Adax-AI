@@ -3,8 +3,8 @@ import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod'
 import { AI_SECTIONS, type TranscriptSegment, VitalKind } from '@adaxai/contracts'
 import { z } from 'zod'
 import type { AppSettings } from '../settings/schema.ts'
-import { EXTRACTION_PROMPT, IMAGE_PROMPT, NOTE_PROMPT, type PromptDef, RECOMMENDATION_PROMPT } from './prompts.ts'
-import { AiProviderError, type CallMeta, type ExtractedFact, type FactExtractor, type ImageDescriber, type ImageDescription, type NoteDrafter, type NoteDraftResult, type RecommendationInput, type RecommendationOut, type Recommender } from './providers.ts'
+import { EXTRACTION_PROMPT, IMAGE_PROMPT, MANA_QA_PROMPT, NOTE_PROMPT, type PromptDef, RECOMMENDATION_PROMPT } from './prompts.ts'
+import { AiProviderError, type CallMeta, type ExtractedFact, type FactExtractor, type ImageDescriber, type ImageDescription, type NoteDrafter, type NoteDraftResult, type RecommendationInput, type RecommendationOut, type Recommender, type RecordQuestionAnswerer, type RecordQuestionInput } from './providers.ts'
 
 /** Kept for existing callers and tests. */
 export const NOTE_PROMPT_VERSION = NOTE_PROMPT.id
@@ -52,6 +52,9 @@ const ImageOutput = z.object({
   limitations: z.array(z.string()),
   summary: z.string(),
 })
+
+const Cited = z.object({ text: z.string(), refs: z.array(z.string()) })
+const ManaOutput = z.object({ statements: z.array(Cited), conflicts: z.array(Cited), notFound: z.array(z.string()) })
 
 export function formatTranscript(segments: TranscriptSegment[]): string {
   return segments.map((s) => `[${s.id}] ${s.speaker ? `${s.speaker}: ` : ''}${s.text}`).join('\n')
@@ -143,6 +146,19 @@ export class AnthropicRecommender implements Recommender {
   }
 }
 
+export class AnthropicRecordQa implements RecordQuestionAnswerer {
+  readonly provider = 'anthropic'
+  readonly promptVersion = MANA_QA_PROMPT.id
+  constructor(private readonly s: AnthropicStructured) {}
+  get model() {
+    return this.s.model
+  }
+  async answer(input: RecordQuestionInput) {
+    const { output, ...meta } = await this.s.call(MANA_QA_PROMPT, ManaOutput, `<patient>${input.patientLine}</patient>\n<record>\n${input.recordText}\n</record>\n<question>${input.question}</question>\n\nAnswer the question from the record items.`)
+    return { ...meta, statements: output.statements, conflicts: output.conflicts, notFound: output.notFound }
+  }
+}
+
 const IMAGE_MEDIA = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
 export class AnthropicImageDescriber implements ImageDescriber {
@@ -183,7 +199,7 @@ export function createAnthropicProviders(apiKey: string, llm: AppSettings['ai'][
   const c = client(apiKey, llm.timeoutSeconds, baseURL)
   const text = new AnthropicStructured(c, llm.model, llm.effort, llm.maxOutputTokens)
   const img = new AnthropicStructured(c, vision.model, vision.effort, Math.min(llm.maxOutputTokens, 8000))
-  return { drafter: new AnthropicNoteDrafter(text), extractor: new AnthropicFactExtractor(text), recommender: new AnthropicRecommender(text), describer: new AnthropicImageDescriber(img) }
+  return { drafter: new AnthropicNoteDrafter(text), extractor: new AnthropicFactExtractor(text), recommender: new AnthropicRecommender(text), describer: new AnthropicImageDescriber(img), qa: new AnthropicRecordQa(text) }
 }
 
 /** Drafter only (kept for tests that exercise the SDK path against a local HTTP stub). */

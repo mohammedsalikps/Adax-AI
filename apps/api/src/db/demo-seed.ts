@@ -45,7 +45,7 @@ try {
     console.log('[demo-seed] The demo patient already exists; nothing changed.')
   } else {
     const p = await nurse('POST', '/api/patients', DEMO)
-    for (const type of ['data_processing', 'ai_recording', 'clinical_photography', 'ai_image_analysis', 'research_use']) await nurse('POST', `/api/patients/${p.id}/consents`, { type, method: 'verbal', notes: 'Synthetic demo consent' })
+    for (const type of ['data_processing', 'ai_recording', 'ai_record_assistant', 'clinical_photography', 'ai_image_analysis', 'research_use']) await nurse('POST', `/api/patients/${p.id}/consents`, { type, method: 'verbal', notes: 'Synthetic demo consent' })
     await nurse('POST', `/api/patients/${p.id}/allergies`, { substance: 'Penicillin', reaction: 'Rash', severity: 'moderate' })
     const depts = (await nurse('GET', '/api/departments')).departments as { id: string; code: string }[]
     const gen = depts.find((d) => d.code === 'GEN')!.id

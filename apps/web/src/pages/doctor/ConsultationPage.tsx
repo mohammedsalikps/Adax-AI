@@ -3,13 +3,15 @@ import {
   type DiagnosisInput,
   type Encounter,
   FREQUENCY_PRESETS,
+  INSERTION_SUBJECTS,
   NOTE_SECTIONS,
+  type NoteInsertion,
   type NoteFields,
   type PrescriptionItemInput,
   signIssues,
 } from '@adaxai/contracts'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CircleAlert, CircleCheck, CloudUpload, FilePlus2, LoaderCircle, Plus, Printer, Trash2 } from 'lucide-react'
+import { CircleAlert, CircleCheck, CloudUpload, FilePlus2, LoaderCircle, Plus, Printer, Sparkles, Trash2 } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { PatientBanner } from '../../components/clinical/PatientBanner.tsx'
@@ -26,6 +28,7 @@ import { useMe } from '../../lib/auth.tsx'
 import { usePortalBase } from '../../lib/clinical.ts'
 import { encounterKey, useEncounter } from '../../lib/encounters.ts'
 import { fmtDate, fmtDateTime, fmtTime } from '../../lib/format.ts'
+import type { NoteInserter } from '../../lib/insert.ts'
 import { useDocumentTitle } from '../../lib/useDocumentTitle.ts'
 
 export interface Draft {
@@ -34,8 +37,26 @@ export interface Draft {
   prescription: PrescriptionItemInput[]
 }
 
-/** Lets other panels (e.g. the AI assistant) add reviewed text to the draft note. */
-export type AppendToNote = (section: keyof NoteFields, text: string) => void
+/** Lets other panels (Mana, the AI assistant) insert reviewed AI text into the note, recorded on the server. */
+export type SidePanel = (e: Encounter, inserter: NoteInserter) => ReactNode
+
+/** Where AI-produced text in the note came from (shown while editing, before signing and on the signed record). */
+export function AiProvenance({ insertions, section }: { insertions: NoteInsertion[]; section?: keyof NoteFields }) {
+  const list = section ? insertions.filter((i) => i.section === section) : insertions
+  if (!list.length) return null
+  return (
+    <ul className="mt-1 space-y-0.5 text-xs" aria-label={section ? 'AI-assisted text in this section' : 'AI-assisted text in this note'}>
+      {list.map((i) => (
+        <li key={i.id} className="text-ai">
+          <Sparkles aria-hidden="true" className="mr-1 inline size-3" />
+          {section ? '' : `${NOTE_SECTIONS.find((s) => s.key === i.section)?.label}: `}AI-assisted text from {INSERTION_SUBJECTS[i.subjectType].toLowerCase()}
+          {i.producedBy && ` (${i.producedBy})`}, inserted {fmtDateTime(i.insertedAt)}
+          {i.insertedByName && ` by ${i.insertedByName}`} · {i.retained ? 'unchanged in the note' : 'edited or removed since'}
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error' | 'conflict'
 
@@ -119,7 +140,7 @@ function PrescriptionEditor({ items, onChange }: { items: PrescriptionItemInput[
   )
 }
 
-function ReviewAndSignDialog({ draft, encounter, onClose, onSign, signing, error }: { draft: Draft; encounter: Encounter; onClose: () => void; onSign: () => void; signing: boolean; error: unknown }) {
+function ReviewAndSignDialog({ draft, encounter, insertions, onClose, onSign, signing, error }: { draft: Draft; encounter: Encounter; insertions: NoteInsertion[]; onClose: () => void; onSign: () => void; signing: boolean; error: unknown }) {
   const [attest, setAttest] = useState(false)
   const issues = signIssues(draft)
   return (
@@ -186,6 +207,13 @@ function ReviewAndSignDialog({ draft, encounter, onClose, onSign, signing, error
             <p className="text-ink-muted">None</p>
           )}
         </div>
+        {insertions.length > 0 && (
+          <div className="rounded-md border border-ai/30 bg-ai-soft p-3">
+            <p className="font-medium">AI-assisted text in this note</p>
+            <p className="text-xs text-ink-muted">The signed record keeps these references.</p>
+            <AiProvenance insertions={insertions} />
+          </div>
+        )}
         <Alert tone="warning">After signing, this record cannot be edited. Corrections are added as amendments, and the original stays visible.</Alert>
         <CheckboxField label="I have reviewed this record, including any AI-assisted text, and it is accurate." checked={attest} onChange={(e) => setAttest(e.target.checked)} />
       </div>
@@ -193,7 +221,7 @@ function ReviewAndSignDialog({ draft, encounter, onClose, onSign, signing, error
   )
 }
 
-function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePanel?: (e: Encounter, append: AppendToNote) => ReactNode }) {
+function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePanel?: SidePanel | undefined }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [draft, setDraft] = useState<Draft>({ note: initial.note, diagnoses: initial.diagnoses, prescription: initial.prescription })
@@ -201,6 +229,9 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const [reviewing, setReviewing] = useState(false)
   const [vitalsOpen, setVitalsOpen] = useState(false)
+  const [insertions, setInsertions] = useState<NoteInsertion[]>(initial.aiInsertions)
+  const [inserting, setInserting] = useState(false)
+  const pendingInsertsRef = useRef(0)
   const draftRef = useRef(draft)
   const versionRef = useRef(initial.version)
   const dirtyRef = useRef(false)
@@ -229,6 +260,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
       try {
         const e = await api<Encounter>(`/encounters/${initial.id}/draft`, { method: 'PUT', body: { version: versionRef.current, ...draftRef.current } })
         versionRef.current = e.version
+        setInsertions(e.aiInsertions)
         setSavedAt(new Date())
         setSaveState(dirtyRef.current ? 'dirty' : 'saved')
       } catch (err) {
@@ -273,8 +305,61 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     },
   })
 
-  const append: AppendToNote = (section, text) =>
-    update((d) => ({ ...d, note: { ...d.note, [section]: d.note[section].trim() ? `${d.note[section].trimEnd()}\n${text}` : text } }))
+  /**
+   * Saves pending edits, then asks the server to insert the reviewed AI text
+   * (the server records which AI artifact it came from). The note is
+   * read-only while this runs so no keystroke is lost.
+   */
+  const inserter: NoteInserter = {
+    insert: async (section, text, subject) => {
+      pendingInsertsRef.current += 1
+      setInserting(true)
+      try {
+        await flush()
+        // Runs on the same serial chain as autosave, so a save and an insertion never use the same version.
+        const run = chainRef.current.then(async () => {
+          if (stateRef.current === 'conflict') throw new ApiError(409, 'version_conflict', 'This consultation was changed in another window. Reload to continue.')
+          if (dirtyRef.current || stateRef.current === 'error') {
+            // Diagnoses or prescription changed meanwhile: save them first (note fields are read-only now).
+            dirtyRef.current = false
+            setSaveState('saving')
+            try {
+              const saved = await api<Encounter>(`/encounters/${initial.id}/draft`, { method: 'PUT', body: { version: versionRef.current, ...draftRef.current } })
+              versionRef.current = saved.version
+            } catch (err) {
+              if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
+              else {
+                dirtyRef.current = true
+                setSaveState('error')
+              }
+              throw err
+            }
+          }
+          setSaveState('saving')
+          try {
+            const e = await api<Encounter>(`/encounters/${initial.id}/insertions`, { method: 'POST', body: { version: versionRef.current, section, text, subjectType: subject.type, subjectId: subject.id } })
+            versionRef.current = e.version
+            const next = { ...draftRef.current, note: e.note }
+            draftRef.current = next
+            setDraft(next)
+            setInsertions(e.aiInsertions)
+            setSavedAt(new Date())
+            setSaveState(dirtyRef.current ? 'dirty' : 'saved')
+          } catch (err) {
+            if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
+            else setSaveState(dirtyRef.current ? 'dirty' : 'saved')
+            throw err
+          }
+        })
+        chainRef.current = run.catch(() => undefined)
+        await run
+      } finally {
+        pendingInsertsRef.current -= 1
+        if (pendingInsertsRef.current === 0) setInserting(false)
+      }
+    },
+    inserted: (type, id) => insertions.some((i) => i.subjectType === type && i.subjectId === id),
+  }
 
   return (
     <>
@@ -289,28 +374,9 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
           .
         </Alert>
       )}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-6">
-          {sidePanel?.(initial, append)}
-          <Card title="Consultation note">
-            <div className="space-y-4">
-              {NOTE_SECTIONS.map((s) => (
-                <TextAreaField
-                  key={s.key}
-                  label={s.label}
-                  hint={s.hint}
-                  rows={s.rows}
-                  value={draft.note[s.key]}
-                  onChange={(e) => update((d) => ({ ...d, note: { ...d.note, [s.key]: e.target.value } }))}
-                  readOnly={state === 'conflict'}
-                />
-              ))}
-            </div>
-          </Card>
-          <DiagnosesEditor items={draft.diagnoses} onChange={(diagnoses) => update((d) => ({ ...d, diagnoses }))} />
-          <PrescriptionEditor items={draft.prescription} onChange={(prescription) => update((d) => ({ ...d, prescription }))} />
-        </div>
-        <aside className="space-y-6" aria-label="Visit information">
+      {/* Three panels: patient context | note | Mana and the assistant (stacked on smaller screens). */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem] xl:grid-rows-[auto_1fr] 2xl:grid-cols-[17rem_minmax(0,1fr)_28rem] 2xl:grid-rows-none">
+        <aside className="space-y-6 xl:col-start-2 xl:row-start-1 2xl:col-start-1" aria-label="Visit information">
           <Card title="This visit">
             <p className="text-sm">
               Token <strong>{initial.visit.tokenNumber}</strong> · {initial.visit.departmentName} · {fmtDate(initial.visit.visitDate)}
@@ -325,6 +391,28 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
           </Card>
           <Timeline patientId={initial.patient.id} />
         </aside>
+        <div className="space-y-6 xl:col-start-1 xl:row-span-2 xl:row-start-1 2xl:col-start-2 2xl:row-span-1">
+          <Card title="Consultation note" actions={inserting ? <Badge tone="ai">Inserting AI text…</Badge> : undefined}>
+            <div className="space-y-4">
+              {NOTE_SECTIONS.map((s) => (
+                <div key={s.key}>
+                  <TextAreaField
+                    label={s.label}
+                    hint={s.hint}
+                    rows={s.rows}
+                    value={draft.note[s.key]}
+                    onChange={(e) => update((d) => ({ ...d, note: { ...d.note, [s.key]: e.target.value } }))}
+                    readOnly={state === 'conflict' || inserting}
+                  />
+                  <AiProvenance insertions={insertions} section={s.key} />
+                </div>
+              ))}
+            </div>
+          </Card>
+          <DiagnosesEditor items={draft.diagnoses} onChange={(diagnoses) => update((d) => ({ ...d, diagnoses }))} />
+          <PrescriptionEditor items={draft.prescription} onChange={(prescription) => update((d) => ({ ...d, prescription }))} />
+        </div>
+        {sidePanel && <div className="min-w-0 space-y-6 xl:col-start-2 xl:row-start-2 2xl:col-start-3 2xl:row-start-1">{sidePanel(initial, inserter)}</div>}
       </div>
       <div className="sticky bottom-0 z-20 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <SaveIndicator state={state} savedAt={savedAt} />
@@ -337,7 +425,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
           </Button>
         </div>
       </div>
-      {reviewing && <ReviewAndSignDialog draft={draft} encounter={initial} onClose={() => setReviewing(false)} onSign={() => sign.mutate()} signing={sign.isPending} error={sign.error} />}
+      {reviewing && <ReviewAndSignDialog draft={draft} encounter={initial} insertions={insertions} onClose={() => setReviewing(false)} onSign={() => sign.mutate()} signing={sign.isPending} error={sign.error} />}
       {vitalsOpen && (
         <RecordVitalsDialog
           visitId={initial.visit.id}
@@ -464,6 +552,12 @@ export function EncounterReadView({ e }: { e: Encounter }) {
               <p className="text-sm text-ink-muted">No medicines prescribed.</p>
             )}
           </Card>
+          {e.aiInsertions.length > 0 && (
+            <Card title="AI-assisted text">
+              <p className="text-xs text-ink-muted">Text in this note that the doctor inserted from AI or rule-based output, with its source.</p>
+              <AiProvenance insertions={e.aiInsertions} />
+            </Card>
+          )}
           {e.amendments.length > 0 && (
             <Card title="Amendments">
               <ol className="space-y-3 text-sm">
@@ -496,7 +590,7 @@ export function EncounterReadView({ e }: { e: Encounter }) {
   )
 }
 
-export function ConsultationPage({ sidePanel }: { sidePanel?: (e: Encounter, append: AppendToNote) => ReactNode }) {
+export function ConsultationPage({ sidePanel }: { sidePanel?: SidePanel }) {
   const { encounterId } = useParams()
   const q = useEncounter(encounterId)
   const navigate = useNavigate()

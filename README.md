@@ -1,7 +1,12 @@
 # ADAXAI MVP
 
-Role-based clinical web platform (Doctor, Nurse, Admin and Patient portals), a Fastify API on
-PostgreSQL, and a Python service for thermal imaging, image validation and dataset evaluation.
+ADAXAI Connected Clinical Platform: a role-based clinical web platform (Doctor, Nurse, Admin and
+Patient portals) with **Mana AI**, the doctor's patient-record companion; a Fastify API on
+PostgreSQL; and a Python service for thermal imaging, image validation and dataset evaluation.
+
+Product specification: [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) · audit of the current state:
+[docs/AUDIT.md](docs/AUDIT.md) · progress and test results: [docs/STATUS.md](docs/STATUS.md) ·
+decisions: [docs/adr/](docs/adr/).
 
 > **Status: MVP in development.** Use synthetic data only. This software is not a medical
 > device, is not clinically validated and is **not production-ready** (see
@@ -18,6 +23,8 @@ PostgreSQL, and a Python service for thermal imaging, image validation and datas
 | OPD queue and nurse workflow | Check-in with atomic daily tokens, one open visit per patient per day, priority, department/doctor assignment, server-enforced status transitions, vitals with plausibility checks and adult reference-range flags (not applied under 18; display aid only), entered-in-error corrections, auto-refresh |
 | Routing assistance | Deterministic rules in `config/routing.yaml` (department, red flags with escalation instructions, urgent-for-review priority, missing intake, least-busy clinician); staff apply or override with a reason; rules version stored |
 | Doctor consultation | Structured note, diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid), patient timeline |
+| Mana AI (patient-record companion) | Doctor asks about one patient (suggested questions or free text): pre-consultation briefing, history summary, last prescription, vital signs compared with the previous reading, changes since the previous visit, allergies, diagnoses, record search. Answers come from the record by explicit versioned rules (`mana-record-v1`, no AI key needed): every statement cites the record item (type, consultation, date, field, status, provenance) with a link; absence, conflicts, outdated and amended records are flagged. Optional AI summary (`mana-qa-v1`) only with a provider key **and** the patient's `ai_record_assistant` consent, labelled AI-generated, citations verified on the server. Answers are immutable and audited; doctors mark them reviewed or insert them into the note |
+| AI text in notes | AI or rule output enters a note only through a server-recorded insertion of reviewed output, which keeps a reference to the AI artifact (provider, model, prompt or rules version); shown under the note section, in the sign dialog and on the signed record; listed in the signed snapshot |
 | AI consultation assistant | Consent, typed/pasted transcript, audio upload and recording, live chunked transcription (needs STT key), note drafting, fact extraction with speaker attribution and transcript evidence, deterministic comparison with the record, rule-based safety checks (no AI needed), history-aware recommendations citing record items, accept/edit/reject/defer for every AI output with confirmation gates, jobs with retry and idempotency, activity and audit trail. See [AI: what is and is not real](#ai-what-is-and-is-not-real) |
 | Clinical photographs | Consent-gated JPEG/PNG/WebP upload validated by the Python service (DICOM rejected), original kept unchanged, metadata-free preview, optional AI description marked unverified and reviewed before use |
 | FLIR thermal imaging | Consent-gated radiometric JPEG upload with capture protocol, per-pixel °C matrix via `flyr`, viewer, regions with statistics and paired differences, doctor approval (then frozen) |
@@ -100,14 +107,17 @@ PostgreSQL keeps running after `npm run dev` exits; stop it with `npm run db:sto
 | Transcript (typed, pasted), audio storage and playback, consent | Works without credentials |
 | Rule-based safety checks (allergy vs prescription incl. an illustrative group list, vital-sign flags, missing information, red-flag phrases, record conflicts) | Works without credentials; deterministic, versioned (`safety-rules-v1`, `record-compare-v1`) |
 | Routing suggestions | Works without credentials; deterministic |
+| Mana record answers (briefing, history, last prescription, vitals comparison, changes, allergies, diagnoses, search) | Works without credentials; deterministic, versioned (`mana-record-v1`) |
+| Mana AI summaries | **Need `ANTHROPIC_API_KEY`** and the patient's `ai_record_assistant` consent; otherwise the answer says why and shows the record answer only |
 | Note drafting, fact extraction, recommendations, image description | **Need `ANTHROPIC_API_KEY`.** Without it the UI says the feature is unavailable and never shows placeholder output |
 | Transcription of uploaded or recorded audio, live chunked transcription | **Need `AI_STT_API_KEY`** (OpenAI-compatible endpoint). Finished text per chunk; no interim text |
 | Speaker identification | Only from “Doctor:” / “Patient:” labels in the text; provider diarisation is not implemented |
 | Clinical accuracy of any AI output | **Not evaluated.** Tested only against test doubles and a local mock of the provider API |
 
 - **Drafts only.** Nothing reaches the note until the doctor accepts or edits an item and adds
-  it; flagged or unsupported items need explicit confirmation; signing stays a separate,
-  attested action. A test proves that accepting AI output never changes the consultation and is
+  it; the server records each insertion with a reference to the AI artifact, and the signed
+  snapshot lists them; flagged or unsupported items need explicit confirmation; signing stays a
+  separate, attested action. A test proves that accepting AI output never changes the consultation and is
   not in the signed record unless the doctor saved it in the note. The assistant never
   diagnoses, prescribes, changes medicines, closes a consultation or contacts the patient.
 - **Provenance.** Facts and recommendations link to transcript lines or record items
@@ -116,8 +126,8 @@ PostgreSQL keeps running after `npm run dev` exits; stop it with `npm run db:sto
   tokens, latency, errors, data origin and a hash of the non-secret AI settings. Prompt texts are
   checksummed: a changed prompt must get a new version id.
 - **Consent.** `ai_recording` (wording `2026-10-v2`) covers recording, drafting and record-aware
-  recommendations; photographs need `clinical_photography`, their AI description
-  `ai_image_analysis`.
+  recommendations; Mana AI summaries need `ai_record_assistant` (Mana record answers do not);
+  photographs need `clinical_photography`, their AI description `ai_image_analysis`.
 - **Privacy.** Registered names, MRN, phone numbers and emergency-contact details are replaced
   before text is sent; only age band and sex are sent; only a metadata-free photo preview. Other
   identifiers spoken in conversation may still be present. Sending data to a provider requires
@@ -246,7 +256,7 @@ validated strictly at start-up:
 
 | File | Contents | When changes apply |
 | --- | --- | --- |
-| [`config/adaxai.yaml`](config/adaxai.yaml) | AI features, models, effort, timeouts, live chunk length, context limits, upload types and limits, retention, safety-rule groups and tolerances | **API restart** |
+| [`config/adaxai.yaml`](config/adaxai.yaml) | AI features, models, effort, timeouts, live chunk length, context limits, Mana record window and outdated threshold, upload types and limits, retention, safety-rule groups and tolerances | **API restart** |
 | [`config/routing.yaml`](config/routing.yaml) | Routing rules, red-flag phrases and instructions, required intake | **At runtime** (re-read on change; an invalid edit keeps the last valid rules) |
 | `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `AI_STT_*` | **Restart** |
 
@@ -259,6 +269,9 @@ and thermal images; set `clinical` only in a real clinical deployment.
 - No AI output, rule, flag or measurement is clinically validated. AI was exercised only with
   test doubles and a local mock; quality with real providers, Indian languages and real
   consultations is unknown.
+- Mana's record answers cover the listed question types; other questions fall back to a word
+  search of the record (no paraphrase). The "possibly outdated" threshold is a display setting,
+  not clinical guidance.
 - Red-flag phrase matching is simple text matching with basic negation handling; it misses
   paraphrases and is not triage.
 - The allergy group list is illustrative and incomplete; it is not a drug or cross-reactivity
@@ -296,7 +309,7 @@ packages/
 services/
   thermal/        FastAPI service: thermal, image validation, dataset evaluation (Python)
 config/           YAML settings (no secrets)
-docs/             DEMO.md (demonstration), DEVICES.md (device integration boundary)
+docs/             PRODUCT_SPEC.md, AUDIT.md, STATUS.md, DEMO.md, DEVICES.md, adr/ (decisions)
 demo/             Synthetic consultation transcript
 scripts/          db lifecycle, setup, backup, retention helpers, icons
 e2e/              Playwright end-to-end tests (and the test-only AI mock)

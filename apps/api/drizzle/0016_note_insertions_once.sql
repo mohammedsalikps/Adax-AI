@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "note_insertions_once_uq" ON "note_insertions" USING btree ("encounter_id","subject_type","subject_id","section",md5("text"));

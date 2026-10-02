@@ -24,7 +24,27 @@ export async function expectNoAxeViolations(page: Page) {
  */
 export async function expectNoHorizontalOverflow(page: Page) {
   const viewport = page.viewportSize()!
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth), { message: 'page wider than the screen' }).toBeLessThanOrEqual(viewport.width)
+  // On failure, name the outermost elements that stick out (elements inside a
+  // horizontally scrolling container, such as wide tables, are not counted).
+  const offenders = () =>
+    page.evaluate(() => {
+      const W = document.documentElement.clientWidth
+      const scrolls = (el: Element | null): boolean => !!el && (['auto', 'scroll'].includes(getComputedStyle(el).overflowX) || scrolls(el.parentElement))
+      return [...document.querySelectorAll('body *')]
+        .filter((el) => {
+          const r = el.getBoundingClientRect()
+          const parent = el.parentElement?.getBoundingClientRect()
+          return r.width > 0 && r.right > W + 0.5 && (!parent || parent.right <= W + 0.5) && !scrolls(el.parentElement)
+        })
+        .slice(0, 5)
+        .map((el) => `<${el.tagName.toLowerCase()} class="${(el.getAttribute('class') ?? '').slice(0, 100)}"> right=${Math.round(el.getBoundingClientRect().right)}: ${(el.textContent ?? '').trim().slice(0, 80)}`)
+    })
+  await expect
+    .poll(async () => {
+      const width = await page.evaluate(() => document.documentElement.scrollWidth)
+      return width <= viewport.width ? 'fits' : `page ${width}px wider than the ${viewport.width}px screen; overflowing: ${(await offenders()).join(' | ') || 'none found'}`
+    })
+    .toBe('fits')
   expect(await page.evaluate(() => innerWidth)).toBe(viewport.width)
 }
 

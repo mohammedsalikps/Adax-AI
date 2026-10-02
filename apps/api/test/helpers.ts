@@ -11,8 +11,20 @@ import { departments, facilities, users } from '../src/db/schema.ts'
 loadDotEnv()
 const base = loadConfig()
 
-/** Same settings as development, pointed at the dedicated test database and a separate file store. */
-export const testConfig: Config = { ...base, env: 'test', db: { ...base.db, name: base.db.testName }, storageDir: `${base.storageDir}-test`, cookieSecure: false }
+/**
+ * Same settings as development, pointed at the dedicated test database and a
+ * separate file store. AI provider keys from .env are never used by tests:
+ * tests that exercise AI inject test doubles explicitly, so no test can reach
+ * a real provider or depend on whether a key is configured.
+ */
+export const testConfig: Config = {
+  ...base,
+  env: 'test',
+  db: { ...base.db, name: base.db.testName },
+  storageDir: `${base.storageDir}-test`,
+  cookieSecure: false,
+  ai: { ...base.ai, anthropicApiKey: undefined, stt: { ...base.ai.stt, apiKey: undefined } },
+}
 
 /** A localhost port with nothing listening on it (connections are refused). */
 export async function closedPort(): Promise<number> {

@@ -1,18 +1,14 @@
-import { type ClinicalFact, FACT_CATEGORIES, FACT_FLAGS, type FactFlag, NOTE_SECTIONS, type NoteFields } from '@adaxai/contracts'
-import { Plus } from 'lucide-react'
-import { useState } from 'react'
-import { Button } from '../ui/Button.tsx'
+import { type ClinicalFact, FACT_CATEGORIES, FACT_FLAGS, FACT_SECTION, type FactFlag } from '@adaxai/contracts'
+import type { NoteInserter } from '../../lib/insert.ts'
 import { Badge } from '../ui/Feedback.tsx'
 import { EvidenceList } from './Evidence.tsx'
+import { InsertButton } from './InsertButton.tsx'
 import { ReviewControls, StatusBadge } from './ReviewControls.tsx'
-
-const SECTION_LABEL = Object.fromEntries(NOTE_SECTIONS.map((s) => [s.key, s.label])) as Record<keyof NoteFields, string>
 const ATTRIBUTION: Record<string, string> = { patient_reported: 'Patient said', clinician_stated: 'Clinician said', other_speaker: 'Other / unclear speaker' }
 const CONFIRM: FactFlag[] = ['uncertain', 'no_source', 'conflicts_with_record', 'speaker_mismatch']
 
-function FactCard({ f, encounterId, append, onFocus }: { f: ClinicalFact; encounterId: string; append: (section: keyof NoteFields, text: string) => void; onFocus: (ids: string[]) => void }) {
-  const [section, setSection] = useState<keyof NoteFields | null>(null)
-  const [added, setAdded] = useState(false)
+function FactCard({ f, encounterId, inserter, onFocus }: { f: ClinicalFact; encounterId: string; inserter: NoteInserter; onFocus: (ids: string[]) => void }) {
+  const section = FACT_SECTION[f.category]
   const flags = f.flags as FactFlag[]
   const needsConfirm = flags.some((x) => CONFIRM.includes(x))
   const done = f.status === 'accepted' || f.status === 'edited'
@@ -45,28 +41,14 @@ function FactCard({ f, encounterId, append, onFocus }: { f: ClinicalFact; encoun
         text={f.text}
         status={f.status}
         confirm={needsConfirm ? 'flagged' : null}
-        onDecided={(r) => setSection((r.item?.section as keyof NoteFields | null) ?? null)}
       />
-      {done && (section ?? null) !== null && !added && (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="mt-2"
-          icon={<Plus aria-hidden="true" className="size-4" />}
-          onClick={() => {
-            append(section!, f.finalText ?? f.text)
-            setAdded(true)
-          }}
-        >
-          Add to {SECTION_LABEL[section!]}
-        </Button>
-      )}
+      {done && section && <InsertButton inserter={inserter} section={section} text={f.finalText ?? f.text} subject={{ type: 'fact', id: f.id }} />}
     </li>
   )
 }
 
 /** Extracted facts grouped by category, each with its sources and review state. */
-export function FactsView({ facts, encounterId, append, onFocus }: { facts: ClinicalFact[]; encounterId: string; append: (section: keyof NoteFields, text: string) => void; onFocus: (ids: string[]) => void }) {
+export function FactsView({ facts, encounterId, inserter, onFocus }: { facts: ClinicalFact[]; encounterId: string; inserter: NoteInserter; onFocus: (ids: string[]) => void }) {
   if (!facts.length) return <p className="text-sm text-ink-muted">No facts extracted yet. Use “Extract facts” on a transcript.</p>
   const pending = facts.filter((f) => f.status === 'pending' || f.status === 'deferred').length
   const order = Object.keys(FACT_CATEGORIES)
@@ -78,7 +60,7 @@ export function FactsView({ facts, encounterId, append, onFocus }: { facts: Clin
       </p>
       <ul className="space-y-2">
         {sorted.map((f) => (
-          <FactCard key={f.id} f={f} encounterId={encounterId} append={append} onFocus={onFocus} />
+          <FactCard key={f.id} f={f} encounterId={encounterId} inserter={inserter} onFocus={onFocus} />
         ))}
       </ul>
     </section>

@@ -131,7 +131,7 @@ export type Allergy = z.infer<typeof Allergy>
 export const AllergyInput = z.object({ substance: Text(120), reaction: OptionalText(200), severity: AllergySeverity.default('unknown') })
 export type AllergyInput = z.input<typeof AllergyInput>
 
-export const ConsentType = z.enum(['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis'])
+export const ConsentType = z.enum(['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis', 'ai_record_assistant'])
 export type ConsentType = z.infer<typeof ConsentType>
 export const CONSENT_LABELS: Record<ConsentType, { title: string; description: string }> = {
   data_processing: { title: 'Care records', description: 'Store and use health records for this clinic’s care of the patient.' },
@@ -145,6 +145,10 @@ export const CONSENT_LABELS: Record<ConsentType, { title: string; description: s
   research_use: { title: 'De-identified research use', description: 'Use de-identified data to develop and evaluate tools. Optional; care is not affected.' },
   clinical_photography: { title: 'Clinical photographs', description: 'Take and store photographs (for example of a wound or skin condition) for the care team.' },
   ai_image_analysis: { title: 'AI description of photographs', description: 'Send clinical photographs (without name or contact details) to an external AI service that describes them for the doctor to review.' },
+  ai_record_assistant: {
+    title: 'Mana AI record summaries',
+    description: 'When the doctor asks a question about the patient’s record, send the relevant parts of the record (without name or contact details) to an external AI service that writes a summary with references, for the doctor to check. Answers read directly from the record do not need this consent.',
+  },
 }
 
 /**
@@ -160,6 +164,7 @@ export const CONSENT_VERSIONS: Record<ConsentType, string> = {
   research_use: '2026-10-v1',
   clinical_photography: '2026-10-v1',
   ai_image_analysis: '2026-10-v1',
+  ai_record_assistant: '2026-10-v1',
 }
 export const ConsentMethod = z.enum(['verbal', 'written', 'digital'])
 export const Consent = z.object({

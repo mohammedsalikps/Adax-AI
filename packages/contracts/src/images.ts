@@ -11,6 +11,9 @@ export const IMAGE_TYPES = {
 export type ImageType = keyof typeof IMAGE_TYPES
 export const ImageType = z.enum(Object.keys(IMAGE_TYPES) as [ImageType, ...ImageType[]])
 
+/** The note text for a reviewed photo description (built the same way in the app and on the server). */
+export const photoNoteText = (imageType: ImageType, bodySite: string | null, text: string) => `Photograph (${IMAGE_TYPES[imageType]}${bodySite ? `, ${bodySite}` : ''}): ${text}`
+
 export const ImageUploadFields = z.object({
   imageType: ImageType,
   source: z.enum(['upload', 'camera']).default('upload'),

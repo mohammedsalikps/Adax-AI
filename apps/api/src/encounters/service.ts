@@ -8,6 +8,7 @@ import { allergies, departments, diagnoses, encounterAmendments, encounters, fac
 import { notFound } from '../http/errors.ts'
 import { ageOn, fullName } from '../patients/service.ts'
 import { toObservation } from '../visits/service.ts'
+import { loadInsertions } from './insertions.ts'
 
 export type EncounterRow = typeof encounters.$inferSelect
 
@@ -62,6 +63,15 @@ export async function loadEncounter(db: DbOrTx, me: SessionUser, e: EncounterRow
     db.select({ substance: allergies.substance }).from(allergies).where(and(eq(allergies.patientId, p.id), eq(allergies.status, 'active'))),
   ])
   const age = ageOn(p.dateOfBirth, v.visitDate)
+  const note = {
+    chiefComplaint: e.chiefComplaint,
+    history: e.history,
+    pastHistory: e.pastHistory,
+    examination: e.examination,
+    assessment: e.assessment,
+    plan: e.plan,
+    followUp: e.followUp,
+  }
   return {
     id: e.id,
     status: e.status,
@@ -80,19 +90,12 @@ export async function loadEncounter(db: DbOrTx, me: SessionUser, e: EncounterRow
     },
     doctor: { id: doc.id, fullName: doc.fullName, registrationNumber: doc.registrationNumber },
     facilityName,
-    note: {
-      chiefComplaint: e.chiefComplaint,
-      history: e.history,
-      pastHistory: e.pastHistory,
-      examination: e.examination,
-      assessment: e.assessment,
-      plan: e.plan,
-      followUp: e.followUp,
-    },
+    note,
     diagnoses: dx.map((d) => ({ description: d.description, code: d.code, kind: d.kind })),
     prescription: rx.map((r) => ({ drugName: r.drugName, strength: r.strength, form: r.form, dose: r.dose, route: r.route, frequency: r.frequency, duration: r.duration, instructions: r.instructions })),
     vitals: obs.map(({ o, by }) => toObservation(o, age, by)),
     amendments: am.map(({ a, by }) => ({ id: a.id, reason: a.reason, content: a.content, authorName: by, createdAt: a.createdAt.toISOString() })),
+    aiInsertions: await loadInsertions(db, e.id, note),
     startedAt: e.startedAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
     signedAt: e.signedAt?.toISOString() ?? null,

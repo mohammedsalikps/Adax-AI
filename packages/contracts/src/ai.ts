@@ -6,8 +6,9 @@ export const AiSection = z.enum(AI_SECTIONS)
 export type AiSection = z.infer<typeof AiSection>
 
 export const ProviderStatus = z.object({ available: z.boolean(), provider: z.string().nullable(), model: z.string().nullable(), reason: z.string().nullable() })
-export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean() })
-export const AiStatus = z.object({ llm: ProviderStatus, stt: ProviderStatus, vision: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number() })
+export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean() })
+/** `qa`: Mana AI summaries of the patient record. */
+export const AiStatus = z.object({ llm: ProviderStatus, stt: ProviderStatus, vision: ProviderStatus, qa: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number() })
 export type AiStatus = z.infer<typeof AiStatus>
 
 export const TranscriptSource = z.enum(['typed', 'pasted', 'audio_upload', 'browser_recording'])
@@ -112,7 +113,7 @@ export const AiConsentRequest = z.object({ method: z.enum(['verbal', 'written'])
 // review actions. Everything here is a draft until a doctor acts on it.
 // ---------------------------------------------------------------------------
 
-export const AI_JOB_KINDS = ['transcription', 'note_draft', 'extraction', 'safety_check', 'recommendations', 'image_analysis'] as const
+export const AI_JOB_KINDS = ['transcription', 'note_draft', 'extraction', 'safety_check', 'recommendations', 'image_analysis', 'patient_qa'] as const
 export const AiJobKind = z.enum(AI_JOB_KINDS)
 export type AiJobKind = z.infer<typeof AiJobKind>
 

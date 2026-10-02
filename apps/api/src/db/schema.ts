@@ -202,7 +202,7 @@ export const allergies = pgTable(
   (t) => [index('allergies_patient_idx').on(t.patientId)],
 )
 
-export const consentType = pgEnum('consent_type', ['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis'])
+export const consentType = pgEnum('consent_type', ['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis', 'ai_record_assistant'])
 export const consentMethod = pgEnum('consent_method', ['verbal', 'written', 'digital'])
 
 /** Consent records are never deleted; withdrawal is recorded on the row. */
@@ -1115,4 +1115,90 @@ export const encounterAmendments = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('amendments_encounter_idx').on(t.encounterId)],
+)
+
+// ---------------------------------------------------------------------------
+// Mana AI (patient-context questions) and AI text inserted into notes
+// ---------------------------------------------------------------------------
+
+/**
+ * A doctor's question about one patient and Mana's answer. The record answer
+ * (documented facts, explicit rules) and the cited source excerpts are
+ * written once and never change; only the AI-generated part may be filled in
+ * or retried while it is pending or failed (trigger, migration 0015).
+ */
+export const manaQuestions = pgTable(
+  'mana_questions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    askedBy: uuid('asked_by')
+      .notNull()
+      .references(() => users.id),
+    question: text('question').notNull(),
+    intent: text('intent').notNull(),
+    rulesVersion: text('rules_version').notNull(),
+    /** Sections of documented statements, each citing source refs. */
+    recordAnswer: jsonb('record_answer').notNull(),
+    /** Snapshot of every record item the answer may cite (ManaSource[]). */
+    sources: jsonb('sources').notNull(),
+    /** pending | succeeded | failed | unavailable | consent_required | not_requested */
+    generationStatus: text('generation_status').notNull(),
+    generationReason: text('generation_reason'),
+    generationRetryable: boolean('generation_retryable').notNull().default(false),
+    /** { statements, notFound } from the language model, citations verified. */
+    generated: jsonb('generated'),
+    jobId: uuid('job_id').references(() => aiJobs.id),
+    runId: uuid('run_id').references(() => aiRuns.id),
+    idempotencyKey: text('idempotency_key'),
+    dataOrigin: text('data_origin').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('mana_questions_patient_idx').on(t.patientId, t.createdAt),
+    uniqueIndex('mana_questions_idempotency_uq').on(t.askedBy, t.idempotencyKey),
+    check('mana_questions_generation_check', sql`${t.generationStatus} in ('pending', 'succeeded', 'failed', 'unavailable', 'consent_required', 'not_requested')`),
+  ],
+)
+
+/**
+ * AI-produced text a doctor inserted into a consultation note, with a
+ * reference to the AI artifact it came from. Append-only; the signed snapshot
+ * lists these references.
+ */
+export const noteInsertions = pgTable(
+  'note_insertions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    section: text('section').notNull(),
+    text: text('text').notNull(),
+    /** draft_item | fact | recommendation | mana_answer | image_analysis */
+    subjectType: text('subject_type').notNull(),
+    subjectId: uuid('subject_id').notNull(),
+    /** Provider / model / prompt or rules version of the artifact, as known when inserted. */
+    producedBy: text('produced_by'),
+    insertedBy: uuid('inserted_by')
+      .notNull()
+      .references(() => users.id),
+    insertedAt: timestamp('inserted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('note_insertions_encounter_idx').on(t.encounterId),
+    index('note_insertions_subject_idx').on(t.subjectType, t.subjectId),
+    // The same text from the same artifact goes into a section once.
+    uniqueIndex('note_insertions_once_uq').on(t.encounterId, t.subjectType, t.subjectId, t.section, sql`md5(${t.text})`),
+  ],
 )

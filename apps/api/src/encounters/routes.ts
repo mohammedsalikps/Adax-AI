@@ -113,6 +113,8 @@ export function registerEncounterRoutes(app: FastifyInstance, { db }: { db: Db }
       note: current.note,
       diagnoses: current.diagnoses,
       prescription: current.prescription,
+      // AI-produced text in the note keeps a reference to the AI artifact it came from.
+      aiInsertions: current.aiInsertions.map((i) => ({ id: i.id, section: i.section, subjectType: i.subjectType, subjectId: i.subjectId, producedBy: i.producedBy, insertedAt: i.insertedAt, retained: i.retained })),
       signedAt: signedAt.toISOString(),
     }
     const contentHash = sha256(canonicalJson(snapshot))

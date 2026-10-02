@@ -10,7 +10,9 @@
 // - fact extraction: one fact per Patient segment (allergy lines become a
 //   negated allergy fact) and one deliberately uncertain, unsourced fact;
 // - recommendations: one point citing the first record item and the first
-//   transcript line, and one citing a reference that does not exist.
+//   transcript line, and one citing a reference that does not exist;
+// - Mana record questions: one statement citing the first two record items,
+//   one citing a reference that does not exist, and one "not found" entry.
 import http from 'node:http'
 
 const PORT = Number(process.env.MOCK_ANTHROPIC_PORT || 4199)
@@ -63,12 +65,25 @@ function recommendationsFrom(userText) {
   }
 }
 
+function manaFrom(userText) {
+  const refs = [...userText.matchAll(/^\[([A-Z]\d+)\]/gm)].map((m) => m[1])
+  return {
+    statements: [
+      { text: `Summary of ${refs.length} record items for this question (mock output for automated tests).`, refs: refs.slice(0, 2) },
+      { text: 'Unsupported mock statement.', refs: ['Z99'] },
+    ],
+    conflicts: [],
+    notFound: ['Recent HbA1c (mock)'],
+  }
+}
+
 function respond(body) {
   const system = typeof body.system === 'string' ? body.system : ''
   const content = body.messages?.[0]?.content
   const user = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n') : ''
   if (system.startsWith('You extract clinically relevant facts')) return factsFrom(user)
   if (system.startsWith('You provide clinical decision support')) return recommendationsFrom(user)
+  if (system.startsWith("You answer a doctor's question about one patient")) return manaFrom(user)
   if (system.startsWith('You describe a clinical photograph')) {
     return { quality: 'limited', qualityReason: 'Test image (mock).', observations: [{ text: 'A uniformly coloured area (test output).', location: 'centre', confidence: 'low' }], limitations: ['Mock output for automated tests; not an analysis.'], summary: 'Mock description for automated tests.' }
   }

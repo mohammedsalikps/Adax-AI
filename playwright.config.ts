@@ -13,6 +13,12 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
+  // Whole multi-role workflows are long: in a fully passing run on the dev
+  // machine (2 Oct 2026) doctor-workflow took 27.7 s (desktop) and 26.6 s
+  // (mobile), and the longest test of a later passing run took 32.4 s, beyond
+  // Playwright's 30 s default; runs under CPU load timed out at the final steps. Each assertion keeps its own 5 s limit, so a hang
+  // still fails quickly.
+  timeout: 60_000,
   reporter: [['list']],
   use: { baseURL: WEB, trace: 'retain-on-failure' },
   projects: [

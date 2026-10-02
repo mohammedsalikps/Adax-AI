@@ -1,13 +1,12 @@
-import { type AiJob, type NoteFields, type Recommendation, RECOMMENDATION_KINDS, type RecommendationKind } from '@adaxai/contracts'
-import { Plus, ShieldAlert, Sparkles } from 'lucide-react'
-import { useState } from 'react'
-import { Button } from '../ui/Button.tsx'
+import { type AiJob, type Recommendation, RECOMMENDATION_KINDS, type RecommendationKind } from '@adaxai/contracts'
+import { ShieldAlert, Sparkles } from 'lucide-react'
+import type { NoteInserter } from '../../lib/insert.ts'
 import { Alert, Badge } from '../ui/Feedback.tsx'
 import { EvidenceList } from './Evidence.tsx'
+import { InsertButton } from './InsertButton.tsx'
 import { ReviewControls, StatusBadge } from './ReviewControls.tsx'
 
-function RecommendationCard({ r, encounterId, append, onFocus }: { r: Recommendation; encounterId: string; append: (section: keyof NoteFields, text: string) => void; onFocus: (ids: string[]) => void }) {
-  const [added, setAdded] = useState(false)
+function RecommendationCard({ r, encounterId, inserter, onFocus }: { r: Recommendation; encounterId: string; inserter: NoteInserter; onFocus: (ids: string[]) => void }) {
   const done = r.status === 'accepted' || r.status === 'edited'
   return (
     <li className={`rounded-lg border p-3 ${r.urgency === 'attention' ? 'border-down/40' : 'border-line'} ${r.status === 'rejected' ? 'bg-canvas' : ''}`} data-testid="recommendation">
@@ -46,26 +45,13 @@ function RecommendationCard({ r, encounterId, append, onFocus }: { r: Recommenda
         {r.producedBy.version ? ` · ${r.source === 'rules' ? 'rules' : 'prompt'} ${r.producedBy.version}` : ''}
       </p>
       <ReviewControls encounterId={encounterId} type="recommendation" id={r.id} text={r.text} status={r.status} confirm={r.unsupported ? 'unsupported' : null} />
-      {done && !added && (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="mt-2"
-          icon={<Plus aria-hidden="true" className="size-4" />}
-          onClick={() => {
-            append('plan', r.finalText ?? r.text)
-            setAdded(true)
-          }}
-        >
-          Add to Plan
-        </Button>
-      )}
+      {done && <InsertButton inserter={inserter} section="plan" text={r.finalText ?? r.text} subject={{ type: 'recommendation', id: r.id }} />}
     </li>
   )
 }
 
 /** Decision-support suggestions, never decisions: each one is accepted, edited, rejected or deferred by the doctor. */
-export function RecommendationsView({ recommendations, jobs, encounterId, append, onFocus }: { recommendations: Recommendation[]; jobs: AiJob[]; encounterId: string; append: (section: keyof NoteFields, text: string) => void; onFocus: (ids: string[]) => void }) {
+export function RecommendationsView({ recommendations, jobs, encounterId, inserter, onFocus }: { recommendations: Recommendation[]; jobs: AiJob[]; encounterId: string; inserter: NoteInserter; onFocus: (ids: string[]) => void }) {
   const lastLlm = jobs.find((j) => j.kind === 'recommendations' && j.status === 'succeeded')
   const insufficient = lastLlm?.summary?.insufficientData === true ? String(lastLlm.summary.insufficientDataReason ?? 'The AI found too little information for any suggestion.') : null
   const sorted = [...recommendations].sort((a, b) => Number(b.urgency === 'attention') - Number(a.urgency === 'attention'))
@@ -76,7 +62,7 @@ export function RecommendationsView({ recommendations, jobs, encounterId, append
       {!recommendations.length && <p className="text-sm text-ink-muted">No recommendations yet. Use “Get recommendations”.</p>}
       <ul className="space-y-2">
         {sorted.map((r) => (
-          <RecommendationCard key={r.id} r={r} encounterId={encounterId} append={append} onFocus={onFocus} />
+          <RecommendationCard key={r.id} r={r} encounterId={encounterId} inserter={inserter} onFocus={onFocus} />
         ))}
       </ul>
     </section>

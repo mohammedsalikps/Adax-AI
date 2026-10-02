@@ -10,7 +10,7 @@ export const AppSettings = z
     ai: z
       .object({
         features: z
-          .object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean() })
+          .object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean() })
           .strict(),
         llm: z
           .object({
@@ -35,6 +35,14 @@ export const AppSettings = z
       })
       .strict(),
     retention: z.object({ consultationAudioDays: z.number().int().min(0).max(3650) }).strict(),
+    mana: z
+      .object({
+        maxEncounters: z.number().int().min(1).max(50),
+        observationDays: z.number().int().min(1).max(3650),
+        outdatedDays: z.number().int().min(1).max(3650),
+        maxContextChars: z.number().int().min(2000).max(200_000),
+      })
+      .strict(),
     safety: z
       .object({
         allergyGroups: z.record(z.string().min(2), z.array(z.string().min(2)).min(1)),

@@ -1,12 +1,14 @@
-import { type AiStatus, type ClinicalImage, type Encounter, IMAGE_TYPES, type ImageAnalysis, type ImageType, type NoteFields } from '@adaxai/contracts'
+import { type AiStatus, type ClinicalImage, type Encounter, IMAGE_TYPES, type ImageAnalysis, type ImageType, photoNoteText } from '@adaxai/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Camera, Plus, Sparkles, Upload } from 'lucide-react'
+import { Camera, Sparkles, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { newIdempotencyKey } from '../../lib/ai.ts'
 import { api, errorMessage, issuesToErrors } from '../../lib/api.ts'
 import { useMe } from '../../lib/auth.tsx'
 import { usePatient } from '../../lib/clinical.ts'
 import { fmtDateTime } from '../../lib/format.ts'
+import type { NoteInserter } from '../../lib/insert.ts'
+import { InsertButton } from '../ai/InsertButton.tsx'
 import { ReviewControls, StatusBadge } from '../ai/ReviewControls.tsx'
 import { Button } from '../ui/Button.tsx'
 import { Dialog } from '../ui/Dialog.tsx'
@@ -98,9 +100,8 @@ function UploadDialog({ patientId, encounterId, onClose }: { patientId: string; 
   )
 }
 
-function AnalysisView({ a, image, patientId, canInsert, append }: { a: ImageAnalysis; image: ClinicalImage; patientId: string; canInsert: boolean; append?: (section: keyof NoteFields, text: string) => void }) {
+function AnalysisView({ a, image, patientId, canInsert, inserter }: { a: ImageAnalysis; image: ClinicalImage; patientId: string; canInsert: boolean; inserter?: NoteInserter }) {
   const qc = useQueryClient()
-  const [added, setAdded] = useState(false)
   const r = a.result
   const done = a.status === 'accepted' || a.status === 'edited'
   return (
@@ -137,20 +138,7 @@ function AnalysisView({ a, image, patientId, canInsert, append }: { a: ImageAnal
         confirm={r.quality === 'inadequate' ? 'inadequate' : null}
         onDecided={() => void qc.invalidateQueries({ queryKey: imagesKey(patientId) })}
       />
-      {done && canInsert && append && !added && (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="mt-2"
-          icon={<Plus aria-hidden="true" className="size-4" />}
-          onClick={() => {
-            append('examination', `Photograph (${IMAGE_TYPES[image.imageType]}${image.bodySite ? `, ${image.bodySite}` : ''}): ${a.finalText ?? r.summary}`)
-            setAdded(true)
-          }}
-        >
-          Add to Examination
-        </Button>
-      )}
+      {done && canInsert && inserter && <InsertButton inserter={inserter} section="examination" text={photoNoteText(image.imageType, image.bodySite, a.finalText ?? r.summary)} subject={{ type: 'image_analysis', id: a.id }} />}
     </div>
   )
 }
@@ -160,7 +148,7 @@ function AnalysisView({ a, image, patientId, canInsert, append }: { a: ImageAnal
  * to the consultation). AI description is optional, doctor-only, needs its
  * own consent and stays unverified until reviewed.
  */
-export function ClinicalImagesCard({ patientId, encounter, append }: { patientId: string; encounter?: Encounter; append?: (section: keyof NoteFields, text: string) => void }) {
+export function ClinicalImagesCard({ patientId, encounter, inserter }: { patientId: string; encounter?: Encounter; inserter?: NoteInserter }) {
   const { data: me } = useMe()
   const qc = useQueryClient()
   const patient = usePatient(patientId)
@@ -227,7 +215,7 @@ export function ClinicalImagesCard({ patientId, encounter, append }: { patientId
                   {isDoctor && vision?.available && !aiConsent && <p className="text-xs text-ink-muted">AI description needs the patient’s consent to AI description of photographs.</p>}
                 </div>
               </div>
-              {current && <AnalysisView a={current} image={img} patientId={patientId} canInsert={canInsert} append={append} />}
+              {current && <AnalysisView a={current} image={img} patientId={patientId} canInsert={canInsert} inserter={inserter} />}
             </li>
           )
         })}

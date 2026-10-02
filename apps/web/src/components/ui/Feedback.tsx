@@ -34,9 +34,10 @@ const BADGE: Record<BadgeTone, string> = {
   ai: 'bg-ai-soft text-ai border-ai/30',
 }
 
-export function Badge({ tone = 'neutral', children, icon }: { tone?: BadgeTone; children: ReactNode; icon?: ReactNode }) {
+/** Short labels stay on one line; `wrap` lets long ones (names, dates) wrap on narrow screens. */
+export function Badge({ tone = 'neutral', children, icon, wrap = false }: { tone?: BadgeTone; children: ReactNode; icon?: ReactNode; wrap?: boolean }) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${BADGE[tone]}`}>
+    <span className={`inline-flex items-center gap-1 border px-2 py-0.5 text-xs font-medium ${wrap ? 'rounded-md' : 'rounded-full whitespace-nowrap'} ${BADGE[tone]}`}>
       {icon}
       {children}
     </span>

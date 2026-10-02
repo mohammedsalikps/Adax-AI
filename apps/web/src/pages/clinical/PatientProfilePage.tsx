@@ -352,7 +352,7 @@ function VisitsCard({ patientId, extra }: { patientId: string; extra?: (v: Visit
   )
 }
 
-export function PatientProfilePage({ visitAction, timeline, extra }: { visitAction?: (v: Visit) => ReactNode; timeline?: (patientId: string) => ReactNode; extra?: (p: PatientDetail) => ReactNode }) {
+export function PatientProfilePage({ visitAction, timeline, extra, companion }: { visitAction?: (v: Visit) => ReactNode; timeline?: (patientId: string) => ReactNode; extra?: (p: PatientDetail) => ReactNode; companion?: (p: PatientDetail) => ReactNode }) {
   const { patientId } = useParams()
   const base = usePortalBase()
   const [params, setParams] = useSearchParams()
@@ -384,6 +384,7 @@ export function PatientProfilePage({ visitAction, timeline, extra }: { visitActi
         }
       />
       <h1 className="sr-only">{p.fullName}</h1>
+      {companion && <div className="mb-6">{companion(p)}</div>}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card title="Details">
           <DescriptionList

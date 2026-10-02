@@ -1,6 +1,9 @@
 import { Encounter, EncounterAi, PatientDetail, type TranscriptSegment, Visit } from '@adaxai/contracts'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { AiProviderError, type AiProviders, type ExtractedFact, type FactExtractor, type RecommendationInput, type RecommendationOut, type Recommender, type Transcriber } from '../src/ai/providers.ts'
+import { runRetention } from '../src/files/retention.ts'
+import { loadAppSettings } from '../src/settings/load.ts'
+import { testConfig } from './helpers.ts'
 import { adminQuery, call, createFixture, createTestApp, type Fixture, login, resetDatabase, samplePatient, type TestContext } from './helpers.ts'
 
 // --- Test doubles for the external providers (tests only; the product never fakes AI output) ---
@@ -103,10 +106,12 @@ const draft = (version: number, over: Record<string, unknown> = {}) => ({
 })
 
 /** A patient with a recorded allergy, one signed earlier consultation, today's vitals and an open consultation. */
+let seq = 0
 async function scenario(ctx: TestContext, { consent = true, vitals = true } = {}) {
   const nurse = await login(ctx.app, 't.nurse')
   const doctor = await login(ctx.app, 't.doctor')
-  const p = PatientDetail.parse((await call(ctx.app, 'POST', '/api/patients', { cookie: nurse, body: samplePatient() })).json())
+  seq++
+  const p = PatientDetail.parse((await call(ctx.app, 'POST', '/api/patients', { cookie: nurse, body: samplePatient(seq === 1 ? {} : { givenName: `Lakshmi${'abcdefgh'[seq % 8]}`, phone: `98400 7777${seq % 10}` }) })).json())
   await call(ctx.app, 'POST', `/api/patients/${p.id}/allergies`, { cookie: nurse, body: { substance: 'Penicillin', reaction: 'Rash', severity: 'moderate' } })
   const v1 = Visit.parse((await call(ctx.app, 'POST', '/api/visits', { cookie: nurse, body: { patientId: p.id, departmentId: fx.departments.gen } })).json())
   const e1 = Encounter.parse((await call(ctx.app, 'POST', `/api/visits/${v1.id}/encounter`, { cookie: doctor })).json())
@@ -418,5 +423,39 @@ describe('oversight', () => {
     ])
     expect((await call(withAi.app, 'GET', '/api/ai/review-outcomes', { cookie: admin })).statusCode).toBe(403)
     expect((await call(withAi.app, 'GET', '/api/ai-oversight/overview', { cookie: nurse })).statusCode).toBe(403)
+  })
+})
+
+describe('retention', () => {
+  it('deletes consultation audio of signed consultations after the configured period, keeping the record, transcript and audit trail', async () => {
+    const { e, doctor } = await scenario(withAi)
+    const open = await scenario(withAi, { vitals: false })
+    const wav = Buffer.from('RIFF$\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x80\x3e\0\0\x02\0\x10\0data\0\0\0\0', 'binary')
+    const send = async (eid: string) => {
+      const boundary = '----ret'
+      const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\nContent-Type: audio/wav\r\n\r\n`), wav, Buffer.from(`\r\n--${boundary}--\r\n`)])
+      const r = await withAi.app.inject({ method: 'POST', url: `/api/encounters/${eid}/audio`, headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, cookie: doctor, 'x-adaxai-csrf': '1' }, payload })
+      return EncounterAi.parse(r.json())
+    }
+    const ai = await send(e.id)
+    await send(open.e.id)
+    const enc = Encounter.parse((await call(withAi.app, 'GET', `/api/encounters/${e.id}`, { cookie: doctor })).json())
+    const saved = Encounter.parse((await call(withAi.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: draft(enc.version) })).json())
+    await call(withAi.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: saved.version, attestation: true } })
+
+    const settings = loadAppSettings()
+    const later = new Date(Date.now() + (settings.retention.consultationAudioDays + 1) * 86_400_000)
+    expect(await runRetention(withAi.db, testConfig.storageDir, settings, { dryRun: true, now: later })).toMatchObject({ candidates: 1, deleted: 0 })
+    expect(await runRetention(withAi.db, testConfig.storageDir, settings, { dryRun: false, now: new Date() })).toMatchObject({ candidates: 0 })
+    expect(await runRetention(withAi.db, testConfig.storageDir, settings, { dryRun: false, now: later })).toMatchObject({ candidates: 1, deleted: 1 })
+
+    const fileId = ai.audio[0]!.fileId
+    const gone = await call(withAi.app, 'GET', `/api/files/${fileId}`, { cookie: doctor })
+    expect(gone.statusCode).toBe(410)
+    expect((await adminQuery('SELECT deleted_reason FROM files WHERE id = $1', [fileId])).rows[0].deleted_reason).toMatch(/retention/)
+    expect((await adminQuery("SELECT count(*)::int AS n FROM audit_events WHERE action = 'file.retention_delete'")).rows[0].n).toBe(1)
+    // The transcript made from it is kept.
+    expect((await adminQuery('SELECT count(*)::int AS n FROM transcripts WHERE audio_file_id = $1', [fileId])).rows[0].n).toBe(1)
+    expect(await runRetention(withAi.db, testConfig.storageDir, { ...settings, retention: { consultationAudioDays: 0 } }, { dryRun: false, now: later })).toMatchObject({ days: 0, deleted: 0 })
   })
 })

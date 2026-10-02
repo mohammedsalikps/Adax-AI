@@ -6,7 +6,7 @@ import { currentUser } from '../auth/plugin.ts'
 import type { Config } from '../config.ts'
 import type { Db } from '../db/client.ts'
 import { files } from '../db/schema.ts'
-import { notFound } from '../http/errors.ts'
+import { HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { readStoredBytes } from './storage.ts'
 
@@ -18,6 +18,7 @@ export function registerFileRoutes(app: FastifyInstance, { db, config }: { db: D
     // Dataset exports have their own route and permission (thermal:export).
     const f = await db.query.files.findFirst({ where: and(eq(files.id, id), eq(files.facilityId, me.facilityId), ne(files.kind, 'dataset_export')) })
     if (!f) throw notFound('File')
+    if (f.deletedAt) throw new HttpError(410, 'file_deleted', 'This file was deleted under the retention policy. Its record and any transcript are kept.')
     const data = await readStoredBytes(config.storageDir, f.storageKey)
     await audit(db, req, { action: 'file.read', entityType: 'file', entityId: id, patientId: f.patientId, details: { kind: f.kind } })
     return reply

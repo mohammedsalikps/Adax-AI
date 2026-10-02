@@ -9,6 +9,7 @@
     "start": "tsx src/server.ts",
     "migrate": "tsx src/db/migrate-cli.ts",
     "seed": "tsx src/db/seed.ts",
+    "retention": "tsx src/retention-cli.ts",
     "generate": "drizzle-kit generate",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"

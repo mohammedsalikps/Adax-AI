@@ -1,8 +1,9 @@
 import { OPEN_VISIT_STATUSES, UpdateVisitRequest, VISIT_STATUS_LABELS, VISIT_TRANSITIONS, type Visit, type VisitStatus } from '@adaxai/contracts'
-import { Activity, ClipboardCheck, Pencil, Stethoscope, UserPlus, UserX, XCircle } from 'lucide-react'
+import { Activity, ClipboardCheck, Pencil, Route, Stethoscope, UserPlus, UserX, XCircle } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { Link } from 'react-router'
 import { useDoctors } from '../../components/clinical/CheckInDialog.tsx'
+import { RoutingDialog } from '../../components/clinical/RoutingDialog.tsx'
 import { ageSex, AllergySummary } from '../../components/clinical/PatientBanner.tsx'
 import { RecordVitalsDialog, VitalsInline } from '../../components/clinical/Vitals.tsx'
 import { VisitStatusBadge } from '../../components/clinical/VisitStatusBadge.tsx'
@@ -123,7 +124,7 @@ function EditVisitDialog({ visit, onClose }: { visit: Visit; onClose: () => void
   )
 }
 
-type Dialogs = { kind: 'vitals' | 'cancel' | 'edit'; visit: Visit } | null
+type Dialogs = { kind: 'vitals' | 'cancel' | 'edit' | 'routing'; visit: Visit } | null
 
 function QueueRow({ visit, role, onOpen, consultationAction }: { visit: Visit; role: 'doctor' | 'nurse'; onOpen: (d: NonNullable<Dialogs>) => void; consultationAction?: (v: Visit) => ReactNode }) {
   const base = role === 'doctor' ? '/doctor' : '/nurse'
@@ -164,6 +165,11 @@ function QueueRow({ visit, role, onOpen, consultationAction }: { visit: Visit; r
             )}
             {role === 'nurse' && can('ready') && <StatusChangeButton visit={visit} to="ready" label="Ready for doctor" icon={<ClipboardCheck aria-hidden="true" className="size-4" />} variant="primary" />}
             {role === 'nurse' && can('no_show') && <StatusChangeButton visit={visit} to="no_show" label="No-show" icon={<UserX aria-hidden="true" className="size-4" />} variant="ghost" />}
+            {visit.status !== 'in_consultation' && (
+              <Button size="sm" variant="ghost" icon={<Route aria-hidden="true" className="size-4" />} onClick={() => onOpen({ kind: 'routing', visit })}>
+                Routing
+              </Button>
+            )}
             {visit.status !== 'in_consultation' && (
               <Button size="sm" variant="ghost" icon={<Pencil aria-hidden="true" className="size-4" />} onClick={() => onOpen({ kind: 'edit', visit })}>
                 Edit
@@ -251,6 +257,7 @@ export function QueuePage({ consultationAction }: { consultationAction?: (v: Vis
       {dialog?.kind === 'vitals' && <RecordVitalsDialog visitId={dialog.visit.id} patientName={dialog.visit.patient.fullName} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'cancel' && <CancelDialog visit={dialog.visit} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'edit' && <EditVisitDialog visit={dialog.visit} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'routing' && <RoutingDialog visit={dialog.visit} onClose={() => setDialog(null)} />}
     </>
   )
 }

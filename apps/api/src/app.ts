@@ -10,6 +10,7 @@ import { effectiveSettings, loadAppSettings, RoutingRulesSource } from './settin
 import type { AppSettings } from './settings/schema.ts'
 import { registerFileRoutes } from './files/routes.ts'
 import { httpThermalService, type ThermalService } from './thermal/client.ts'
+import { registerRoutingRoutes } from './routing/routes.ts'
 import { registerThermalDatasetRoutes } from './thermal/datasets.ts'
 import { registerThermalRoutes } from './thermal/routes.ts'
 import { registerActivationRoutes } from './auth/activation.ts'
@@ -66,6 +67,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety } })
   const executors = new Map<string, JobExecutor>()
   registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
+  registerRoutingRoutes(app, { db, routing })
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })

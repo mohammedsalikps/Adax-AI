@@ -10,6 +10,7 @@
     "migrate": "tsx src/db/migrate-cli.ts",
     "seed": "tsx src/db/seed.ts",
     "retention": "tsx src/retention-cli.ts",
+    "demo:seed": "tsx src/db/demo-seed.ts",
     "generate": "drizzle-kit generate",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"

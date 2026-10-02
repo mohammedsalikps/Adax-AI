@@ -127,7 +127,7 @@ export function providersFromConfig(config: Config, settings: AppSettings): AiPr
   const transcriber = config.ai.stt.apiKey ? new OpenAiCompatibleTranscriber({ apiKey: config.ai.stt.apiKey, baseUrl: stt.baseUrl, model: stt.model, providerName: stt.provider }) : null
   const f = settings.ai.features
   const off = (name: string) => `${name} is switched off in config/adaxai.yaml.`
-  const noKey = 'ANTHROPIC_API_KEY is not set on this server.'
+  const noKey = 'ANTHROPIC_API_KEY is not set on this server'
   return {
     drafter: f.noteDraft ? (llm?.drafter ?? null) : null,
     extractor: f.extraction ? (llm?.extractor ?? null) : null,
@@ -137,9 +137,9 @@ export function providersFromConfig(config: Config, settings: AppSettings): AiPr
     features: f,
     liveChunkSeconds: settings.ai.stt.liveChunkSeconds,
     reasons: {
-      llm: llm ? null : `AI drafting, extraction and recommendations are not configured (${noKey})`,
+      llm: llm ? null : `AI drafting, extraction and recommendations are not configured: ${noKey}.`,
       stt: transcriber ? null : 'Speech-to-text is not configured on this server (AI_STT_API_KEY is not set). Audio is stored; type or paste the transcript instead.',
-      vision: !f.imageAnalysis ? off('AI image analysis') : llm ? null : `AI image analysis is not configured (${noKey}) Images are stored for clinician review.`,
+      vision: !f.imageAnalysis ? off('AI image analysis') : llm ? null : `AI image analysis is not configured: ${noKey}. Photographs are still stored for clinician review.`,
     },
   }
 }

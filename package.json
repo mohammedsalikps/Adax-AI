@@ -27,6 +27,7 @@
     "db:seed": "npm run seed --workspace @adaxai/api",
     "db:generate": "npm run generate --workspace @adaxai/api",
     "retention": "npm run retention --workspace @adaxai/api --",
+    "demo:seed": "npm run demo:seed --workspace @adaxai/api",
     "lint": "oxlint --deny-warnings apps packages scripts e2e && node scripts/thermal.mjs lint",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p tsconfig.e2e.json",
     "test": "npm run test:api && npm run test:thermal && npm run test:e2e",

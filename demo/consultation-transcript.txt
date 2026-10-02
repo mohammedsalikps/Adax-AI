@@ -1,0 +1,13 @@
+Doctor: Good morning. What brings you in today?
+Patient: I have had a fever and a cough for three days.
+Patient: There is some chest pain when I cough, on the right side.
+Doctor: Any shortness of breath?
+Patient: No, I do not have any shortness of breath.
+Doctor: Do you have any allergies to medicines?
+Patient: No, no allergies.
+Patient: I take metformin, one tablet in the morning and one at night.
+Doctor: Your temperature today is 38 point 4.
+Doctor: Your chest has a few crackles on the right side.
+Doctor: I think this may be a chest infection. We will get a chest X-ray and a blood count.
+Doctor: Drink plenty of fluids and take paracetamol for the fever.
+Doctor: Come back in two days, or sooner if you feel breathless.

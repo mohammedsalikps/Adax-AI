@@ -18,6 +18,10 @@ PostgreSQL, and a Python thermal-imaging service.
 | Doctor consultation | Start/continue from the queue, structured note (complaint, history, medical history, examination, assessment, plan, follow-up), diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid in this build), patient timeline |
 | AI consultation assistant | Patient consent (ongoing or per consultation), browser recording / audio upload / typed transcript, numbered transcript segments, speech-to-text (OpenAI-compatible endpoint) and note drafting with Claude (`claude-opus-5-5`, structured output, server-side refusal fallback) when keys are configured, identifiers replaced before sending, per-suggestion accept/edit/reject with cited transcript lines, unsourced suggestions flagged, every AI call logged (model, prompt version, tokens, outcome). Without keys the app states that AI is unavailable. |
 | FLIR thermal imaging | Consent-gated upload of radiometric JPEGs with capture protocol, extraction of the per-pixel °C matrix and camera settings (Python service, `flyr`), viewer with palettes, span/level and hover readout, rectangle/ellipse regions (drawn or typed) with min/max/mean/SD and paired differences computed by the service, doctor approve/reject (then frozen in the database), visible-light image without location data |
+| Clinical AI assistant (expanded) | Fact extraction from the transcript with categories, speaker attribution, uncertainty flags and links to transcript lines; deterministic comparison with the record (allergies, medicines, vitals); rule-based safety checks that work without any AI provider; history-aware AI recommendations that cite record items and list missing information; accept/edit/reject/defer for every AI output with confirmation for flagged items; jobs with retry and duplicate-submission protection; live chunked transcription when speech-to-text is configured; activity trail per consultation |
+| Routing assistance | Deterministic rules in `config/routing.yaml` (department, red flags with escalation instructions, urgent-for-review priority, missing intake, least-busy clinician); staff apply or override with a reason; rules version stored with every suggestion |
+| Clinical photographs | Consent-gated JPEG/PNG/WebP upload (validated by the Python service; DICOM rejected), original kept unchanged, metadata-free preview, optional AI description marked unverified and reviewed by a doctor before it can be added to the note |
+| AI oversight | Admin AI operations page (counts only), doctor review list of rejected/edited AI output, review-outcome snapshots stored as evaluation runs, checksummed prompt versions, model registry, settings snapshots |
 | Thermal data workflow | Clinician labels on approved images (versioned taxonomy `thermal-labels-v1`, reference standard and certainty, several doctors per image, withdraw-only, enforced in the database), data origin recorded per image (`synthetic` by default, public sample files recognised by checksum), experimental rule-based flags on request (warm areas, paired-region asymmetry; labelled not validated), de-identified dataset export (ZIP: manifest + float32 matrices; approved images with research consent only), evaluation pipeline (rule agreement with Wilson intervals; logistic-regression baseline with subject-grouped cross-validation only when ≥ 20 cases per class from ≥ 10 subjects), admin Thermal data page |
 
 ## Accounts and security model
@@ -77,18 +81,44 @@ npm run db:stop
 
 ## AI assistant: what is and is not real
 
-- **Drafting only.** The assistant suggests passages for the note sections. It never adds diagnoses
-  or prescriptions, and nothing reaches the note until the doctor accepts or edits a suggestion.
-  Signing is a separate, attested doctor action.
-- **Configuration.** Set `ANTHROPIC_API_KEY` (drafting) and `AI_STT_API_KEY` (+ base URL/model) in
-  `.env`. Without them the UI says the feature is unavailable; it never shows placeholder output.
-- **Not validated.** Draft quality and transcription accuracy have not been evaluated on real
-  consultations or Indian languages. The adapters are tested against local mocks of the provider
-  APIs (request shape, parsing, error mapping), not against the live services.
-- **Privacy.** Registered names, MRN and phone number are replaced before text is sent; other
-  identifiers mentioned in conversation may still be present. Audio is stored locally under
-  `storage/`. Sending data to a provider requires the patient’s recorded consent and an
-  appropriate data-processing agreement with that provider.
+| Capability | Status |
+| --- | --- |
+| Transcript (typed, pasted), audio storage and playback, consent recording | Works without credentials |
+| Rule-based safety checks (allergy vs prescription incl. an illustrative group list, vital-sign flags, missing information, red-flag phrases, record conflicts) | Works without credentials; deterministic, versioned (`safety-rules-v1`, `record-compare-v1`) |
+| Routing suggestions | Works without credentials; deterministic (`config/routing.yaml`) |
+| Note drafting, fact extraction, recommendations, image description | **Need `ANTHROPIC_API_KEY`.** Without it the UI says the feature is unavailable and never shows placeholder output |
+| Transcription of uploaded or recorded audio, live chunked transcription | **Need `AI_STT_API_KEY`** (OpenAI-compatible endpoint). The configured interface returns finished text per chunk; there is no interim (streaming) text |
+| Speaker identification | Only from "Doctor:" / "Patient:" labels in the text. Provider diarisation is not implemented |
+| Clinical accuracy of any AI output | **Not evaluated.** Tested only against test doubles and a local mock of the provider API |
+
+- **Drafts only.** Every AI output (note suggestion, fact, recommendation, image description) is
+  stored as a draft. Nothing reaches the note until the doctor accepts or edits it and then adds
+  it; flagged or unsupported items need an explicit confirmation; signing stays a separate,
+  attested action. The assistant never diagnoses, prescribes, changes medicines, closes a
+  consultation or contacts the patient.
+- **Provenance.** Facts and recommendations link to the transcript lines or record items they
+  rely on (`ai_evidence`), with who said or recorded it (patient, clinician, existing record,
+  device or staff measurement, AI). Recommendations whose citations cannot be verified are marked
+  unsupported. When the model reports insufficient data, the UI says so.
+- **Versions and logs.** Every job records the provider, the model that answered, the prompt or
+  rules version, token counts, latency, errors, the data origin and a hash of the non-secret AI
+  settings. Prompt texts are checksummed: a changed prompt must get a new version id.
+- **Consent.** `ai_recording` (wording `2026-10-v2`) covers recording, drafting and record-aware
+  recommendations; patients who agreed to the earlier wording are asked again before
+  recommendations use their record. Photographs need `clinical_photography`, and their AI
+  description `ai_image_analysis`.
+- **Privacy.** Registered names, MRN, phone numbers and emergency-contact details are replaced
+  before text is sent; only age band and sex are sent, and only a metadata-free preview of a
+  photograph. Other identifiers mentioned in conversation may still be present. Sending data to a
+  provider requires the patient's consent and an appropriate data-processing agreement.
+- **No automatic learning.** Doctor decisions are recorded and summarised (Admin > AI operations,
+  Doctor > AI review); nothing is retrained from them. Any model change is a configuration and
+  governance decision.
+- **Architecture note.** Calls to hosted providers (Anthropic, OpenAI-compatible speech-to-text)
+  are thin adapters in the Node API behind provider-neutral interfaces
+  (`apps/api/src/ai/providers.ts`). The Python service does local processing (thermal, image
+  validation, dataset evaluation). A self-hosted model would be added as a Python service behind
+  the same interfaces.
 
 ## Thermal imaging: what is and is not real
 
@@ -153,6 +183,8 @@ Ports are set in `.env` (`API_PORT`, `WEB_PORT`, `THERMAL_PORT`, `DB_PORT`).
 | `npm run db:selftest` | Persistence check: write → clean stop → start → read, plus UTF-8 round-trip |
 | `npm run db:migrate` | Apply migrations to the dev database (`-- --target test` for the test database) |
 | `npm run db:seed` | Insert synthetic seed data (idempotent) |
+| `npm run demo:seed` | Add the synthetic demo patient for [docs/DEMO.md](docs/DEMO.md) (idempotent) |
+| `npm run retention [-- --dry-run]` | Delete consultation audio of signed consultations older than `retention.consultationAudioDays` (records kept, audited) |
 | `npm run db:generate` | Generate a new SQL migration from `apps/api/src/db/schema.ts` |
 | `npm run db:provision` | Re-apply roles, databases and grants (idempotent) |
 | `npm test` | API tests, thermal tests, then end-to-end tests |
@@ -191,6 +223,19 @@ can run while `npm run dev` is up and never changes development data.
 Copy-and-fill is automatic (`npm run setup`). See [`.env.example`](.env.example) for every
 variable. `.env` holds local credentials and is git-ignored. Never commit it, and never put
 real patient data in seed files.
+
+Non-secret settings are YAML, validated with strict schemas at start-up
+(`apps/api/src/settings/schema.ts`; an unknown or invalid key stops the API with a message naming
+it):
+
+| File | Contents | When changes apply |
+| --- | --- | --- |
+| [`config/adaxai.yaml`](config/adaxai.yaml) | AI features on/off, models, effort, timeouts, live chunk length, context limits, upload types and limits, retention, safety-rule groups and tolerances | **API restart** |
+| [`config/routing.yaml`](config/routing.yaml) | Routing rules, red-flag phrases and instructions, required intake | **At runtime** (re-read when the file changes; an invalid edit keeps the last valid rules and is shown in the routing dialog) |
+| `.env` | Secrets (database passwords, `ANTHROPIC_API_KEY`, `AI_STT_API_KEY`), ports, `DATA_ORIGIN`, optional model overrides (`AI_NOTE_MODEL`, `AI_STT_*`) | **API restart** |
+
+`DATA_ORIGIN` (default `synthetic`) is recorded on AI jobs, photographs and thermal images; set
+`clinical` only in a real clinical deployment. Nothing in YAML is a patient record.
 
 ## Project layout
 

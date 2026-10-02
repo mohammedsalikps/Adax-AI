@@ -22,12 +22,14 @@ npm run demo:seed -- --fresh
 recorded, a penicillin allergy, one signed earlier consultation (type 2 diabetes, metformin) and
 today's visit with vitals, ready for the doctor. Use `--fresh` for every clean run.
 
-Staff accounts (password: `SEED_DEMO_PASSWORD` from your `.env`):
+Staff accounts. Sign in with the username, not an email address. Password: the exact value of
+`SEED_DEMO_PASSWORD` in your `.env` (see the README's Troubleshooting if sign-in fails):
 
 | Account | Role |
 | --- | --- |
 | `nurse.anil` | Nurse (General Medicine) |
 | `dr.meera` | Doctor (General Medicine) |
+| `dr.rahul` | Doctor (Paediatrics) |
 | `admin` | Administrator |
 
 Use two browser windows (or one normal and one private) to switch roles quickly.

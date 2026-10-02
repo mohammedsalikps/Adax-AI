@@ -2,11 +2,11 @@ import crypto from 'node:crypto'
 import {
   type ActivationCodeResponse,
   AllergyInput,
-  CONSENT_VERSIONS,
   CreatePatientRequest,
   type DuplicateCandidate,
   RecordConsentRequest,
   UpdatePatientRequest,
+  WithdrawConsentRequest,
 } from '@adaxai/contracts'
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
@@ -14,10 +14,12 @@ import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
 import { currentUser } from '../auth/plugin.ts'
 import type { Db } from '../db/client.ts'
+import { revokeUserSessions } from '../auth/sessions.ts'
+import { grantConsent, requireConsent, withdrawConsentType } from '../consents/service.ts'
 import { allergies, consents, patientActivationCodes, patients, users, visits } from '../db/schema.ts'
 import { conflict, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
-import { activeConsent, fullName, getPatientOr404, loadPatientDetail, toSummary } from './service.ts'
+import { fullName, getPatientOr404, loadPatientDetail, toSummary } from './service.ts'
 
 const PatientParams = z.object({ id: z.uuid() })
 const SubParams = z.object({ id: z.uuid(), subId: z.uuid() })
@@ -57,8 +59,8 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
         .orderBy(sql`(${patients.mrn} = ${q}) desc`, sql`similarity(${patients.searchName}, ${term}) desc`, desc(patients.updatedAt))
         .limit(limit)
     }
-    // Search terms can be names, so only their length is audited.
-    await audit(db, req, { action: 'patient.search', details: { queryLength: q?.length ?? 0, results: rows.length } })
+    // Search terms can be names, so only their length is audited, with the patients the result disclosed.
+    await audit(db, req, { action: 'patient.search', details: { queryLength: q?.length ?? 0, results: rows.length, patientIds: rows.map(({ p }) => p.id) } })
     return { patients: rows.map(({ p, lastVisit: lv }) => toSummary(p, lv)) }
   })
 
@@ -77,6 +79,8 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
         .limit(5)
       if (dupes.length) {
         const candidates: DuplicateCandidate[] = dupes.map((p) => ({ id: p.id, mrn: p.mrn, fullName: fullName(p), dateOfBirth: p.dateOfBirth, phone: p.phone }))
+        // The warning shows existing patients' identities, so it is audited like a read.
+        await audit(db, req, { action: 'patient.duplicate_warning', details: { patientIds: dupes.map((p) => p.id) } })
         return reply.code(409).send({ error: 'possible_duplicate', message: 'A patient with the same phone number, or the same name and date of birth, already exists.', candidates })
       }
     }
@@ -162,30 +166,44 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
   })
 
   // ---- Consents ----
+  // Granting under the current wording; an earlier-wording grant is renewed (superseded) in the same step.
   app.post('/api/patients/:id/consents', { config: { permission: 'consents:write' } }, async (req, reply) => {
     const me = currentUser(req)
     const { id } = parse(PatientParams, req.params)
     const body = parse(RecordConsentRequest, req.body)
     await getPatientOr404(db, me.facilityId, id)
-    if (await activeConsent(db, id, body.type)) throw conflict('This consent is already recorded as granted', 'already_granted')
-    await db.transaction(async (tx) => {
-      const [c] = await tx.insert(consents).values({ patientId: id, type: body.type, method: body.method, notes: body.notes ?? null, version: CONSENT_VERSIONS[body.type], recordedBy: me.id }).returning({ id: consents.id })
-      await audit(tx, req, { action: 'consent.grant', entityType: 'consent', entityId: c!.id, patientId: id, details: { type: body.type, method: body.method } })
-    })
+    await db.transaction((tx) => grantConsent(tx, req, { patientId: id, type: body.type, method: body.method, notes: body.notes ?? null, recordedBy: me.id }))
     return reply.code(201).send(await loadPatientDetail(db, await getPatientOr404(db, me.facilityId, id)))
   })
 
+  /** Withdraws the purpose of this consent: every active grant of that type ends, with its consequences. */
   app.post('/api/patients/:id/consents/:subId/withdraw', { config: { permission: 'consents:write' } }, async (req) => {
     const me = currentUser(req)
     const { id, subId } = parse(SubParams, req.params)
+    const body = parse(WithdrawConsentRequest, req.body ?? {})
     await getPatientOr404(db, me.facilityId, id)
-    const [c] = await db
-      .update(consents)
-      .set({ status: 'withdrawn', withdrawnAt: sql`now()`, withdrawnBy: me.id })
-      .where(and(eq(consents.id, subId), eq(consents.patientId, id), eq(consents.status, 'granted')))
-      .returning({ type: consents.type })
+    const c = await db.query.consents.findFirst({ where: and(eq(consents.id, subId), eq(consents.patientId, id), eq(consents.status, 'granted')) })
     if (!c) throw notFound('Active consent')
-    await audit(db, req, { action: 'consent.withdraw', entityType: 'consent', entityId: subId, patientId: id, details: { type: c.type } })
+    await db.transaction((tx) => withdrawConsentType(tx, req, id, c.type, { userId: me.id, via: 'staff', reason: body.reason ?? null }))
+    return loadPatientDetail(db, await getPatientOr404(db, me.facilityId, id))
+  })
+
+  /** Switches the patient's portal account off at once (e.g. a password may be known to someone else). */
+  app.post('/api/patients/:id/portal-account/disable', { config: { permission: 'patients:write' } }, async (req) => {
+    const me = currentUser(req)
+    const { id } = parse(PatientParams, req.params)
+    await getPatientOr404(db, me.facilityId, id)
+    const account = await db.query.users.findFirst({ where: and(eq(users.patientId, id), eq(users.role, 'patient')) })
+    if (!account) throw notFound('Portal account')
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ isActive: false, updatedAt: sql`now()` }).where(eq(users.id, account.id))
+      await revokeUserSessions(tx, account.id)
+      await tx
+        .update(patientActivationCodes)
+        .set({ revokedAt: sql`now()` })
+        .where(and(eq(patientActivationCodes.patientId, id), isNull(patientActivationCodes.usedAt), isNull(patientActivationCodes.revokedAt)))
+      await audit(tx, req, { action: 'patient.portal_disable', entityType: 'user', entityId: account.id, patientId: id })
+    })
     return loadPatientDetail(db, await getPatientOr404(db, me.facilityId, id))
   })
 
@@ -194,9 +212,9 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
     const me = currentUser(req)
     const { id } = parse(PatientParams, req.params)
     const p = await getPatientOr404(db, me.facilityId, id)
+    // A code for an existing account is a reset: it sets a new password and switches the account back on.
     const account = await db.query.users.findFirst({ where: eq(users.patientId, id) })
-    if (account) throw conflict('This patient already has a portal account', 'portal_account_exists')
-    if (!(await activeConsent(db, id, 'portal_access'))) throw conflict('Record the patient’s consent to portal access first', 'consent_required')
+    await requireConsent(db, req, { patientId: id, type: 'portal_access', purpose: account ? 'portal account reset' : 'portal activation', acceptOlderWording: true })
     const code = newActivationCode()
     const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS)
     await db.transaction(async (tx) => {
@@ -205,9 +223,9 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
         .set({ revokedAt: sql`now()` })
         .where(and(eq(patientActivationCodes.patientId, id), isNull(patientActivationCodes.usedAt), isNull(patientActivationCodes.revokedAt)))
       await tx.insert(patientActivationCodes).values({ patientId: id, codeHash: hashActivationCode(code), expiresAt, createdBy: me.id })
-      await audit(tx, req, { action: 'patient.portal_code_issue', entityType: 'patient', entityId: id, patientId: id })
+      await audit(tx, req, { action: 'patient.portal_code_issue', entityType: 'patient', entityId: id, patientId: id, details: { reset: !!account } })
     })
-    const body: ActivationCodeResponse = { activationCode: code, expiresAt: expiresAt.toISOString(), mrn: p.mrn }
+    const body: ActivationCodeResponse = { activationCode: code, expiresAt: expiresAt.toISOString(), mrn: p.mrn, reset: !!account }
     return reply.code(201).send(body)
   })
 }

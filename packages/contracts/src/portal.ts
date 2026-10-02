@@ -67,7 +67,23 @@ export type PortalRecord = z.infer<typeof PortalRecord>
 export const PortalVital = z.object({ kind: VitalKind, value: z.number(), unit: z.string(), measuredAt: z.string(), source: z.enum(['manual', 'device']) })
 export type PortalVital = z.infer<typeof PortalVital>
 
-export const PortalConsent = z.object({ type: ConsentType, title: z.string(), description: z.string(), status: z.enum(['granted', 'withdrawn']), scope: z.string(), method: z.string(), recordedAt: z.string(), withdrawnAt: z.string().nullable(), version: z.string() })
+export const PortalConsent = z.object({
+  id: z.uuid(),
+  type: ConsentType,
+  title: z.string(),
+  /** The current wording; `currentWording` says whether the patient agreed to this wording or an earlier one. */
+  description: z.string(),
+  status: z.enum(['granted', 'withdrawn', 'superseded']),
+  scope: z.string(),
+  method: z.string(),
+  recordedAt: z.string(),
+  withdrawnAt: z.string().nullable(),
+  withdrawnVia: z.string().nullable(),
+  version: z.string(),
+  currentWording: z.boolean(),
+  /** What withdrawing changes at once (for active consents). */
+  withdrawalEffect: z.string().nullable(),
+})
 export type PortalConsent = z.infer<typeof PortalConsent>
 
 /** Doctor-approved thermal measurements: measurements only, never a diagnosis. */

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { AssignDeviceRequest, type AuscultationRecording, AuscultationSite, type Device, DeviceInput, DeviceReadingsRequest, EndAssignmentRequest, OptionalText, UpdateDeviceRequest, VITALS } from '@adaxai/contracts'
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
@@ -10,12 +10,14 @@ import { currentUser } from '../auth/plugin.ts'
 import type { SessionUser } from '../auth/sessions.ts'
 import type { Config } from '../config.ts'
 import { type Db, pgCode } from '../db/client.ts'
-import { auscultationRecordings, deviceAssignments, devices, encounters, files, observations, patients, users, visits } from '../db/schema.ts'
+import { auscultationRecordings, consents, deviceAssignments, devices, encounters, files, observations, patients, users, visits } from '../db/schema.ts'
 import { storeBytes } from '../files/storage.ts'
 import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, forbidden, HttpError, notFound, unauthorized } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
-import { activeConsent, getPatientOr404 } from '../patients/service.ts'
+import { currentConsent, requireConsent } from '../consents/service.ts'
+import { enforceLimit, type RateLimiter } from '../http/rate-limit.ts'
+import { getPatientOr404 } from '../patients/service.ts'
 import type { AppSettings } from '../settings/schema.ts'
 
 const IdParams = z.object({ id: z.uuid() })
@@ -29,8 +31,8 @@ const tokenHash = (t: string) => crypto.createHash('sha256').update(t).digest('h
  * integration would use (docs/DEVICES.md). Device readings are stored as
  * source = device, validation = device_unverified.
  */
-export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; config: Config; settings: AppSettings }) {
-  const { db, config, settings } = deps
+export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; config: Config; settings: AppSettings; limiter: RateLimiter }) {
+  const { db, config, settings, limiter } = deps
 
   async function deviceOr404(me: SessionUser, id: string) {
     const d = await db.query.devices.findFirst({ where: and(eq(devices.id, id), eq(devices.facilityId, me.facilityId)) })
@@ -38,7 +40,9 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
     return d
   }
 
-  async function toDevices(rows: (typeof devices.$inferSelect)[]): Promise<Device[]> {
+  /** Admins manage devices but do not read patient records: they see that a device is in use, not by whom. */
+  async function toDevices(rows: (typeof devices.$inferSelect)[], viewer: SessionUser): Promise<Device[]> {
+    const showPatient = viewer.role !== 'admin'
     const ids = rows.map((r) => r.id)
     const assigner = alias(users, 'assigner')
     const open = ids.length
@@ -63,7 +67,16 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
         notes: d.notes,
         hasToken: !!d.ingestTokenHash,
         tokenCreatedAt: d.tokenCreatedAt?.toISOString() ?? null,
-        assignment: a ? { id: a.a.id, patientId: a.a.patientId, patientName: [a.given, a.family].filter(Boolean).join(' '), mrn: a.mrn, assignedAt: a.a.assignedAt.toISOString(), assignedByName: a.by } : null,
+        assignment: a
+          ? {
+              id: a.a.id,
+              patientId: showPatient ? a.a.patientId : null,
+              patientName: showPatient ? [a.given, a.family].filter(Boolean).join(' ') : null,
+              mrn: showPatient ? a.mrn : null,
+              assignedAt: a.a.assignedAt.toISOString(),
+              assignedByName: a.by,
+            }
+          : null,
         createdAt: d.createdAt.toISOString(),
       }
     })
@@ -73,7 +86,11 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
   app.get('/api/devices', { config: { permission: 'devices:read' } }, async (req) => {
     const me = currentUser(req)
     const rows = await db.select().from(devices).where(eq(devices.facilityId, me.facilityId)).orderBy(devices.label)
-    return { devices: await toDevices(rows) }
+    const list = await toDevices(rows, me)
+    // The list shows which patients are on monitoring devices, so the read is audited with them.
+    const patientIds = list.flatMap((d) => (d.assignment?.patientId ? [d.assignment.patientId] : []))
+    await audit(db, req, { action: 'device.list_read', details: { devices: list.length, patientIds } })
+    return { devices: list }
   })
 
   app.post('/api/admin/devices', { config: { permission: 'devices:manage' } }, async (req, reply) => {
@@ -82,7 +99,7 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
     try {
       const [d] = await db.insert(devices).values({ ...body, manufacturer: body.manufacturer ?? null, model: body.model ?? null, notes: body.notes ?? null, facilityId: me.facilityId, createdBy: me.id }).returning()
       await audit(db, req, { action: 'device.register', entityType: 'device', entityId: d!.id, details: { kind: body.kind, integration: body.integration } })
-      return reply.code(201).send((await toDevices([d!]))[0])
+      return reply.code(201).send((await toDevices([d!], me))[0])
     } catch (e) {
       if (pgCode(e) === '23505') throw conflict('A device with that serial number is already registered', 'serial_taken')
       throw e
@@ -98,11 +115,13 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
       const open = await db.query.deviceAssignments.findFirst({ where: and(eq(deviceAssignments.deviceId, id), isNull(deviceAssignments.endedAt)) })
       if (open) throw conflict('End the device’s current assignment before retiring it', 'device_assigned')
     }
-    // A retired device can no longer post readings.
-    const tokenReset = body.status === 'retired' ? { ingestTokenHash: null, tokenCreatedAt: null } : {}
+    // A retired device, or one no longer integrated through a gateway, cannot post readings: its token is revoked.
+    const before = await deviceOr404(me, id)
+    const revoke = (body.status ?? before.status) === 'retired' || (body.integration ?? before.integration) !== 'gateway_api'
+    const tokenReset = revoke && before.ingestTokenHash ? { ingestTokenHash: null, tokenCreatedAt: null } : {}
     const [d] = await db.update(devices).set({ ...body, ...tokenReset, updatedAt: new Date() }).where(eq(devices.id, id)).returning()
-    await audit(db, req, { action: 'device.update', entityType: 'device', entityId: id, details: { changed: Object.keys(body) } })
-    return (await toDevices([d!]))[0]
+    await audit(db, req, { action: 'device.update', entityType: 'device', entityId: id, details: { changed: Object.keys(body), tokenRevoked: 'ingestTokenHash' in tokenReset } })
+    return (await toDevices([d!], me))[0]
   })
 
   /** Issues a new gateway token (shown once; only its hash is stored). Replaces any previous token. */
@@ -134,7 +153,7 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
     const d = await deviceOr404(me, id)
     if (d.status !== 'active') throw conflict('This device is retired', 'device_retired')
     await getPatientOr404(db, me.facilityId, body.patientId)
-    if (!(await activeConsent(db, body.patientId, 'device_monitoring'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to device readings first')
+    await requireConsent(db, req, { patientId: body.patientId, type: 'device_monitoring', purpose: 'device assignment' })
     if (body.visitId) {
       const v = await db.query.visits.findFirst({ where: and(eq(visits.id, body.visitId), eq(visits.patientId, body.patientId)) })
       if (!v) throw badRequest('Some fields are invalid', [{ path: 'visitId', message: 'Not a visit of this patient' }])
@@ -146,20 +165,22 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
       if (pgCode(e) === '23505') throw conflict('This device is already assigned. End that assignment first.', 'device_assigned')
       throw e
     }
-    return reply.code(201).send((await toDevices([d]))[0])
+    return reply.code(201).send((await toDevices([d], me))[0])
   })
 
   app.post('/api/device-assignments/:id/end', { config: { permission: 'devices:assign' } }, async (req) => {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const { reason } = parse(EndAssignmentRequest, req.body)
-    const a = await db.query.deviceAssignments.findFirst({ where: eq(deviceAssignments.id, id) })
-    if (!a) throw notFound('Assignment')
+    // Looked up within the caller's facility: another facility's assignment is "not found".
+    const [row] = await db.select({ a: deviceAssignments }).from(deviceAssignments).innerJoin(devices, eq(devices.id, deviceAssignments.deviceId)).where(and(eq(deviceAssignments.id, id), eq(devices.facilityId, me.facilityId)))
+    if (!row) throw notFound('Assignment')
+    const a = row.a
     const d = await deviceOr404(me, a.deviceId)
     if (a.endedAt) throw conflict('This assignment has already ended', 'assignment_ended')
     await db.update(deviceAssignments).set({ endedAt: new Date(), endedBy: me.id, endReason: reason }).where(and(eq(deviceAssignments.id, id), isNull(deviceAssignments.endedAt)))
     await audit(db, req, { action: 'device.unassign', entityType: 'device_assignment', entityId: id, patientId: a.patientId, details: { deviceId: d.id } })
-    return (await toDevices([d]))[0]
+    return (await toDevices([d], me))[0]
   })
 
   // ---- Gateway ingestion (device token, no user session) ----
@@ -167,18 +188,45 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
     const auth = req.headers.authorization ?? ''
     const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
     if (!token) throw unauthorized('Device token required')
+    await enforceLimit(db, limiter, req, reply, 'device-ingest', tokenHash(token), settings.security.rateLimits.deviceIngestPerToken)
     const d = await db.query.devices.findFirst({ where: eq(devices.ingestTokenHash, tokenHash(token)) })
+    const refuse = async (reason: string, patientId: string | null = null) => {
+      await audit(db, req, { action: 'device.ingest', outcome: 'denied', actorUserId: null, actorRole: 'device', ...(d && { entityType: 'device', entityId: d.id }), facilityId: d?.facilityId ?? null, patientId, details: { reason } })
+      req.denialAudited = true
+    }
     if (!d) {
-      await audit(db, req, { action: 'device.ingest', outcome: 'denied', actorUserId: null, actorRole: 'device', details: { reason: 'unknown_token' } })
+      await refuse('unknown_token')
       throw unauthorized('Unknown device token')
     }
-    if (d.status !== 'active' || d.integration !== 'gateway_api') throw forbidden('This device may not post readings')
+    if (d.status !== 'active' || d.integration !== 'gateway_api') {
+      await refuse('device_not_active_gateway')
+      throw forbidden('This device may not post readings')
+    }
     const body = parse(DeviceReadingsRequest, req.body)
     const measuredAt = new Date(body.measuredAt)
     if (measuredAt.getTime() > Date.now() + 5 * 60_000) throw badRequest('Some fields are invalid', [{ path: 'measuredAt', message: 'In the future' }])
-    const a = await db.query.deviceAssignments.findFirst({ where: and(eq(deviceAssignments.deviceId, d.id), isNull(deviceAssignments.endedAt)) })
-    if (!a) throw conflict('The device is not assigned to a patient; readings were not stored', 'device_unassigned')
-    if (!(await activeConsent(db, a.patientId, 'device_monitoring'))) throw conflict('The patient has not consented to device readings; readings were not stored', 'consent_required')
+    // Readings belong to the patient the device was assigned to WHEN THEY WERE MEASURED (a gateway may send
+    // buffered readings late, after the device was given to someone else).
+    const a = await db.query.deviceAssignments.findFirst({
+      where: and(eq(deviceAssignments.deviceId, d.id), lte(deviceAssignments.assignedAt, measuredAt), or(isNull(deviceAssignments.endedAt), gt(deviceAssignments.endedAt, measuredAt))),
+    })
+    if (!a) {
+      await refuse('no_assignment_at_measurement_time')
+      throw conflict('The device was not assigned to a patient when these readings were measured; readings were not stored', 'outside_assignment')
+    }
+    // Consent must be in place now and must already have been given when the readings were measured.
+    // A renewal under newer wording continues the same consent: walk back through superseded grants.
+    const c = await currentConsent(db, a.patientId, 'device_monitoring')
+    let since = c
+    while (since && since.recordedAt > measuredAt) {
+      const prev = await db.query.consents.findFirst({ where: and(eq(consents.supersededBy, since.id), eq(consents.status, 'superseded')) })
+      if (!prev) break
+      since = prev
+    }
+    if (!c || since!.recordedAt > measuredAt) {
+      await refuse(c ? 'measured_before_consent' : 'consent_missing_or_withdrawn', a.patientId)
+      throw conflict('The patient’s consent to device readings does not cover these readings; readings were not stored', 'consent_required')
+    }
     const ids = await db.transaction(async (tx) => {
       const rows = await tx
         .insert(observations)
@@ -197,7 +245,7 @@ export function registerDeviceRoutes(app: FastifyInstance, deps: { db: Db; confi
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     await getPatientOr404(db, me.facilityId, id)
-    if (!(await activeConsent(db, id, 'device_monitoring'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to device readings first')
+    await requireConsent(db, req, { patientId: id, type: 'device_monitoring', purpose: 'stethoscope recording' })
     const up = await readUpload(req, 'a stethoscope recording')
     const ext = AUDIO_EXT[up.mimetype]
     if (!ext || !settings.uploads.audio.types.includes(up.mimetype)) throw badRequest('Unsupported audio format', [{ path: 'file', message: 'Use WAV, MP3, M4A, OGG or WebM audio' }])

@@ -1,13 +1,15 @@
-import { CONSENT_LABELS, type ConsentType, type PortalConsent, type PortalHome, type PortalProfile, type PortalRecord, type PortalRecordSummary, type PortalThermalReport, type PortalVisit, type PortalVital } from '@adaxai/contracts'
+import { CONSENT_LABELS, CONSENT_VERSIONS, CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT, type ConsentType, consentWording, type PortalConsent, WithdrawConsentRequest, type PortalHome, type PortalProfile, type PortalRecord, type PortalRecordSummary, type PortalThermalReport, type PortalVisit, type PortalVital } from '@adaxai/contracts'
 import { and, asc, desc, eq, inArray } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
 import { currentUser } from '../auth/plugin.ts'
+import { SESSION_COOKIE } from '../auth/sessions.ts'
+import { consentState, withdrawConsentType } from '../consents/service.ts'
 import type { Db } from '../db/client.ts'
 import { allergies, consents, departments, diagnoses, encounterAmendments, encounters, facilities, observations, patients, prescriptionItems, thermalCaptures, users, visits } from '../db/schema.ts'
-import { forbidden, notFound } from '../http/errors.ts'
+import { forbidden, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 
 /**
@@ -22,9 +24,20 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
   const { db } = deps
   const perm = { config: { permission: 'portal:self' as const } }
 
-  function self(req: FastifyRequest) {
+  /**
+   * The signed-in patient. Portal access also needs the patient's portal
+   * consent on every request (withdrawal switches the account off as well;
+   * this is the second line of defence).
+   */
+  async function self(req: FastifyRequest) {
     const me = currentUser(req)
     if (me.role !== 'patient' || !me.patientId) throw forbidden('This account is not linked to a patient record')
+    const { state } = await consentState(db, me.patientId, 'portal_access')
+    if (state !== 'granted' && state !== 'outdated') {
+      await audit(db, req, { action: 'portal.access', outcome: 'denied', patientId: me.patientId, details: { reason: 'portal_consent_' + state } })
+      req.denialAudited = true
+      throw new HttpError(403, 'portal_consent_withdrawn', 'Online access to your records is switched off. Ask the clinic if you want it back.')
+    }
     return { me, patientId: me.patientId }
   }
 
@@ -80,7 +93,7 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
   }
 
   app.get('/api/portal/home', perm, async (req): Promise<PortalHome> => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const p = (await db.query.patients.findFirst({ where: eq(patients.id, patientId) }))!
     const { rows } = await signedRecords(patientId)
     const visitsOut = await visitList(patientId)
@@ -97,7 +110,7 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
   })
 
   app.get('/api/portal/profile', perm, async (req): Promise<PortalProfile> => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const [row] = await db.select({ p: patients, facility: facilities.name }).from(patients).innerJoin(facilities, eq(facilities.id, patients.facilityId)).where(eq(patients.id, patientId))
     const p = row!.p
     const al = await db.select().from(allergies).where(and(eq(allergies.patientId, patientId), eq(allergies.status, 'active')))
@@ -120,14 +133,14 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
   })
 
   app.get('/api/portal/visits', perm, async (req) => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const out = await visitList(patientId)
     await read(req, patientId, 'visits')
     return { visits: out }
   })
 
   app.get('/api/portal/records', perm, async (req) => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const { rows, dx, rx } = await signedRecords(patientId)
     await read(req, patientId, 'records')
     return { records: rows.map((r) => summary(r, dx, rx)) }
@@ -135,11 +148,15 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
 
   /** One signed record. Another patient's record, or an unsigned draft, is "not found". */
   app.get('/api/portal/records/:id', perm, async (req): Promise<PortalRecord> => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const { id } = parse(z.object({ id: z.uuid() }), req.params)
     const { rows, dx, rx } = await signedRecords(patientId)
     const r = rows.find((x) => x.e.id === id)
-    if (!r) throw notFound('Record')
+    if (!r) {
+      // Another patient's record, a draft or a wrong id: one answer for all, and the attempt is recorded.
+      await audit(db, req, { action: 'portal.read', outcome: 'denied', entityType: 'record', entityId: id, patientId, details: { what: 'record', reason: 'not_found_or_not_owned' } })
+      throw notFound('Record')
+    }
     const author = alias(users, 'author')
     const am = await db.select({ a: encounterAmendments, name: author.fullName }).from(encounterAmendments).innerJoin(author, eq(author.id, encounterAmendments.authorId)).where(eq(encounterAmendments.encounterId, id)).orderBy(asc(encounterAmendments.createdAt))
     await read(req, patientId, 'record', id)
@@ -159,36 +176,63 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
   })
 
   app.get('/api/portal/vitals', perm, async (req) => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const rows = await db.select().from(observations).where(and(eq(observations.patientId, patientId), eq(observations.enteredInError, false))).orderBy(desc(observations.measuredAt)).limit(500)
     await read(req, patientId, 'vitals')
     return { vitals: rows.map((o): PortalVital => ({ kind: o.kind as PortalVital['kind'], value: o.value, unit: o.unit, measuredAt: o.measuredAt.toISOString(), source: o.source as PortalVital['source'] })) }
   })
 
   app.get('/api/portal/consents', perm, async (req) => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const rows = await db.select().from(consents).where(eq(consents.patientId, patientId)).orderBy(desc(consents.recordedAt))
     await read(req, patientId, 'consents')
     return {
-      consents: rows.map(
-        (c): PortalConsent => ({
-          type: c.type as ConsentType,
-          title: CONSENT_LABELS[c.type as ConsentType].title,
-          description: CONSENT_LABELS[c.type as ConsentType].description,
-          status: c.withdrawnAt ? 'withdrawn' : (c.status as 'granted'),
+      consents: rows.map((c): PortalConsent => {
+        const type = c.type as ConsentType
+        // The wording this patient agreed to (an earlier version where applicable).
+        const wording = consentWording(type, c.version) ?? CONSENT_LABELS[type]
+        return {
+          id: c.id,
+          type,
+          title: wording.title,
+          description: wording.description,
+          status: c.status as PortalConsent['status'],
           scope: c.scope,
           method: c.method,
           recordedAt: c.recordedAt.toISOString(),
           withdrawnAt: c.withdrawnAt?.toISOString() ?? null,
+          withdrawnVia: c.withdrawnVia,
           version: c.version,
-        }),
-      ),
+          currentWording: c.version === CONSENT_VERSIONS[type],
+          withdrawalEffect: c.status === 'granted' ? CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT[type] : null,
+        }
+      }),
     }
+  })
+
+  /**
+   * The patient withdraws one of their consents (granting stays with clinic
+   * staff, who explain the wording). Withdrawing portal access signs the
+   * patient out at once.
+   */
+  app.post('/api/portal/consents/:id/withdraw', perm, async (req, reply) => {
+    const { me, patientId } = await self(req)
+    const { id } = parse(z.object({ id: z.uuid() }), req.params)
+    const body = parse(WithdrawConsentRequest, req.body ?? {})
+    const c = await db.query.consents.findFirst({ where: and(eq(consents.id, id), eq(consents.patientId, patientId), eq(consents.status, 'granted')) })
+    if (!c) {
+      await audit(db, req, { action: 'consent.withdraw', outcome: 'denied', entityType: 'consent', entityId: id, patientId, details: { via: 'patient_portal', reason: 'not_found_or_not_owned' } })
+      throw notFound('Active consent')
+    }
+    const result = await db.transaction((tx) => withdrawConsentType(tx, req, patientId, c.type as ConsentType, { userId: me.id, via: 'patient_portal', reason: body.reason ?? null }))
+    const signedOut = c.type === 'portal_access'
+    if (signedOut) void reply.clearCookie(SESSION_COOKIE, { path: '/' })
+    return { ok: true, signedOut, effects: result.effects }
   })
 
   /** Doctor-approved thermal measurements (measurements only). */
   app.get('/api/portal/thermal', perm, async (req) => {
-    const { patientId } = self(req)
+    const { patientId } = await self(req)
     const rows = await db.select().from(thermalCaptures).where(and(eq(thermalCaptures.patientId, patientId), eq(thermalCaptures.status, 'approved'))).orderBy(desc(thermalCaptures.createdAt))
     await read(req, patientId, 'thermal')
     return {

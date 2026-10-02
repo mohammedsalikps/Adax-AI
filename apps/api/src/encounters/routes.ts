@@ -25,7 +25,11 @@ export function registerEncounterRoutes(app: FastifyInstance, { db }: { db: Db }
     const visit = await db.query.visits.findFirst({ where: and(eq(visits.id, id), eq(visits.facilityId, me.facilityId)) })
     if (!visit) throw notFound('Visit')
     const existing = await db.query.encounters.findFirst({ where: eq(encounters.visitId, id) })
-    if (existing) return loadEncounter(db, me, existing)
+    if (existing) {
+      // Resuming opens the full record, so it is audited like a read.
+      await audit(db, req, { action: 'encounter.read', entityType: 'encounter', entityId: existing.id, patientId: existing.patientId, details: { via: 'resume', visitId: id } })
+      return loadEncounter(db, me, existing)
+    }
     if (!OPEN_VISIT_STATUSES.includes(visit.status)) throw conflict('This visit is closed', 'visit_closed')
 
     const created = await db.transaction(async (tx) => {
@@ -142,6 +146,8 @@ export function registerEncounterRoutes(app: FastifyInstance, { db }: { db: Db }
     const body = parse(AmendmentRequest, req.body)
     const e = await getEncounterOr404(db, me, id)
     if (e.status !== 'signed') throw conflict('Edit the draft directly; amendments are for signed records', 'not_signed')
+    // Product decision (docs/STATUS.md): only the doctor who signed a consultation amends it.
+    if (e.doctorId !== me.id) throw forbidden('Only the doctor who signed this consultation can amend it')
     await db.transaction(async (tx) => {
       const [a] = await tx.insert(encounterAmendments).values({ encounterId: id, authorId: me.id, reason: body.reason, content: body.content }).returning({ id: encounterAmendments.id })
       await audit(tx, req, { action: 'encounter.amend', entityType: 'encounter', entityId: id, patientId: e.patientId, details: { amendmentId: a!.id } })

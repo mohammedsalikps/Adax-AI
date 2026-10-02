@@ -1,9 +1,9 @@
-import type { Allergy, Consent, PatientDetail, PatientSummary } from '@adaxai/contracts'
+import { type Allergy, type Consent, CONSENT_LABELS, CONSENT_VERSIONS, type ConsentSummary, type ConsentType, type PatientDetail, type PatientSummary } from '@adaxai/contracts'
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { DbOrTx } from '../db/client.ts'
 import { allergies, consents, facilities, patientActivationCodes, patients, users, visits } from '../db/schema.ts'
-import { notFound } from '../http/errors.ts'
+import { deniedNotFound, notFound } from '../http/errors.ts'
 
 export type PatientRow = typeof patients.$inferSelect
 
@@ -44,7 +44,11 @@ export function toSummary(p: PatientRow, lastVisitDate: string | null = null): P
 /** Loads a patient of the caller's facility or throws 404 (never reveals other facilities' records). */
 export async function getPatientOr404(db: DbOrTx, facilityId: string, patientId: string): Promise<PatientRow> {
   const p = await db.query.patients.findFirst({ where: and(eq(patients.id, patientId), eq(patients.facilityId, facilityId)) })
-  if (!p) throw notFound('Patient')
+  if (!p) {
+    // Same answer whether the patient is elsewhere or does not exist; the audit log tells them apart.
+    const elsewhere = await db.query.patients.findFirst({ columns: { id: true }, where: eq(patients.id, patientId) })
+    throw deniedNotFound('Patient', { entityType: 'patient', entityId: patientId, reason: elsewhere ? 'other_facility' : 'not_found' })
+  }
   return p
 }
 
@@ -67,13 +71,15 @@ export async function listAllergies(db: DbOrTx, patientId: string): Promise<Alle
 }
 
 export async function listConsents(db: DbOrTx, patientId: string): Promise<Consent[]> {
+  const withdrawer = alias(users, 'withdrawer')
   const rows = await db
-    .select({ c: consents, by: users.fullName })
+    .select({ c: consents, by: users.fullName, wBy: withdrawer.fullName })
     .from(consents)
     .leftJoin(users, eq(users.id, consents.recordedBy))
+    .leftJoin(withdrawer, eq(withdrawer.id, consents.withdrawnBy))
     .where(eq(consents.patientId, patientId))
     .orderBy(desc(consents.recordedAt))
-  return rows.map(({ c, by }) => ({
+  return rows.map(({ c, by, wBy }) => ({
     id: c.id,
     type: c.type,
     status: c.status as Consent['status'],
@@ -84,25 +90,31 @@ export async function listConsents(db: DbOrTx, patientId: string): Promise<Conse
     recordedAt: c.recordedAt.toISOString(),
     recordedByName: by,
     withdrawnAt: c.withdrawnAt?.toISOString() ?? null,
+    withdrawnByName: wBy,
+    withdrawReason: c.withdrawReason,
+    withdrawnVia: c.withdrawnVia,
+    supersededBy: c.supersededBy,
     version: c.version,
+    currentWording: c.version === CONSENT_VERSIONS[c.type],
   }))
 }
 
-/** Active (granted, not withdrawn) ongoing consent of a type, if any. */
-export async function activeConsent(db: DbOrTx, patientId: string, type: Consent['type'], encounterId?: string) {
-  return db.query.consents.findFirst({
-    where: and(
-      eq(consents.patientId, patientId),
-      eq(consents.type, type),
-      eq(consents.status, 'granted'),
-      isNull(consents.withdrawnAt),
-      encounterId ? sql`(${consents.scope} = 'ongoing' or ${consents.encounterId} = ${encounterId})` : eq(consents.scope, 'ongoing'),
-    ),
+/** State of every consent purpose for a patient (ongoing grants; consultation-only grants are shown in the history). */
+export function consentSummary(list: Consent[]): ConsentSummary[] {
+  return (Object.keys(CONSENT_LABELS) as ConsentType[]).map((type) => {
+    const active = list.filter((c) => c.type === type && c.status === 'granted' && c.scope === 'ongoing').sort((a, b) => Number(b.currentWording) - Number(a.currentWording) || b.recordedAt.localeCompare(a.recordedAt))[0]
+    if (active) return { type, state: active.currentWording ? 'granted' : 'outdated', consentId: active.id }
+    const last = list.find((c) => c.type === type && !(c.scope === 'encounter' && c.status === 'granted'))
+    return { type, state: last?.status === 'withdrawn' ? 'withdrawn' : 'not_recorded', consentId: null }
   })
 }
 
+/** The grant that applies now (current wording first, then the most recent). */
+export { currentConsent as activeConsent } from '../consents/service.ts'
+
 export async function loadPatientDetail(db: DbOrTx, p: PatientRow): Promise<PatientDetail> {
   const portalUser = alias(users, 'portal_user')
+  const consentList = await listConsents(db, p.id)
   const [[account], [pending], [last]] = await Promise.all([
     db.select({ active: portalUser.isActive }).from(portalUser).where(eq(portalUser.patientId, p.id)).limit(1),
     db
@@ -127,8 +139,9 @@ export async function loadPatientDetail(db: DbOrTx, p: PatientRow): Promise<Pati
     emergencyContactPhone: p.emergencyContactPhone,
     noKnownAllergies: p.noKnownAllergies,
     allergies: await listAllergies(db, p.id),
-    consents: await listConsents(db, p.id),
-    portalAccount: { active: !!account?.active, activationPending: (pending?.n ?? 0) > 0 },
+    consents: consentList,
+    consentStates: consentSummary(consentList),
+    portalAccount: { state: !account ? 'none' : account.active ? 'active' : 'deactivated', active: !!account?.active, activationPending: (pending?.n ?? 0) > 0 },
     createdAt: p.createdAt.toISOString(),
   }
 }

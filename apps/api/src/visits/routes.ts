@@ -103,7 +103,7 @@ export function registerVisitRoutes(app: FastifyInstance, { db, encounterLookup 
       conds.push(mineCond!)
     }
     const list = await withEncounters(and(...conds)!, date)
-    await audit(db, req, { action: 'queue.read', details: { date, count: list.length, mine: q.mine === 'true' } })
+    await audit(db, req, { action: 'queue.read', details: { date, count: list.length, mine: q.mine === 'true', patientIds: [...new Set(list.map((v) => v.patient.id))] } })
     return { date, visits: list }
   })
 

@@ -1,20 +1,18 @@
 import {
-  type ActivationCodeResponse,
   AllergyInput,
-  CONSENT_LABELS,
-  type ConsentType,
   type Observation,
   type PatientDetail,
-  type RecordConsentRequest,
   SEX_LABELS,
   VITALS,
   type Visit,
 } from '@adaxai/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarPlus, KeyRound, Plus } from 'lucide-react'
+import { CalendarPlus, Plus } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { CheckInDialog } from '../../components/clinical/CheckInDialog.tsx'
+import { ConsentsCard } from '../../components/clinical/ConsentsCard.tsx'
+import { PortalAccountCard } from '../../components/clinical/PortalAccountCard.tsx'
 import { PatientBanner } from '../../components/clinical/PatientBanner.tsx'
 import { FlagLabel, fmtValue } from '../../components/clinical/Vitals.tsx'
 import { VisitStatusBadge } from '../../components/clinical/VisitStatusBadge.tsx'
@@ -115,121 +113,6 @@ function AllergiesCard({ p }: { p: PatientDetail }) {
               <option value="severe">Severe</option>
             </SelectField>
           </form>
-        </Dialog>
-      )}
-    </Card>
-  )
-}
-
-function ConsentsCard({ p }: { p: PatientDetail }) {
-  const toast = useToast()
-  const [recording, setRecording] = useState<ConsentType | null>(null)
-  const [method, setMethod] = useState<'verbal' | 'written'>('verbal')
-  const grant = usePatientMutation<RecordConsentRequest>(p.id, '/consents')
-  const qc = useQueryClient()
-  const withdraw = useMutation({
-    mutationFn: (id: string) => api<PatientDetail>(`/patients/${p.id}/consents/${id}/withdraw`, { method: 'POST' }),
-    onSuccess: (d) => (qc.setQueryData(patientKey(p.id), d), toast('success', 'Consent withdrawn')),
-  })
-  const types = Object.keys(CONSENT_LABELS) as ConsentType[]
-  return (
-    <Card title="Consents">
-      <ul className="divide-y divide-line">
-        {types.map((t) => {
-          const current = p.consents.find((c) => c.type === t && c.status === 'granted' && c.scope === 'ongoing')
-          return (
-            <li key={t} className="flex flex-wrap items-start justify-between gap-2 py-3 first:pt-0 last:pb-0">
-              <div className="min-w-0 max-w-md">
-                <p className="text-sm font-medium">{CONSENT_LABELS[t].title}</p>
-                <p className="text-xs text-ink-muted">{CONSENT_LABELS[t].description}</p>
-                {current && (
-                  <p className="mt-1 text-xs text-ink-muted">
-                    {current.method} · {fmtDateTime(current.recordedAt)} · {current.recordedByName ?? 'patient'}
-                  </p>
-                )}
-              </div>
-              {current ? (
-                <div className="flex items-center gap-2">
-                  <Badge tone="ok">Granted</Badge>
-                  <Button size="sm" variant="ghost" loading={withdraw.isPending && withdraw.variables === current.id} onClick={() => withdraw.mutate(current.id)}>
-                    Withdraw
-                  </Button>
-                </div>
-              ) : (
-                <Button size="sm" variant="secondary" onClick={() => setRecording(t)}>
-                  Record consent
-                </Button>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-      {recording && (
-        <Dialog
-          open
-          onClose={() => setRecording(null)}
-          title={`Record consent: ${CONSENT_LABELS[recording].title}`}
-          footer={
-            <>
-              <Button variant="secondary" onClick={() => setRecording(null)}>
-                Cancel
-              </Button>
-              <Button loading={grant.isPending} onClick={() => grant.mutate({ type: recording, method }, { onSuccess: () => (toast('success', 'Consent recorded'), setRecording(null)) })}>
-                Patient agrees
-              </Button>
-            </>
-          }
-        >
-          {grant.isError && <Alert tone="error" className="mb-3">{errorMessage(grant.error)}</Alert>}
-          <p className="text-sm">Explain to the patient, in their language:</p>
-          <blockquote className="my-3 border-l-4 border-brand pl-3 text-sm">{CONSENT_LABELS[recording].description}</blockquote>
-          <p className="mb-3 text-sm">The patient can withdraw at any time. Record consent only if they agree.</p>
-          <SelectField label="How was consent given?" value={method} onChange={(e) => setMethod(e.target.value as 'verbal')}>
-            <option value="verbal">Verbal</option>
-            <option value="written">Written (signed form)</option>
-          </SelectField>
-        </Dialog>
-      )}
-    </Card>
-  )
-}
-
-function PortalCard({ p }: { p: PatientDetail }) {
-  const qc = useQueryClient()
-  const [code, setCode] = useState<ActivationCodeResponse | null>(null)
-  const issue = useMutation({
-    mutationFn: () => api<ActivationCodeResponse>(`/patients/${p.id}/portal-activation`, { method: 'POST' }),
-    onSuccess: (r) => (setCode(r), void qc.invalidateQueries({ queryKey: patientKey(p.id) })),
-  })
-  const consented = p.consents.some((c) => c.type === 'portal_access' && c.status === 'granted')
-  return (
-    <Card title="Patient portal">
-      {p.portalAccount.active ? (
-        <p className="text-sm">
-          <Badge tone="ok">Active</Badge> The patient signs in with MRN <span className="font-mono">{p.mrn}</span>.
-        </p>
-      ) : (
-        <div className="space-y-3 text-sm">
-          <p>{p.portalAccount.activationPending ? 'An activation code has been issued and not used yet.' : 'No portal account yet.'}</p>
-          {!consented && <Alert tone="info">Record the patient’s consent to portal access first.</Alert>}
-          {issue.isError && <Alert tone="error">{errorMessage(issue.error)}</Alert>}
-          <Button size="sm" variant="secondary" icon={<KeyRound aria-hidden="true" className="size-4" />} disabled={!consented} loading={issue.isPending} onClick={() => issue.mutate()}>
-            {p.portalAccount.activationPending ? 'Issue a new code' : 'Issue activation code'}
-          </Button>
-        </div>
-      )}
-      {code && (
-        <Dialog open onClose={() => setCode(null)} title="Activation code" footer={<Button onClick={() => setCode(null)}>Done</Button>}>
-          <p className="text-sm">Give the patient their MRN and this code. It works once and expires {fmtDateTime(code.expiresAt)}. It will not be shown again.</p>
-          <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-lg border border-line bg-canvas p-3">
-            <dt className="text-sm text-ink-muted">MRN</dt>
-            <dd className="font-mono text-lg">{code.mrn}</dd>
-            <dt className="text-sm text-ink-muted">Code</dt>
-            <dd className="font-mono text-lg select-all" data-testid="activation-code">
-              {code.activationCode}
-            </dd>
-          </dl>
-          <p className="mt-3 text-sm">The patient activates at the sign-in page → “Activate your account”.</p>
         </Dialog>
       )}
     </Card>
@@ -412,7 +295,7 @@ export function PatientProfilePage({ visitAction, timeline, extra, companion }: 
         </div>
         {extra && <div className="xl:col-span-2">{extra(p)}</div>}
         <ConsentsCard p={p} />
-        <PortalCard p={p} />
+        <PortalAccountCard p={p} />
       </div>
       {checkingIn && <CheckInDialog patientId={p.id} patientName={p.fullName} onClose={closeCheckIn} />}
     </>

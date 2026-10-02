@@ -115,9 +115,11 @@ describe('patient portal', () => {
       const res = await call(ctx.app, method as 'GET', url, { cookie: a.cookie, body: method === 'POST' ? {} : undefined })
       expect([url, res.statusCode]).toEqual([url, 403])
     }
-    // Every refused attempt is audited.
+    // Every refused attempt is audited: the staff/AI probes and the two portal record probes.
     const { rows } = await adminQuery("SELECT count(*)::int AS n FROM audit_events WHERE outcome = 'denied' AND actor_role = 'patient'")
-    expect(rows[0].n).toBe(probes.length)
+    expect(rows[0].n).toBe(probes.length + 2)
+    const { rows: recordProbes } = await adminQuery("SELECT entity_id FROM audit_events WHERE action = 'portal.read' AND outcome = 'denied' ORDER BY id")
+    expect(recordProbes.map((r) => r.entity_id)).toEqual([b.encounterId, a.draftId])
   })
 
   it('staff accounts cannot use the portal; portal responses are not cacheable and reads are audited', async () => {

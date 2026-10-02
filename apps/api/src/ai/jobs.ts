@@ -190,7 +190,9 @@ export class JobService {
         .onConflictDoUpdate({ target: [aiModels.provider, aiModels.model, aiModels.capability], set: { lastUsedAt: new Date() } })
       const result = await out.persist(tx, run!.id)
       await tx.update(aiJobs).set({ status: 'succeeded', lastErrorCode: null, lastErrorMessage: null, retryable: false, summary: out.summary, updatedAt: new Date(), completedAt: new Date() }).where(eq(aiJobs.id, job.id))
-      await audit(tx, req, { action: `ai.${job.kind}`, entityType: 'ai_job', entityId: job.id, patientId: job.patientId, details: { runId: run!.id, provider: r.provider, model: r.model, promptVersion: r.promptVersion, ...out.summary } })
+      // Counts and flags only: text in a summary (e.g. a model's reason) is clinical content and stays out of the audit log.
+      const counts = Object.fromEntries(Object.entries(out.summary).filter(([, v]) => typeof v !== 'string'))
+      await audit(tx, req, { action: `ai.${job.kind}`, entityType: 'ai_job', entityId: job.id, patientId: job.patientId, details: { runId: run!.id, provider: r.provider, model: r.model, promptVersion: r.promptVersion, ...counts } })
       return result
     })
   }

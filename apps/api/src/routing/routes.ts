@@ -148,7 +148,13 @@ export function registerRoutingRoutes(app: FastifyInstance, deps: { db: Db; rout
     const { reason } = parse(OverrideRoutingRequest, req.body)
     const { r, v } = await pendingOr409(me, id)
     await db.transaction(async (tx) => {
-      await tx.update(routingSuggestions).set({ status: 'overridden', reviewedBy: me.id, reviewedAt: new Date(), reviewReason: reason }).where(and(eq(routingSuggestions.id, id), eq(routingSuggestions.status, 'pending')))
+      const [changed] = await tx
+        .update(routingSuggestions)
+        .set({ status: 'overridden', reviewedBy: me.id, reviewedAt: new Date(), reviewReason: reason })
+        .where(and(eq(routingSuggestions.id, id), eq(routingSuggestions.status, 'pending')))
+        .returning({ id: routingSuggestions.id })
+      // Someone else decided in the meantime: nothing is recorded twice.
+      if (!changed) throw conflict('This suggestion was already decided', 'already_decided')
       await recordReview(req, me, r, 'rejected', reason, tx)
     })
     return respond(v.id)

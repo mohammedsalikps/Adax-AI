@@ -13,7 +13,8 @@ import { readStoredBytes, storeBytes } from '../files/storage.ts'
 import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
-import { activeConsent, getPatientOr404 } from '../patients/service.ts'
+import { requireConsent } from '../consents/service.ts'
+import { getPatientOr404 } from '../patients/service.ts'
 import type { ThermalService } from './client.ts'
 
 const IdParams = z.object({ id: z.uuid() })
@@ -109,7 +110,7 @@ export function registerThermalRoutes(app: FastifyInstance, deps: { db: Db; conf
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     await getPatientOr404(db, me.facilityId, id)
-    if (!(await activeConsent(db, id, 'thermal_imaging'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to thermal imaging first')
+    await requireConsent(db, req, { patientId: id, type: 'thermal_imaging', purpose: 'thermal image' })
     const up = await readUpload(req, 'a thermal image')
     const data = up.data
     const field = (name: string) => up.fields[name]
@@ -189,7 +190,7 @@ export function registerThermalRoutes(app: FastifyInstance, deps: { db: Db; conf
       .where(and(eq(thermalCaptures.facilityId, me.facilityId), q.status ? eq(thermalCaptures.status, q.status) : undefined))
       .orderBy(desc(thermalCaptures.createdAt))
       .limit(50)
-    await audit(db, req, { action: 'thermal.list', details: { status: q.status ?? null, count: rows.length } })
+    await audit(db, req, { action: 'thermal.list', details: { status: q.status ?? null, count: rows.length, patientIds: [...new Set(rows.map((r) => r.c.patientId))] } })
     return {
       captures: rows.map(({ c, given, family, mrn }) => ({
         id: c.id,

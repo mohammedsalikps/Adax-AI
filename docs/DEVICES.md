@@ -43,9 +43,22 @@ Content-Type: application/json
 
 - `kind` is one of the vital kinds in `packages/contracts/src/vitals.ts`; values outside the
   plausible range are rejected (400). Timestamps more than 5 minutes in the future are rejected.
-- The patient is the one the device is **currently assigned to**; the gateway never names a
-  patient. Unassigned device → 409 `device_unassigned`; no consent → 409 `consent_required`;
-  unknown token → 401 (audited); retired device or wrong integration mode → 401/403.
+- The patient is the one the device was **assigned to when the readings were measured**
+  (`measuredAt`). The gateway never names a patient. Buffered readings sent late are therefore
+  filed to the right patient, even after the device was given to someone else.
+- **Refusals** (all audited, nothing stored):
+
+  | Situation | Response |
+  | --- | --- |
+  | Not assigned to anyone at `measuredAt`, including before the assignment started | 409 `outside_assignment` |
+  | That patient's device consent missing, withdrawn, or given after `measuredAt` | 409 `consent_required` |
+  | Unknown token | 401 |
+  | Retired device or wrong integration mode | 403 |
+  | Too many requests for the token | 429 with `Retry-After` (`config/adaxai.yaml` → `security.rateLimits.deviceIngestPerToken`) |
+
+  A renewal of the consent under newer wording counts as continuous consent. Withdrawing device
+  consent ends the patient's device assignments at once. Changing a device's integration away
+  from `gateway_api`, or retiring it, revokes its token.
 - Response: `201 { "stored": n, "validationStatus": "device_unverified" }`.
 
 ## What a real integration needs

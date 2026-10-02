@@ -18,7 +18,8 @@ import type { JobService } from '../ai/jobs.ts'
 import { sha256 } from '../ai/jobs.ts'
 import type { AiProviders } from '../ai/providers.ts'
 import type { JobExecutor } from '../ai/routes.ts'
-import { activeConsent, getPatientOr404 } from '../patients/service.ts'
+import { requireConsent } from '../consents/service.ts'
+import { getPatientOr404 } from '../patients/service.ts'
 import type { AppSettings } from '../settings/schema.ts'
 import type { ThermalService } from '../thermal/client.ts'
 
@@ -52,7 +53,9 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
     return img
   }
 
-  async function toImages(rows: ImageRow[]): Promise<ClinicalImage[]> {
+  /** Unreviewed (or rejected) AI descriptions are for the doctor reviewing them; other staff see only reviewed ones. */
+  async function toImages(rows: ImageRow[], viewer: SessionUser): Promise<ClinicalImage[]> {
+    const reviewedOnly = viewer.role !== 'doctor'
     if (!rows.length) return []
     const ids = rows.map((r) => r.id)
     const decider = alias(users, 'decider')
@@ -86,7 +89,7 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
       createdAt: r.createdAt.toISOString(),
       createdByName: creators.find((c) => c.id === r.createdBy)?.name ?? null,
       analyses: analyses
-        .filter((a) => a.a.imageId === r.id)
+        .filter((a) => a.a.imageId === r.id && (!reviewedOnly || a.a.status === 'accepted' || a.a.status === 'edited'))
         .map(
           ({ a, run, by }): ImageAnalysis => ({
             id: a.id,
@@ -107,7 +110,7 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const patient = await getPatientOr404(db, me.facilityId, id)
-    if (!(await activeConsent(db, id, 'clinical_photography'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to clinical photographs first')
+    await requireConsent(db, req, { patientId: id, type: 'clinical_photography', purpose: 'clinical photograph' })
     const up = await readUpload(req, 'a photograph')
     const fields = parse(ImageUploadFields, Object.fromEntries(Object.entries(up.fields).map(([k, v]) => [k, v || undefined])))
     const data = up.data
@@ -147,7 +150,7 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
       await audit(tx, req, { action: 'image.upload', entityType: 'clinical_image', entityId: img!.id, patientId: patient.id, details: { imageType: fields.imageType, format: inspected.format, hadGps: inspected.hadGps, encounterId: fields.encounterId ?? null } })
       return img!
     })
-    return reply.code(201).send((await toImages([created]))[0])
+    return reply.code(201).send((await toImages([created], me))[0])
   })
 
   app.get('/api/patients/:id/images', { config: { permission: 'patients:read' } }, async (req) => {
@@ -156,13 +159,13 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
     await getPatientOr404(db, me.facilityId, id)
     const rows = await db.select().from(clinicalImages).where(and(eq(clinicalImages.patientId, id), eq(clinicalImages.facilityId, me.facilityId))).orderBy(desc(clinicalImages.createdAt))
     await audit(db, req, { action: 'image.list', entityType: 'patient', entityId: id, patientId: id })
-    return { images: await toImages(rows) }
+    return { images: await toImages(rows, me) }
   })
 
   const analyse: JobExecutor = async (req, _me, job) => {
     const { imageId } = job.input as { imageId: string }
     const img = (await db.query.clinicalImages.findFirst({ where: eq(clinicalImages.id, imageId) }))!
-    if (!(await activeConsent(db, img.patientId, 'ai_image_analysis'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to AI description of photographs first')
+    await requireConsent(db, req, { patientId: img.patientId, type: 'ai_image_analysis', purpose: 'AI description of a photograph' })
     const d = providers.describer
     if (!d) throw new HttpError(503, 'ai_unavailable', providers.reasons.vision ?? 'AI image analysis is unavailable')
     // The metadata-free preview is what leaves the server, never the original.
@@ -195,12 +198,12 @@ export function registerImageRoutes(app: FastifyInstance, deps: ImageRouteDeps) 
     const { id } = parse(IdParams, req.params)
     const { idempotencyKey } = parse(JobRequest, req.body ?? {})
     const img = await imageOr404(me, id)
-    if (!(await activeConsent(db, img.patientId, 'ai_image_analysis'))) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to AI description of photographs first')
+    await requireConsent(db, req, { patientId: img.patientId, type: 'ai_image_analysis', purpose: 'AI description of a photograph' })
     if (!providers.describer) throw new HttpError(503, 'ai_unavailable', providers.reasons.vision ?? 'AI image analysis is unavailable')
     const { job, existing } = await jobs.create(req, me, { kind: 'image_analysis', patientId: img.patientId, encounterId: img.encounterId, input: { imageId: id }, idempotencyKey })
     if (existing && job.status !== 'succeeded') throw conflict(job.status === 'running' ? 'This request is already being processed' : 'This request failed earlier. Retry the failed job.', job.status === 'running' ? 'job_running' : 'job_failed')
     if (!existing) await analyse(req, me, job)
-    return reply.code(201).send({ image: (await toImages([img]))[0], jobId: job.id })
+    return reply.code(201).send({ image: (await toImages([img], me))[0], jobId: job.id })
   })
 
   /** Failed image jobs, so the client can offer a retry (POST /api/ai-jobs/:id/retry). */

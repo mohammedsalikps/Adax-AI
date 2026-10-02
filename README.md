@@ -46,21 +46,55 @@ decisions: [docs/adr/](docs/adr/).
   the code and a password of their choice (see [docs/DEMO.md](docs/DEMO.md)).
 - **Passwords** are hashed with Argon2id. Staff created by an administrator get a temporary
   password and must change it at first sign-in.
-  Five failed attempts lock an account for 15 minutes.
+  Five failed attempts lock an account for 15 minutes:
+  - the lockout is atomic, so concurrent guesses count;
+  - unknown usernames get the same locked answer;
+  - wrong current passwords at a password change count too.
+  Sign-in, activation, password change and device ingestion are also rate limited per address,
+  account, user or token (`config/adaxai.yaml` → `security.rateLimits`; kept in memory).
+  Unknown usernames are never written to the audit log.
 - **Sessions** are server-side: an `httpOnly`, `SameSite=Lax` cookie with a random token; the
   database stores only its SHA-256 hash. 60 minutes idle / 12 hours absolute.
 - **Authorization is enforced by the API on every route** (default deny;
-  `apps/api/src/auth/permissions.ts`). The web app hides controls too, but that is convenience
-  only. Denied requests are audited. Administrators cannot read clinical records.
+  `apps/api/src/auth/permissions.ts`).
+  - Every `/api` route must declare `public`, a permission or `anySession`, or the API refuses to
+    start. A test checks the full route-by-role matrix.
+  - Staff and admin data are limited to the caller's facility; a patient or consultation of
+    another facility is "not found", and the attempt is audited.
+  - The web app hides controls too, but that is convenience only.
+  - Denied requests are audited, including refusals inside routes.
+  - Administrators cannot read clinical records. They see that a device is in use, not by whom.
+  - Only the doctor who signed a consultation can amend it.
+  See [ADR 0007](docs/adr/0007-default-deny-routes-facility-scope-and-denial-audit.md).
 - **Patient isolation:** portal routes take the patient from the session and never accept a
   patient id; patients cannot reach any staff, file, AI, image, thermal or device endpoint.
   Tests probe every route family as patient A with patient B's ids.
+- **Consent** is enforced by the API for every purpose:
+  - recording and AI;
+  - Mana AI summaries;
+  - photographs and their AI description;
+  - thermal images;
+  - device readings;
+  - portal access;
+  - research datasets.
+  States are granted, granted under an earlier wording (renew), withdrawn, and not recorded.
+  Withdrawal takes effect at once:
+  - portal access: the account is switched off and the patient signed out;
+  - device consent: device assignments end;
+  - research consent: datasets that include the patient are blocked.
+  Patients can withdraw their own consents in the portal. Refusals are audited. See
+  [ADR 0006](docs/adr/0006-consent-lifecycle-and-enforcement.md).
 - **CSRF:** state-changing requests must carry `x-adaxai-csrf: 1`.
 - **Responses:** every API response is `Cache-Control: no-store` with `nosniff`, `no-referrer`
   and `X-Frame-Options: DENY`.
-- **Audit log:** sign-ins, permission denials, every read of a patient's record, files, AI
-  artifacts, images, thermal data and portal pages, every change and every AI review decision.
-  Database triggers make the log append-only.
+- **Audit log:**
+  - sign-ins and permission denials;
+  - every read of a patient's record, files, AI artifacts, images, thermal data and portal pages;
+  - the patients each list or search disclosed;
+  - every change and every AI review decision;
+  - consent grants, renewals, withdrawals and refusals.
+  Each row carries its facility. Database triggers make the log append-only. Request logs record
+  paths only (never search terms).
 
 ## Requirements
 
@@ -289,7 +323,9 @@ and thermal images; set `clinical` only in a real clinical deployment.
   encryption of backups or off-site copy.
 - Audit coverage is extensive but has not been assessed against a specific regulation; no
   regulatory compliance is claimed.
-- Patient portal accounts cannot yet be closed or reset by staff from the UI.
+- Rate limits are kept in memory by the single API process (a restart clears them).
+- "Care records" (`data_processing`) consent is recorded and shown but not enforced: whether care
+  depends on it is a legal decision that needs qualified review.
 
 **Compatibility**
 - Verified on Windows 11 x64 with Chromium (Playwright) only; other browsers and macOS/Linux are

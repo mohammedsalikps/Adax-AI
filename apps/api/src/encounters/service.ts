@@ -5,7 +5,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import type { SessionUser } from '../auth/sessions.ts'
 import type { DbOrTx } from '../db/client.ts'
 import { allergies, departments, diagnoses, encounterAmendments, encounters, facilities, observations, patients, prescriptionItems, users, visits } from '../db/schema.ts'
-import { notFound } from '../http/errors.ts'
+import { deniedNotFound, notFound } from '../http/errors.ts'
 import { ageOn, fullName } from '../patients/service.ts'
 import { toObservation } from '../visits/service.ts'
 import { loadInsertions } from './insertions.ts'
@@ -14,7 +14,10 @@ export type EncounterRow = typeof encounters.$inferSelect
 
 export async function getEncounterOr404(db: DbOrTx, me: SessionUser, id: string): Promise<EncounterRow> {
   const e = await db.query.encounters.findFirst({ where: and(eq(encounters.id, id), eq(encounters.facilityId, me.facilityId)) })
-  if (!e) throw notFound('Consultation')
+  if (!e) {
+    const elsewhere = await db.query.encounters.findFirst({ columns: { id: true }, where: eq(encounters.id, id) })
+    throw deniedNotFound('Consultation', { entityType: 'encounter', entityId: id, reason: elsewhere ? 'other_facility' : 'not_found' })
+  }
   return e
 }
 

@@ -176,11 +176,16 @@ describe.skipIf(!haveThermal)('thermal data workflow (API + real thermal service
       ['C0002', 'S001', '40-49', 'female', 'public_sample'],
     ])
     expect(m.captures[0].labels).toEqual([{ rater: 'R001', scope: 'capture', roi: null, code: 'inflammatory_pattern', referenceStandard: 'clinical_impression', certainty: 'probable', taxonomyVersion: 'thermal-labels-v1' }])
-    expect(m.captures[0].rois.map((r: any) => r.label)).toEqual(['Left knee', 'Right knee'])
-    expect(m.captures[0].protocol).toEqual({ bodyRegion: 'Knees', view: 'anterior', roomTempC: 22, acclimatisationMin: 15, distanceM: 1 })
+    // Staff-typed region names become neutral codes, used consistently for pairs; the free-text body region is left out.
+    expect(m.captures[0].rois.map((r: any) => [r.label, r.pairWith])).toEqual([
+      ['ROI-1', 'ROI-2'],
+      ['ROI-2', null],
+    ])
+    expect(m.captures[0].pairs.map((pr: any) => [pr.a, pr.b])).toEqual([['ROI-1', 'ROI-2']])
+    expect(m.captures[0].protocol).toEqual({ view: 'anterior', roomTempC: 22, acclimatisationMin: 15, distanceM: 1 })
     // No direct identifiers, internal ids, dates of birth or free text anywhere in the manifest.
     const text = JSON.stringify(m)
-    for (const s of ['Lakshmi', 'Narayanan', '98400', 'ADX-', '1985', 'hurts', consenting.id, a.id, 'Test t.doctor']) expect(text).not.toContain(s)
+    for (const s of ['Lakshmi', 'Narayanan', '98400', 'ADX-', '1985', 'hurts', 'knee', 'Knees', consenting.id, a.id, 'Test t.doctor']) expect(text).not.toContain(s)
     expect(zip.readme).toMatch(/not a validated\s+clinical dataset/i)
 
     // The ZIP is not reachable through the general file route.
@@ -189,6 +194,21 @@ describe.skipIf(!haveThermal)('thermal data workflow (API + real thermal service
     expect((await call(ctx.app, 'GET', `/api/thermal-data/exports/${exp.id}/download`, { cookie: nurse })).statusCode).toBe(403)
     const actions = (await adminQuery("SELECT action FROM audit_events WHERE action LIKE 'thermal.dataset%' ORDER BY occurred_at")).rows.map((r) => r.action)
     expect(actions).toEqual(['thermal.dataset_export', 'thermal.dataset_download'])
+  })
+
+  it('after a patient withdraws research consent, existing exports that include them can no longer be downloaded or evaluated', async () => {
+    const p = await patient(['thermal_imaging', 'research_use'])
+    const c = await capture(p.id)
+    await label(c.id, doctor, { scope: 'capture', code: 'no_significant_finding' })
+    const exp = ThermalDatasetExport.parse((await call(ctx.app, 'POST', '/api/thermal-data/exports', { cookie: admin })).json())
+    expect((await call(ctx.app, 'GET', `/api/thermal-data/exports/${exp.id}/download`, { cookie: admin })).statusCode).toBe(200)
+    const detail = PatientDetail.parse((await call(ctx.app, 'GET', `/api/patients/${p.id}`, { cookie: nurse })).json())
+    const research = detail.consentStates.find((s) => s.type === 'research_use')!.consentId!
+    await call(ctx.app, 'POST', `/api/patients/${p.id}/consents/${research}/withdraw`, { cookie: nurse })
+    const dl = await call(ctx.app, 'GET', `/api/thermal-data/exports/${exp.id}/download`, { cookie: admin })
+    expect([dl.statusCode, dl.json().error]).toEqual([409, 'consent_withdrawn'])
+    expect((await call(ctx.app, 'POST', `/api/thermal-data/exports/${exp.id}/evaluate`, { cookie: admin })).json().error).toBe('consent_withdrawn')
+    expect((await adminQuery("SELECT count(*)::int AS n FROM audit_events WHERE action = 'thermal.dataset_use' AND outcome = 'denied'")).rows[0].n).toBe(2)
   })
 
   it('evaluates an export in the thermal service and stores the report, which says the data is non-clinical', async () => {

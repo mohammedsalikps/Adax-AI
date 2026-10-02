@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import multipart from '@fastify/multipart'
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
+import Fastify, { type FastifyInstance } from 'fastify'
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
 import { type AiProviders, providersFromConfig } from './ai/providers.ts'
@@ -28,7 +28,9 @@ import { registerAuth } from './auth/plugin.ts'
 import { registerAuthRoutes } from './auth/routes.ts'
 import type { Config } from './config.ts'
 import { createDb } from './db/client.ts'
+import { audit } from './audit/audit.ts'
 import { HttpError } from './http/errors.ts'
+import { RateLimiter } from './http/rate-limit.ts'
 import { registerHealthRoutes } from './routes/health.ts'
 
 export interface AppDeps {
@@ -44,12 +46,22 @@ export interface AppDeps {
   settings?: AppSettings
   /** config/routing.yaml (re-read on change). */
   routing?: RoutingRulesSource
-  logger?: FastifyServerOptions['logger']
+  /** false: no logging (tests). A stream: the API's own log settings, written to that stream (tests of log content). */
+  logger?: false | { stream: NodeJS.WritableStream }
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
-    logger: deps.logger ?? { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'] },
+    logger:
+      deps.logger === false
+        ? false
+        : {
+            level: 'info',
+            redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
+            // Request logs record the path only: query strings can hold patient names, phone numbers or MRNs (search).
+            serializers: { req: (r: { method: string; url: string; ip?: string }) => ({ method: r.method, url: r.url.split('?')[0], remoteAddress: r.ip }) },
+            ...(deps.logger?.stream && { stream: deps.logger.stream }),
+          },
     genReqId: () => crypto.randomUUID(),
     bodyLimit: 1024 * 1024,
     trustProxy: false,
@@ -57,18 +69,21 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const db = createDb(deps.pool)
   const fetchImpl = deps.fetchImpl ?? fetch
 
+  const settings = effectiveSettings(deps.settings ?? loadAppSettings(), deps.config)
+  const limiter = new RateLimiter()
+  const limits = settings.security.rateLimits
+
   void app.register(multipart, { limits: { fileSize: deps.config.maxUploadBytes, files: 1, fields: 8 } })
   registerAuth(app, { db, cookieSecure: deps.config.cookieSecure })
   registerHealthRoutes(app, { config: deps.config, pool: deps.pool, fetchImpl })
-  registerAuthRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
-  registerActivationRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
+  registerAuthRoutes(app, { db, cookieSecure: deps.config.cookieSecure, limits: { limiter, rules: limits } })
+  registerActivationRoutes(app, { db, cookieSecure: deps.config.cookieSecure, limiter, perIp: limits.activationPerIp })
   registerAdminRoutes(app, { db })
   registerPatientRoutes(app, { db })
   registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
   registerEncounterRoutes(app, { db })
   registerInsertionRoutes(app, { db })
   registerFileRoutes(app, { db, config: deps.config })
-  const settings = effectiveSettings(deps.settings ?? loadAppSettings(), deps.config)
   const routing = deps.routing ?? new RoutingRulesSource(undefined, (m) => app.log.error(`routing.yaml: ${m} (previous rules kept)`))
   const providers = deps.ai ?? providersFromConfig(deps.config, settings)
   const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety, mana: settings.mana } })
@@ -82,7 +97,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerRoutingRoutes(app, { db, routing })
   registerOversightRoutes(app, { db, providers, jobs })
   registerPortalRoutes(app, { db })
-  registerDeviceRoutes(app, { db, config: deps.config, settings })
+  registerDeviceRoutes(app, { db, config: deps.config, settings, limiter })
 
   // API responses carry patient data: never store them in any cache (browser,
   // proxy or the web app's service worker), and set basic security headers.
@@ -99,8 +114,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   // Client errors carry a safe code/message; anything else is logged and
   // returned as a generic 500 (no stack traces, SQL or input echoed back).
-  app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
+  app.setErrorHandler(async (err: Error & { statusCode?: number; code?: string }, req, reply) => {
     if (err instanceof HttpError) {
+      // Every refusal leaves a trace: in-route 403s (wrong doctor, wrong role for
+      // an action, CSRF) and lookups of patients or records outside the
+      // caller's reach, unless the denial was already audited where it happened.
+      // CSRF refusals happen before any session or rate limit: only the first per address per window is recorded.
+      const csrfFlood = err.code === 'csrf_header_missing' && !limiter.hit(`csrf-denied:${req.ip}`, { max: 0, windowSeconds: 300 }).firstRefusal
+      if (!req.denialAudited && !csrfFlood && (err.statusCode === 403 || err.auditDenial)) {
+        req.denialAudited = true
+        await audit(db, req, { action: err.statusCode === 403 ? 'access.denied' : 'access.not_found', outcome: 'denied', ...(err.auditDenial && { entityType: err.auditDenial.entityType, entityId: err.auditDenial.entityId }), details: { code: err.code, method: req.method, route: req.routeOptions.url ?? null, ...(err.auditDenial?.reason && { reason: err.auditDenial.reason }) } }).catch((e: unknown) => req.log.error({ err: e }, 'denial audit failed'))
+      }
       return reply.code(err.statusCode).send({ error: err.code, message: err.message, requestId: req.id, ...(err.issues && { issues: err.issues }) })
     }
     if (err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {

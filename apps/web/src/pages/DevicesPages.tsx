@@ -116,7 +116,8 @@ export function AdminDevicesPage() {
               { key: 'n', header: 'Device', cell: (d) => <><p className="font-medium">{d.label}</p><p className="text-xs text-ink-muted">{DEVICE_KINDS[d.kind]} · {[d.manufacturer, d.model].filter(Boolean).join(' ') || 'make not recorded'} · SN {d.serialNumber}</p></> },
               { key: 'i', header: 'Integration', cell: (d) => <span className="text-sm">{DEVICE_INTEGRATIONS[d.integration]}{d.hasToken ? <span className="block text-xs text-ink-muted">token issued {fmtDateTime(d.tokenCreatedAt)}</span> : null}</span> },
               { key: 's', header: 'Status', cell: (d) => (d.status === 'active' ? <Badge tone="ok">Active</Badge> : <Badge>Retired</Badge>) },
-              { key: 'a', header: 'Assigned to', cell: (d) => (d.assignment ? `${d.assignment.patientName} (${d.assignment.mrn})` : '—') },
+              // Administrators manage devices, not patient records: they see that a device is in use, not by whom.
+              { key: 'a', header: 'In use', cell: (d) => (d.assignment ? (d.assignment.patientName ? `${d.assignment.patientName} (${d.assignment.mrn})` : `Assigned to a patient since ${fmtDateTime(d.assignment.assignedAt)}`) : '—') },
               {
                 key: 'x',
                 header: <span className="sr-only">Actions</span>,

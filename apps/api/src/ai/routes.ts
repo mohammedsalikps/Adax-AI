@@ -28,7 +28,6 @@ import {
   aiRuns,
   auditEvents,
   clinicalFacts,
-  consents,
   files,
   patients,
   transcripts,
@@ -39,7 +38,7 @@ import { readStoredBytes, storeBytes } from '../files/storage.ts'
 import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
-import { activeConsent } from '../patients/service.ts'
+import { currentConsent, grantConsent, requireConsent as requireConsentFor } from '../consents/service.ts'
 import type { RoutingRulesSource } from '../settings/load.ts'
 import type { AppSettings } from '../settings/schema.ts'
 import { compareFacts, COMPARE_RULES_VERSION, type EvidenceOut } from './compare.ts'
@@ -92,13 +91,13 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     return e
   }
 
-  async function requireConsent(patientId: string, encounterId: string, needsCurrent = false) {
-    const c = await activeConsent(db, patientId, 'ai_recording', encounterId)
-    if (!c) throw new HttpError(409, 'consent_required', 'Record the patient’s consent to recording and AI assistance first')
-    if (needsCurrent && c.version !== CONSENT_VERSIONS.ai_recording) {
-      throw new HttpError(409, 'consent_outdated', 'This step also uses the patient’s record. The patient agreed to an earlier consent wording; read the current wording and record consent again.')
-    }
-    return c
+  /**
+   * Recording and AI assistance need the patient's ai_recording consent (ongoing
+   * or for this consultation); steps that also use the record need the current
+   * wording. Refusals are audited (consents/service.ts).
+   */
+  async function requireConsent(req: FastifyRequest, patientId: string, encounterId: string, needsCurrent = false) {
+    return requireConsentFor(db, req, { patientId, type: 'ai_recording', encounterId, purpose: needsCurrent ? 'record-aware AI assistance' : 'consultation recording and AI assistance', acceptOlderWording: !needsCurrent })
   }
 
   async function transcriptOr404(me: SessionUser, id: string) {
@@ -110,7 +109,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
 
   async function loadAi(me: SessionUser, encounterId: string): Promise<EncounterAi> {
     const e = await getEncounterOr404(db, me, encounterId)
-    const consent = await activeConsent(db, e.patientId, 'ai_recording', encounterId)
+    const consent = await currentConsent(db, e.patientId, 'ai_recording', encounterId)
     const [audioRows, transcriptRows, draftRows, runRows] = await Promise.all([
       db
         .select()
@@ -256,7 +255,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   const transcription: JobExecutor = async (req, me, job) => {
     const input = job.input as { fileId: string; transcriptId: string | null; chunkIndex: number | null; source: 'audio_upload' | 'browser_recording' }
     const e = await editableEncounter(me, job.encounterId!)
-    await requireConsent(e.patientId, e.id)
+    await requireConsent(req, e.patientId, e.id)
     const t = providers.transcriber
     if (!t) throw new HttpError(503, 'stt_unavailable', providers.reasons.stt ?? 'Speech-to-text is unavailable')
     const file = (await db.query.files.findFirst({ where: and(eq(files.id, input.fileId), eq(files.encounterId, e.id)) }))!
@@ -290,7 +289,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   const noteDraft: JobExecutor = async (req, me, job) => {
     const { transcriptId } = job.input as { transcriptId: string }
     const e = await editableEncounter(me, job.encounterId!)
-    await requireConsent(e.patientId, e.id)
+    await requireConsent(req, e.patientId, e.id)
     const drafter = providers.drafter
     if (!drafter) throw new HttpError(503, 'ai_unavailable', providers.reasons.llm ?? 'AI drafting is unavailable')
     const patient = (await db.query.patients.findFirst({ where: eq(patients.id, e.patientId) }))!
@@ -343,7 +342,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   const extraction: JobExecutor = async (req, me, job) => {
     const { transcriptId } = job.input as { transcriptId: string }
     const e = await editableEncounter(me, job.encounterId!)
-    await requireConsent(e.patientId, e.id)
+    await requireConsent(req, e.patientId, e.id)
     const extractor = providers.extractor
     if (!extractor) throw new HttpError(503, 'ai_unavailable', providers.reasons.llm ?? 'AI extraction is unavailable')
     const segments = (await loadSegments(db, [transcriptId])).get(transcriptId)!
@@ -394,7 +393,9 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const { transcriptId } = job.input as { transcriptId: string | null }
     const e = await editableEncounter(me, job.encounterId!)
     const ctx = await buildPatientContext(db, e, settings.ai.context)
-    const segments = transcriptId ? (await loadSegments(db, [transcriptId])).get(transcriptId)! : []
+    // The rules read the transcript only while recording consent is in place; otherwise they check the record alone.
+    const transcriptAllowed = !!transcriptId && !!(await currentConsent(db, e.patientId, 'ai_recording', e.id))
+    const segments = transcriptAllowed ? (await loadSegments(db, [transcriptId!])).get(transcriptId!)! : []
     const rules = routing.current()
     const facts = await db.select().from(clinicalFacts).where(and(eq(clinicalFacts.encounterId, e.id), inArray(clinicalFacts.status, ['pending', 'deferred', 'accepted', 'edited'])))
     const factEvidence = await loadEvidence(
@@ -431,7 +432,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   const recommendations: JobExecutor = async (req, me, job) => {
     const { transcriptId } = job.input as { transcriptId: string | null }
     const e = await editableEncounter(me, job.encounterId!)
-    await requireConsent(e.patientId, e.id, true)
+    await requireConsent(req, e.patientId, e.id, true)
     const recommender = providers.recommender
     if (!recommender) throw new HttpError(503, 'ai_unavailable', providers.reasons.llm ?? 'AI recommendations are unavailable')
     const ctx = await buildPatientContext(db, e, settings.ai.context)
@@ -524,12 +525,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const { id } = parse(IdParams, req.params)
     const { method } = parse(AiConsentRequest, req.body)
     const e = await editableEncounter(me, id)
-    const existing = await activeConsent(db, e.patientId, 'ai_recording', id)
-    if (existing?.version === CONSENT_VERSIONS.ai_recording) throw conflict('Consent is already recorded', 'already_granted')
-    await db.transaction(async (tx) => {
-      const [c] = await tx.insert(consents).values({ patientId: e.patientId, type: 'ai_recording', method, scope: 'encounter', encounterId: id, version: CONSENT_VERSIONS.ai_recording, recordedBy: me.id }).returning({ id: consents.id })
-      await audit(tx, req, { action: 'consent.grant', entityType: 'consent', entityId: c!.id, patientId: e.patientId, details: { type: 'ai_recording', scope: 'encounter', method, encounterId: id, version: CONSENT_VERSIONS.ai_recording } })
-    })
+    await db.transaction((tx) => grantConsent(tx, req, { patientId: e.patientId, type: 'ai_recording', method, scope: 'encounter', encounterId: id, recordedBy: me.id }))
     return reply.code(201).send(await loadAi(me, id))
   })
 
@@ -538,7 +534,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const { id } = parse(IdParams, req.params)
     const body = parse(CreateTranscriptRequest, req.body)
     const e = await editableEncounter(me, id)
-    await requireConsent(e.patientId, id)
+    await requireConsent(req, e.patientId, id)
     const segments = segmentTranscript(body.text)
     await db.transaction(async (tx) => {
       const [t] = await tx.insert(transcripts).values({ encounterId: id, source: body.source, status: 'final', createdBy: me.id }).returning({ id: transcripts.id })
@@ -574,7 +570,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const e = await editableEncounter(me, id)
-    await requireConsent(e.patientId, id)
+    await requireConsent(req, e.patientId, id)
     let recorded = false
     const file = await storeAudio(req, me, e, (ext, original, field) => {
       recorded = field('source') === 'browser_recording'
@@ -597,7 +593,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const e = await editableEncounter(me, id)
-    await requireConsent(e.patientId, id)
+    await requireConsent(req, e.patientId, id)
     if (!providers.transcriber || providers.features?.liveTranscription === false) throw new HttpError(503, 'stt_unavailable', providers.reasons.stt ?? 'Live transcription is switched off.')
     const [t] = await db.insert(transcripts).values({ encounterId: id, source: 'browser_recording', status: 'live', createdBy: me.id }).returning({ id: transcripts.id })
     await audit(db, req, { action: 'ai.live_start', entityType: 'transcript', entityId: t!.id, patientId: e.patientId, details: { encounterId: id } })
@@ -609,7 +605,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const { id } = parse(IdParams, req.params)
     const t = await transcriptOr404(me, id)
     const e = await editableEncounter(me, t.encounterId)
-    await requireConsent(e.patientId, e.id)
+    await requireConsent(req, e.patientId, e.id)
     if (t.status !== 'live') throw conflict('This recording has ended', 'transcript_not_live')
     let index = -1
     const file = await storeAudio(req, me, e, (ext, _original, field) => {
@@ -619,6 +615,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
       return `live-chunk-${index}${ext}`
     })
     const chunkIndex = { data: index }
+    await audit(db, req, { action: 'ai.audio_chunk', entityType: 'file', entityId: file.id, patientId: e.patientId, details: { transcriptId: id, chunkIndex: chunkIndex.data } })
     try {
       await startJob(req, me, { kind: 'transcription', patientId: e.patientId, encounterId: e.id, input: { fileId: file.id, transcriptId: id, chunkIndex: chunkIndex.data, source: 'browser_recording' } })
       return reply.code(201).send(await loadAi(me, e.id))
@@ -647,7 +644,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const { idempotencyKey } = parse(JobRequest, req.body ?? {})
     const t = await transcriptOr404(me, id)
     const e = await editableEncounter(me, t.encounterId)
-    await requireConsent(e.patientId, e.id)
+    await requireConsent(req, e.patientId, e.id)
     if (!providers.drafter) throw new HttpError(503, 'ai_unavailable', providers.reasons.llm ?? 'AI drafting is unavailable')
     const job = await startJob(req, me, { kind: 'note_draft', patientId: e.patientId, encounterId: e.id, input: { transcriptId: id }, idempotencyKey })
     const [d] = await db.select({ id: aiDrafts.id }).from(aiDrafts).innerJoin(aiRuns, eq(aiRuns.id, aiDrafts.runId)).where(eq(aiRuns.jobId, job.id)).limit(1)
@@ -661,7 +658,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const { idempotencyKey } = parse(JobRequest, req.body ?? {})
     const t = await transcriptOr404(me, id)
     const e = await editableEncounter(me, t.encounterId)
-    await requireConsent(e.patientId, e.id)
+    await requireConsent(req, e.patientId, e.id)
     if (!providers.extractor) throw new HttpError(503, 'ai_unavailable', providers.reasons.llm ?? 'AI extraction is unavailable')
     const job = await startJob(req, me, { kind: 'extraction', patientId: e.patientId, encounterId: e.id, input: { transcriptId: id }, idempotencyKey })
     return reply.code(201).send({ ...(await loadAi(me, e.id)), jobId: job.id })
@@ -684,7 +681,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
       if (!providers.recommender) notice = providers.reasons.llm ?? 'AI recommendations are unavailable.'
       else {
         try {
-          await requireConsent(e.patientId, id, true)
+          await requireConsent(req, e.patientId, id, true)
           await startJob(req, me, { kind: 'recommendations', patientId: e.patientId, encounterId: id, input: { transcriptId } })
         } catch (err) {
           if (!(err instanceof HttpError)) throw err
@@ -704,8 +701,14 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     if (job.status !== 'failed') throw conflict(job.status === 'running' ? 'This job is still running' : 'This job has already succeeded', 'job_not_failed')
     const run = executors.get(job.kind)
     if (!run) throw badRequest('This job cannot be retried')
+    try {
+      await run(req, me, job)
+    } catch (err) {
+      await audit(db, req, { action: 'ai.job_retry', outcome: 'failure', entityType: 'ai_job', entityId: id, patientId: job.patientId, details: { kind: job.kind, attempts: job.attempts, code: err instanceof HttpError ? err.code : 'error' } })
+      throw err
+    }
     await audit(db, req, { action: 'ai.job_retry', entityType: 'ai_job', entityId: id, patientId: job.patientId, details: { kind: job.kind, attempts: job.attempts } })
-    await run(req, me, job)
+    if (job.encounterId) await audit(db, req, { action: 'encounter_ai.read', entityType: 'encounter', entityId: job.encounterId, patientId: job.patientId, details: { via: 'retry' } })
     const after = (await loadJobs(db, { ids: [id] }))[0]!
     return { job: after, ...(job.encounterId ? { encounter: await loadAi(me, job.encounterId) } : {}) }
   })

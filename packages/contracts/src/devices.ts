@@ -40,7 +40,8 @@ export const Device = z.object({
   notes: z.string().nullable(),
   hasToken: z.boolean(),
   tokenCreatedAt: z.string().nullable(),
-  assignment: z.object({ id: z.uuid(), patientId: z.uuid(), patientName: z.string(), mrn: z.string(), assignedAt: z.string(), assignedByName: z.string().nullable() }).nullable(),
+  /** Patient identity is null for viewers who manage devices but do not see patient records (admins). */
+  assignment: z.object({ id: z.uuid(), patientId: z.uuid().nullable(), patientName: z.string().nullable(), mrn: z.string().nullable(), assignedAt: z.string(), assignedByName: z.string().nullable() }).nullable(),
   createdAt: z.string(),
 })
 export type Device = z.infer<typeof Device>

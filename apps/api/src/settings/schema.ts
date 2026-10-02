@@ -2,6 +2,7 @@ import { VitalKind } from '@adaxai/contracts'
 import { z } from 'zod'
 
 const mime = z.string().regex(/^[a-z]+\/[a-z0-9.+-]+$/, 'must be a MIME type')
+const LimitRule = z.object({ max: z.number().int().min(1).max(100_000), windowSeconds: z.number().int().min(1).max(86_400) }).strict()
 
 /** config/adaxai.yaml. Strict: unknown keys are errors (catches typos). */
 export const AppSettings = z
@@ -35,6 +36,19 @@ export const AppSettings = z
       })
       .strict(),
     retention: z.object({ consultationAudioDays: z.number().int().min(0).max(3650) }).strict(),
+    security: z
+      .object({
+        rateLimits: z
+          .object({
+            loginPerIp: LimitRule,
+            loginPerAccount: LimitRule,
+            activationPerIp: LimitRule,
+            passwordChangePerUser: LimitRule,
+            deviceIngestPerToken: LimitRule,
+          })
+          .strict(),
+      })
+      .strict(),
     mana: z
       .object({
         maxEncounters: z.number().int().min(1).max(50),

@@ -77,6 +77,18 @@ mana:
   # Upper bound on record text sent to the AI provider for one question.
   maxContextChars: 30000
 
+# Request limits per client address, account, user or device token. They
+# slow down password guessing and token abuse; the per-account sign-in lockout
+# (5 wrong passwords, 15 minutes) still applies. Kept in memory: a restart
+# clears them.
+security:
+  rateLimits:
+    loginPerIp: { max: 300, windowSeconds: 60 }
+    loginPerAccount: { max: 30, windowSeconds: 60 }
+    activationPerIp: { max: 20, windowSeconds: 900 }
+    passwordChangePerUser: { max: 10, windowSeconds: 900 }
+    deviceIngestPerToken: { max: 600, windowSeconds: 60 }
+
 retention:
   # Consultation audio of SIGNED consultations is deleted after this many days
   # by `npm run retention` (the transcript and the signed note are kept).

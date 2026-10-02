@@ -1,6 +1,7 @@
+import { sql } from 'drizzle-orm'
 import type { FastifyRequest } from 'fastify'
 import type { DbOrTx } from '../db/client.ts'
-import { auditEvents } from '../db/schema.ts'
+import { auditEvents, patients } from '../db/schema.ts'
 
 export interface AuditInput {
   /** Dotted verb, e.g. `patient.read`, `encounter.sign`, `auth.login`. */
@@ -14,6 +15,8 @@ export interface AuditInput {
   actorRole?: string | null
   /** Small, non-clinical context. Never put clinical free text or secrets here. */
   details?: Record<string, unknown>
+  /** Defaults to the signed-in user's facility, else the patient's. */
+  facilityId?: string | null
 }
 
 /**
@@ -33,5 +36,6 @@ export async function audit(db: DbOrTx, req: FastifyRequest | null, e: AuditInpu
     ip: req?.ip ?? null,
     userAgent: req?.headers['user-agent']?.slice(0, 300) ?? null,
     details: e.details ?? {},
+    facilityId: e.facilityId !== undefined ? e.facilityId : (req?.user?.facilityId ?? (e.patientId ? sql`(select ${patients.facilityId} from ${patients} where ${patients.id} = ${e.patientId})` : null)),
   })
 }

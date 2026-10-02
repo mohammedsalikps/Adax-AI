@@ -81,7 +81,8 @@ describe('search', () => {
   it('audits searches without storing the search text', async () => {
     await search('Lakshmi')
     const { rows } = await adminQuery("SELECT details FROM audit_events WHERE action = 'patient.search'")
-    expect(rows.at(-1).details).toEqual({ queryLength: 7, results: 1 })
+    // The audit names the patients the result disclosed, never the search text.
+    expect(rows.at(-1).details).toEqual({ queryLength: 7, results: 1, patientIds: [expect.any(String)] })
     expect(JSON.stringify(rows)).not.toContain('Lakshmi')
   })
 })
@@ -170,7 +171,16 @@ describe('patient portal activation', () => {
     const reuse = await call(ctx.app, 'POST', '/api/auth/activate', { body: { mrn: p.mrn, activationCode: code, password: 'Another-passphrase-2' } })
     expect(reuse.statusCode).toBe(400)
     await login(ctx.app, p.mrn, 'My-own-passphrase-1')
-    expect((await call(ctx.app, 'POST', `/api/patients/${p.id}/portal-activation`, { cookie: nurse })).json().error).toBe('portal_account_exists')
+    // A code for an existing account is a reset code (sets a new password, ends old sessions).
+    const resetCode = await call(ctx.app, 'POST', `/api/patients/${p.id}/portal-activation`, { cookie: nurse })
+    expect([resetCode.statusCode, resetCode.json().reset]).toEqual([201, true])
+    const reset = await call(ctx.app, 'POST', '/api/auth/activate', { body: { mrn: p.mrn, activationCode: resetCode.json().activationCode, password: 'A-new-passphrase-3' } })
+    expect(reset.statusCode).toBe(200)
+    expect((await call(ctx.app, 'GET', '/api/auth/me', { cookie })).statusCode).toBe(401)
+    await login(ctx.app, p.mrn, 'A-new-passphrase-3')
+    const { rows: trail } = await adminQuery("SELECT action, details FROM audit_events WHERE action IN ('patient.portal_activate', 'patient.portal_reset') AND outcome = 'success' ORDER BY id")
+    expect(trail.map((r) => r.action)).toEqual(['patient.portal_activate', 'patient.portal_reset'])
+    expect(trail[1].details.codeIssuedBy).toEqual(expect.any(String))
   })
 
   it(`revokes a code after ${MAX_ACTIVATION_ATTEMPTS} wrong attempts`, async () => {

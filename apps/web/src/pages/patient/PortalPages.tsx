@@ -1,8 +1,13 @@
 import { type PortalConsent, type PortalHome, type PortalProfile, type PortalRecord, type PortalRecordSummary, type PortalThermalReport, type PortalVisit, type PortalVital, VITAL_ORDER, VITALS } from '@adaxai/contracts'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, ChevronRight, FileText, HeartPulse, Printer } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { Link, useParams } from 'react-router'
+import { type ReactNode, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router'
+import { Button } from '../../components/ui/Button.tsx'
+import { Dialog } from '../../components/ui/Dialog.tsx'
+import { TextField } from '../../components/ui/Form.tsx'
+import { useToast } from '../../components/ui/Toast.tsx'
+import { ME_KEY } from '../../lib/auth.tsx'
 import { Alert, Badge, EmptyState, Spinner } from '../../components/ui/Feedback.tsx'
 import { Card, DescriptionList, PageHeader } from '../../components/ui/Layout.tsx'
 import { api, errorMessage } from '../../lib/api.ts'
@@ -327,32 +332,90 @@ export function PortalVitalsPage() {
   )
 }
 
+/** The patient withdraws one consent; what changes at once is shown first. */
+function WithdrawConsentDialog({ c, onClose }: { c: PortalConsent; onClose: () => void }) {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const navigate = useNavigate()
+  const [reason, setReason] = useState('')
+  const withdraw = useMutation({
+    mutationFn: () => api<{ ok: true; signedOut: boolean }>(`/portal/consents/${c.id}/withdraw`, { method: 'POST', body: { reason: reason.trim() || null } }),
+    onSuccess: (r) => {
+      if (r.signedOut) {
+        // Portal access ended: drop everything cached from this session and leave the portal.
+        qc.clear()
+        qc.setQueryData(ME_KEY, null)
+        navigate('/login?notice=portal_withdrawn', { replace: true })
+        return
+      }
+      void qc.invalidateQueries({ queryKey: ['portal'] })
+      toast('success', 'Consent withdrawn')
+      onClose()
+    },
+  })
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Withdraw: ${c.title}`}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Keep my consent
+          </Button>
+          <Button variant="danger" loading={withdraw.isPending} onClick={() => withdraw.mutate()}>
+            Withdraw consent
+          </Button>
+        </>
+      }
+    >
+      {withdraw.isError && <Alert tone="error" className="mb-3">{errorMessage(withdraw.error)}</Alert>}
+      <p className="text-sm">This takes effect at once. Your care is not affected. To agree again later, ask the clinic staff.</p>
+      {c.withdrawalEffect && (
+        <Alert tone="warning" className="my-3">
+          {c.withdrawalEffect}
+        </Alert>
+      )}
+      <TextField label="Reason (optional)" maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} />
+    </Dialog>
+  )
+}
+
 export function PortalConsentsPage() {
   useDocumentTitle('My consents')
   const q = usePortal<{ consents: PortalConsent[] }>('/consents')
+  const [withdrawing, setWithdrawing] = useState<PortalConsent | null>(null)
   return (
     <>
-      <PageHeader title="Consents" description="What you agreed to, and when. To change a consent, tell the clinic staff; your care is not affected." />
+      <PageHeader title="Consents" description="What you agreed to, and when. You can withdraw a consent here at any time; to agree to something new, ask the clinic staff. Your care is not affected." />
       <Loading q={q}>
         {(d) => (
           <ul className="space-y-2">
-            {d.consents.map((c, i) => (
-              <li key={i} className="rounded-lg border border-line bg-surface p-3 text-sm">
+            {d.consents.map((c) => (
+              <li key={c.id} className="rounded-lg border border-line bg-surface p-3 text-sm" data-testid="portal-consent">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{c.title}</span>
-                  {c.status === 'granted' ? <Badge tone="ok">Agreed</Badge> : <Badge>Withdrawn</Badge>}
+                  {c.status === 'granted' ? <Badge tone="ok">Agreed</Badge> : c.status === 'superseded' ? <Badge>Replaced by a newer agreement</Badge> : <Badge>Withdrawn</Badge>}
                   {c.scope === 'encounter' && <Badge>One consultation</Badge>}
+                  {!c.currentWording && <Badge tone="warn">Earlier wording</Badge>}
                 </div>
                 <p className="mt-1">{c.description}</p>
+                {!c.currentWording && c.status === 'granted' && <p className="mt-1 text-xs text-ink-muted">This is the wording you agreed to. The clinic uses a newer wording now and may ask you again for some features.</p>}
                 <p className="mt-1 text-xs text-ink-muted">
                   Recorded {fmtDateTime(c.recordedAt)} ({c.method}, wording {c.version})
-                  {c.withdrawnAt ? ` · withdrawn ${fmtDateTime(c.withdrawnAt)}` : ''}
+                  {c.withdrawnAt ? ` · withdrawn ${fmtDateTime(c.withdrawnAt)}${c.withdrawnVia === 'patient_portal' ? ' by you' : ''}` : ''}
                 </p>
+                {c.status === 'granted' && (
+                  <Button size="sm" variant="ghost" className="mt-2" onClick={() => setWithdrawing(c)}>
+                    Withdraw…
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
         )}
       </Loading>
+      {withdrawing && <WithdrawConsentDialog c={withdrawing} onClose={() => setWithdrawing(null)} />}
     </>
   )
 }

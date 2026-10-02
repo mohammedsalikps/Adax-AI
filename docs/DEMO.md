@@ -135,6 +135,16 @@ be edited; corrections are added with **Add amendment**.
    send the patient back to their home page; the API answers 403/404 (all audited).
 5. On a phone or with the browser's device mode, the portal is responsive and installable
    (browser menu → *Install app*). Only the app shell is cached, never records.
+6. **Consents** in the portal: the patient can **Withdraw…** a consent. The dialog says what
+   changes at once (e.g. research datasets that include them are blocked); the reason is
+   optional. A consent given under an earlier wording is labelled *Earlier wording*.
+7. As nurse: the patient record's **Consents** card shows each purpose's state, who withdrew it
+   (staff, or the patient in the portal), the reason, and the full **Consent history**.
+   **Withdraw…** on *Patient portal* switches the account off at once: the patient's next page
+   load goes to sign-in.
+8. To restore access: **Record consent** again, then **Issue reset code** on the *Patient portal*
+   card; the patient sets a new password at `/activate`. If the patient withdraws portal access
+   in the portal themselves, they are signed out with an explanation.
 
 ## 6. Oversight (admin)
 

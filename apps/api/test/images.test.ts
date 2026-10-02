@@ -125,7 +125,11 @@ describe.skipIf(!haveThermal)('clinical photographs', () => {
     const ev = (await adminQuery('SELECT source_type, provenance FROM ai_evidence WHERE subject_id = $1', [a.id])).rows
     expect(ev).toEqual([{ source_type: 'clinical_image', provenance: 'ai_generated' }])
 
+    // Unreviewed AI output is for the doctor who reviews it: nurses do not see it yet.
+    const nurseView = (await call(withAi.app, 'GET', `/api/patients/${p.id}/images`, { cookie: nurse })).json().images[0]
+    expect(nurseView.analyses).toEqual([])
     const reviewed = await call(withAi.app, 'POST', `/api/ai-review/image_analysis/${a.id}`, { cookie: doctor, body: { action: 'edited', text: 'Shallow wound, clean edges.' } })
+    expect((await call(withAi.app, 'GET', `/api/patients/${p.id}/images`, { cookie: nurse })).json().images[0].analyses).toHaveLength(1)
     expect(reviewed.json().item).toMatchObject({ type: 'image_analysis', section: 'examination', finalText: 'Shallow wound, clean edges.' })
     await expect(withAi.pool.query("UPDATE image_analyses SET result = '{}' WHERE id = $1", [a.id])).rejects.toMatchObject({ code: '42501' })
     await expect(withAi.pool.query('DELETE FROM clinical_images')).rejects.toMatchObject({ code: '42501' })

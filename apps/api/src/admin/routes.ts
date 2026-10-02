@@ -10,16 +10,16 @@ import {
   UpdateUserRequest,
 } from '@adaxai/contracts'
 import { and, asc, desc, eq, gte, lt, ne, sql, type SQL } from 'drizzle-orm'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
 import { hashPassword } from '../auth/password.ts'
 import { currentUser } from '../auth/plugin.ts'
-import { revokeUserSessions } from '../auth/sessions.ts'
+import { revokeUserSessions, type SessionUser } from '../auth/sessions.ts'
 import { type Db, pgCode } from '../db/client.ts'
-import { auditEvents, departments, sessions, users, visits } from '../db/schema.ts'
+import { auditEvents, departments, patients, sessions, users, visits } from '../db/schema.ts'
 import { facilityToday } from '../patients/service.ts'
-import { conflict, notFound } from '../http/errors.ts'
+import { conflict, deniedNotFound, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 
 const IdParams = z.object({ id: z.uuid() })
@@ -60,9 +60,18 @@ const toDepartment = (d: typeof departments.$inferSelect): Department => ({ id: 
 export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
   // ---- Users (staff accounts; patient accounts are created by activation) ----
 
-  app.get('/api/admin/users', { config: { permission: 'users:manage' } }, async () => {
-    return { users: await listUsers(db, ne(users.role, 'patient')) }
+  app.get('/api/admin/users', { config: { permission: 'users:manage' } }, async (req) => {
+    const me = currentUser(req)
+    return { users: await listUsers(db, and(ne(users.role, 'patient'), eq(users.facilityId, me.facilityId))!) }
   })
+
+  /** A staff account of the caller's facility (another facility's account is "not found"). */
+  async function staffOr404(me: SessionUser, id: string) {
+    const target = await db.query.users.findFirst({ where: and(eq(users.id, id), eq(users.facilityId, me.facilityId)) })
+    if (!target || target.role === 'patient') throw deniedNotFound('User', { entityType: 'user', entityId: id, reason: target ? 'patient_account' : 'not_found_or_other_facility' })
+    return target
+  }
+  const refuse = (req: FastifyRequest, id: string, reason: string) => audit(db, req, { action: 'user.update', outcome: 'denied', entityType: 'user', entityId: id, details: { reason } })
 
   app.post('/api/admin/users', { config: { permission: 'users:manage' } }, async (req, reply) => {
     const me = currentUser(req)
@@ -96,19 +105,24 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const body = parse(UpdateUserRequest, req.body)
-    const target = await db.query.users.findFirst({ where: eq(users.id, id) })
-    if (!target || target.role === 'patient') throw notFound('User')
+    const target = await staffOr404(me, id)
     if (id === me.id && (body.isActive === false || (body.role && body.role !== target.role))) {
+      await refuse(req, id, 'cannot_modify_self')
       throw conflict('You cannot deactivate yourself or change your own role', 'cannot_modify_self')
     }
     const losingAdmin = target.role === 'admin' && target.isActive && (body.isActive === false || (body.role && body.role !== 'admin'))
-    if (losingAdmin) {
-      const [{ n }] = (await db.select({ n: sql<number>`count(*)::int` }).from(users).where(and(eq(users.role, 'admin'), eq(users.isActive, true)))) as [{ n: number }]
-      if (n <= 1) throw conflict('At least one active administrator is required', 'last_admin')
-    }
     await assertDepartment(db, me.facilityId, body.departmentId)
 
     await db.transaction(async (tx) => {
+      if (losingAdmin) {
+        // Counted per facility, under a lock, so two admins cannot remove each other at the same time.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`last-admin:${me.facilityId}`}))`)
+        const [{ n }] = (await tx.select({ n: sql<number>`count(*)::int` }).from(users).where(and(eq(users.role, 'admin'), eq(users.isActive, true), eq(users.facilityId, me.facilityId)))) as [{ n: number }]
+        if (n <= 1) {
+          await refuse(req, id, 'last_admin')
+          throw conflict('At least one active administrator is required', 'last_admin')
+        }
+      }
       await tx
         .update(users)
         .set({ ...body, updatedAt: sql`now()` })
@@ -121,11 +135,16 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
     return summary
   })
 
+  /**
+   * Temporary password for a staff account of this facility: the user must
+   * replace it at the next sign-in, and all their sessions end. (The admin
+   * knows the temporary password until then; the reset is audited.)
+   */
   app.post('/api/admin/users/:id/reset-password', { config: { permission: 'users:manage' } }, async (req) => {
+    const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const body = parse(ResetPasswordRequest, req.body)
-    const target = await db.query.users.findFirst({ where: eq(users.id, id) })
-    if (!target || target.role === 'patient') throw notFound('User')
+    await staffOr404(me, id)
     const passwordHash = await hashPassword(body.temporaryPassword)
     await db.transaction(async (tx) => {
       await tx
@@ -141,11 +160,12 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
   // ---- Staff directory (for assigning doctors / departments) ----
 
   app.get('/api/staff', { config: { permission: 'staff:read' } }, async (req) => {
+    const me = currentUser(req)
     const q = parse(z.object({ role: z.enum(['doctor', 'nurse']).optional() }), req.query)
     const rows = await db
       .select({ id: users.id, fullName: users.fullName, role: users.role, departmentId: users.departmentId })
       .from(users)
-      .where(and(eq(users.isActive, true), q.role ? eq(users.role, q.role) : sql`${users.role} in ('doctor','nurse')`))
+      .where(and(eq(users.isActive, true), eq(users.facilityId, me.facilityId), q.role ? eq(users.role, q.role) : sql`${users.role} in ('doctor','nurse')`))
       .orderBy(asc(users.fullName))
     return { staff: rows }
   })
@@ -193,8 +213,13 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
   // ---- Audit log ----
 
   app.get('/api/admin/audit-events', { config: { permission: 'audit:read' } }, async (req) => {
+    const me = currentUser(req)
     const q = parse(AuditQuery, req.query)
-    const conds: SQL[] = []
+    // Only this facility's trail: rows carry their facility (migration 0017); older and anonymous
+    // rows are matched through their actor or patient; rows tied to neither stay visible.
+    const conds: SQL[] = [
+      sql`(${auditEvents.facilityId} = ${me.facilityId} or (${auditEvents.facilityId} is null and coalesce((select fac_u.facility_id from ${users} fac_u where fac_u.id = ${auditEvents.actorUserId}), (select fac_p.facility_id from ${patients} fac_p where fac_p.id = ${auditEvents.patientId}), ${me.facilityId}) = ${me.facilityId}))`,
+    ]
     if (q.action) conds.push(sql`${auditEvents.action} ilike ${`${q.action.replace(/[%_\\]/g, '\\$&')}%`}`)
     if (q.actorUserId) conds.push(eq(auditEvents.actorUserId, q.actorUserId))
     if (q.patientId) conds.push(eq(auditEvents.patientId, q.patientId))
@@ -206,7 +231,7 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
       .select({ e: auditEvents, actorUsername: users.username })
       .from(auditEvents)
       .leftJoin(users, eq(users.id, auditEvents.actorUserId))
-      .where(conds.length ? and(...conds) : undefined)
+      .where(and(...conds))
       .orderBy(desc(auditEvents.id))
       .limit(q.limit + 1)
     const page = rows.slice(0, q.limit)
@@ -224,7 +249,13 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
       ip: e.ip,
       details: (e.details ?? {}) as Record<string, unknown>,
     }))
-    await audit(db, req, { action: 'audit.read', details: { filters: Object.keys(req.query ?? {}).filter((k) => k !== 'limit' && k !== 'before') } })
+    // Which trail was viewed: the validated filter values, and the patient or user it was about.
+    await audit(db, req, {
+      action: 'audit.read',
+      patientId: q.patientId ?? null,
+      ...(q.actorUserId && { entityType: 'user', entityId: q.actorUserId }),
+      details: { filters: { action: q.action ?? null, actorUserId: q.actorUserId ?? null, patientId: q.patientId ?? null, outcome: q.outcome ?? null, from: q.from ?? null, to: q.to ?? null }, results: events.length },
+    })
     return { events, nextBefore: rows.length > q.limit ? (page.at(-1)?.e.id ?? null) : null }
   })
 
@@ -245,13 +276,19 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const roleCounts = await db
       .select({ role: users.role, active: sql<number>`count(*) filter (where ${users.isActive})::int`, total: sql<number>`count(*)::int` })
       .from(users)
+      .where(eq(users.facilityId, me.facilityId))
       .groupBy(users.role)
-    const [sessionCount] = await db.select({ n: sql<number>`count(*)::int` }).from(sessions).where(sql`${sessions.expiresAt} > now()`)
-    const [deptCount] = await db.select({ n: sql<number>`count(*)::int` }).from(departments).where(eq(departments.isActive, true))
+    const [sessionCount] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(sessions)
+      .innerJoin(users, eq(users.id, sessions.userId))
+      .where(and(sql`${sessions.expiresAt} > now()`, eq(users.facilityId, me.facilityId)))
+    const [deptCount] = await db.select({ n: sql<number>`count(*)::int` }).from(departments).where(and(eq(departments.isActive, true), eq(departments.facilityId, me.facilityId)))
+    // Failed sign-ins of this facility's accounts, plus attempts on unknown usernames (no facility).
     const [failedLogins] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(auditEvents)
-      .where(and(eq(auditEvents.action, 'auth.login'), eq(auditEvents.outcome, 'failure'), sql`${auditEvents.occurredAt} > now() - interval '24 hours'`))
+      .where(and(eq(auditEvents.action, 'auth.login'), eq(auditEvents.outcome, 'failure'), sql`${auditEvents.occurredAt} > now() - interval '24 hours'`, sql`(coalesce(${auditEvents.facilityId}, (select fac_u.facility_id from ${users} fac_u where fac_u.id = ${auditEvents.actorUserId})) = ${me.facilityId} or (${auditEvents.facilityId} is null and ${auditEvents.actorUserId} is null))`))
     return {
       users: Object.fromEntries(roleCounts.map((r) => [r.role, { active: r.active, total: r.total }])),
       activeSessions: sessionCount?.n ?? 0,

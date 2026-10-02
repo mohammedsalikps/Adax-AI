@@ -111,7 +111,25 @@ In the README, "model registry" refers to the `ai_models` usage log. It is not a
 
 **Rebuild:** none. No existing module needs replacing; the gaps are additive.
 
-## 6. Order of work
+## 6. Progress since the audit
+
+Verified by tests; see [STATUS.md](STATUS.md) for the exact results.
+
+| Item | Status now |
+| --- | --- |
+| Invariant 1: AI text in notes keeps its artifact reference | **Fixed** (Mana slice, `5cbefc1`) |
+| Mana patient-context Q&A | **Built** (`5cbefc1`) |
+| Invariant 5: default deny | **Fixed**: start-up route guard plus a route/role matrix test (slice 2) |
+| Invariant 6: consent gates, including the portal | **Fixed**: deterministic consent state, renewal, withdrawal of every grant with immediate effects, portal checks (slice 2) |
+| Invariant 8: audit of denials | **Mostly fixed**: in-route 403s, cross-facility 404s, portal probes, device rejections and bulk-read patient lists. Unauthenticated 401s are not audited. |
+| Invariant 10: patient data in logs | **Fixed for request logs**: paths only. Error serialisation is unchanged. |
+| Invariant 11: facility scope of admin and staff routes | **Fixed** (slice 2) |
+| Rate limiting; atomic lockout; patient account reset and switch-off | **Fixed** (slice 2) |
+| Over-broad views (admin device list, nurse AI photo descriptions, amendments, clinical text in audit details) | **Fixed** (slice 2) |
+| Visit/encounter lifecycle, signed-content verification, audit hash chain and app-role grants, test-DB name guard | Open (slice 3) |
+| `data_processing` consent meaning | Open: needs legal review |
+
+## 7. Order of work
 
 Following the directive's priorities and the critic's ranking:
 

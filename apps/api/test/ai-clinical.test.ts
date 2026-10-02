@@ -308,10 +308,11 @@ describe('recommendations', () => {
   it('record-aware recommendations need the current consent wording', async () => {
     const { p, e, doctor, nurse } = await scenario(withAi, { consent: false })
     await call(withAi.app, 'POST', `/api/patients/${p.id}/consents`, { cookie: nurse, body: { type: 'ai_recording', method: 'verbal' } })
-    await adminQuery("UPDATE consents SET version = '2026-10-v1'")
+    // Simulate a consent given under the earlier wording (bypassing the consent guard as the test superuser).
+    await adminQuery("SET session_replication_role = replica; UPDATE consents SET version = '2026-10-v1';")
     recommender.out = [{ kind: 'follow_up', urgency: 'routine', text: 'Consider review in a week.', rationale: 'x', supportingRefs: ['A1'], conflicts: [], missingInformation: [] }]
     const res = await call(withAi.app, 'POST', `/api/encounters/${e.id}/recommendations`, { cookie: doctor, body: {} })
-    expect(res.json().notice).toMatch(/earlier consent wording/)
+    expect(res.json().notice).toMatch(/earlier wording/)
     expect(recommender.seen).toHaveLength(0)
     expect(res.json().consent).toMatchObject({ granted: true, current: false })
   })

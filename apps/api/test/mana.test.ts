@@ -341,6 +341,25 @@ describe('Mana AI summary', () => {
     expect(qa.seen.at(-1)!.recordText).toMatch(/\] 2026-10-01 · Temperature/)
   })
 
+  it('after the patient withdraws Mana consent, answers say so, nothing is sent, and the refusal is audited; a failed retry is audited as a failure', async () => {
+    const { p, nurse, doctor } = await scenario(withAi)
+    const granted = PatientDetail.parse((await call(withAi.app, 'POST', `/api/patients/${p.id}/consents`, { cookie: nurse, body: { type: 'ai_record_assistant', method: 'verbal' } })).json())
+    qa.failNext = new AiProviderError('unreachable', 'The AI service could not be reached.', true)
+    const failed = ManaAnswer.parse((await ask(withAi, doctor, p.id, { question: 'Allergies?' })).json())
+    qa.failNext = new AiProviderError('unreachable', 'Still unreachable.', true)
+    await call(withAi.app, 'POST', `/api/mana/questions/${failed.id}/retry`, { cookie: doctor })
+    expect((await adminQuery("SELECT outcome FROM audit_events WHERE action = 'ai.job_retry'")).rows).toEqual([{ outcome: 'failure' }])
+
+    await call(withAi.app, 'POST', `/api/patients/${p.id}/consents/${granted.consents.find((c) => c.type === 'ai_record_assistant')!.id}/withdraw`, { cookie: nurse })
+    const sent = qa.seen.length
+    const a = ManaAnswer.parse((await ask(withAi, doctor, p.id, { question: 'Allergies?' })).json())
+    expect(a.generation.status).toBe('consent_required')
+    expect(a.generation.reason).toMatch(/withdrawn consent/)
+    expect(qa.seen).toHaveLength(sent)
+    const { rows } = await adminQuery("SELECT details FROM audit_events WHERE action = 'consent.blocked'")
+    expect(rows).toEqual([{ details: expect.objectContaining({ type: 'ai_record_assistant', state: 'withdrawn' }) }])
+  })
+
   it('asking without an AI summary sends nothing to the provider', async () => {
     const { p, nurse, doctor } = await scenario(withAi)
     await call(withAi.app, 'POST', `/api/patients/${p.id}/consents`, { cookie: nurse, body: { type: 'ai_record_assistant', method: 'verbal' } })

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { THERMAL_DATASET_SCHEMA, THERMAL_TAXONOMY_VERSION, type ThermalDataSummary, type ThermalDatasetExport } from '@adaxai/contracts'
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
 import { currentUser } from '../auth/plugin.ts'
@@ -10,7 +10,7 @@ import type { Db } from '../db/client.ts'
 import { consents, datasetMemberships, evaluationRuns, files, patients, thermalCaptures, thermalDatasetExports, thermalLabels, thermalRois, users } from '../db/schema.ts'
 import { readStoredBytes, storeBytes } from '../files/storage.ts'
 import { createZip } from '../files/zip.ts'
-import { conflict, notFound } from '../http/errors.ts'
+import { conflict, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { ageOn } from '../patients/service.ts'
 import type { ThermalService } from './client.ts'
@@ -153,7 +153,13 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
       const matrix = await readStoredBytes(config.storageDir, r.matrixKey)
       if (matrix.length !== r.c.width * r.c.height * 4) throw new Error(`stored matrix of capture ${r.c.id} has the wrong size`)
       entries.push({ name: `matrices/${cid}.f32`, data: matrix })
-      const { notes: _notes, ...protocol } = r.c.protocol as Record<string, unknown>
+      // Staff-typed text is not exported: capture notes and the free-text body region are left out, and
+      // region names become neutral codes (ROI-1, ROI-2, ...), used consistently for pairs and labels.
+      const { notes: _notes, bodyRegion: _bodyRegion, ...protocol } = r.c.protocol as Record<string, unknown>
+      const capRois = rois.filter((x) => x.captureId === r.c.id)
+      const keyOf = (l: string) => l.trim().toLowerCase()
+      const roiCode = new Map(capRois.map((x, n) => [keyOf(x.label), `ROI-${n + 1}`]))
+      const code = (label: string | null) => (label === null ? null : (roiCode.get(keyOf(label)) ?? 'ROI-?'))
       const camera = r.c.camera as { make: string | null; model: string | null }
       const capLabels = labels.filter((l) => l.captureId === r.c.id)
       if (capLabels.length) labelled++
@@ -173,9 +179,9 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
         parameters: r.c.parameters,
         extractor: r.c.extractor,
         stats: { minC: r.c.minC, maxC: r.c.maxC, meanC: r.c.meanC },
-        rois: rois.filter((x) => x.captureId === r.c.id).map((x) => ({ label: x.label, shape: x.shape, x: x.x, y: x.y, width: x.width, height: x.height, pairWith: x.pairWith, stats: x.stats })),
-        pairs: r.c.pairStats,
-        labels: capLabels.map((l) => ({ rater: pseudo(raters, l.labelledBy, 'R'), scope: l.scope, roi: l.roiLabel, code: l.code, referenceStandard: l.referenceStandard, certainty: l.certainty, taxonomyVersion: l.taxonomyVersion })),
+        rois: capRois.map((x) => ({ label: code(x.label), shape: x.shape, x: x.x, y: x.y, width: x.width, height: x.height, pairWith: code(x.pairWith), stats: x.stats })),
+        pairs: (r.c.pairStats as { a: string; b: string }[]).map((pr) => ({ ...pr, a: code(pr.a), b: code(pr.b) })),
+        labels: capLabels.map((l) => ({ rater: pseudo(raters, l.labelledBy, 'R'), scope: l.scope, roi: code(l.roiLabel), code: l.code, referenceStandard: l.referenceStandard, certainty: l.certainty, taxonomyVersion: l.taxonomyVersion })),
       })
     }
     const nonClinical = Object.keys(origins).some((o) => o !== 'clinical')
@@ -213,10 +219,28 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
     return reply.code(201).send(await toExport(row))
   })
 
+  /**
+   * An export may only be used while every patient in it still consents to
+   * research use; after a withdrawal it is blocked and a new export (without
+   * that patient) is needed.
+   */
+  async function assertMembersConsent(req: FastifyRequest, exportId: string) {
+    const [stale] = await db
+      .select({ n: sql<number>`count(distinct ${thermalCaptures.patientId})::int` })
+      .from(datasetMemberships)
+      .innerJoin(thermalCaptures, eq(thermalCaptures.id, datasetMemberships.entityId))
+      .where(and(eq(datasetMemberships.exportId, exportId), eq(datasetMemberships.entityType, 'thermal_capture'), sql`not ${hasResearchConsent}`))
+    if ((stale?.n ?? 0) > 0) {
+      await audit(db, req, { action: 'thermal.dataset_use', outcome: 'denied', entityType: 'thermal_dataset_export', entityId: exportId, details: { reason: 'research_consent_withdrawn', patients: stale!.n } })
+      throw new HttpError(409, 'consent_withdrawn', `${stale!.n} patient(s) in this dataset no longer consent to research use. Create a new export; this one can no longer be used.`)
+    }
+  }
+
   app.get('/api/thermal-data/exports/:id/download', { config: { permission: 'thermal:export' } }, async (req, reply) => {
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const row = await getExportOr404(me.facilityId, id)
+    await assertMembersConsent(req, id)
     const file = (await db.query.files.findFirst({ where: eq(files.id, row.fileId) }))!
     const data = await readStoredBytes(config.storageDir, file.storageKey)
     await audit(db, req, { action: 'thermal.dataset_download', entityType: 'thermal_dataset_export', entityId: id, details: { sha256: file.sha256 } })
@@ -234,6 +258,7 @@ export function registerThermalDatasetRoutes(app: FastifyInstance, deps: { db: D
     const me = currentUser(req)
     const { id } = parse(IdParams, req.params)
     const row = await getExportOr404(me.facilityId, id)
+    await assertMembersConsent(req, id)
     const file = (await db.query.files.findFirst({ where: eq(files.id, row.fileId) }))!
     const result = await thermal.evaluate(await readStoredBytes(config.storageDir, file.storageKey))
     await db.transaction(async (tx) => {

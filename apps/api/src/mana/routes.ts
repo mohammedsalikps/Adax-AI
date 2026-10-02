@@ -1,4 +1,4 @@
-import { AskManaRequest, CONSENT_VERSIONS, type ManaAnswer, type ManaGenerationStatus, ManaIntent, type ManaSection, type ManaSource, type ManaStatement } from '@adaxai/contracts'
+import { AskManaRequest, type ManaAnswer, type ManaGenerationStatus, ManaIntent, type ManaSection, type ManaSource, type ManaStatement } from '@adaxai/contracts'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
@@ -13,7 +13,8 @@ import type { Db } from '../db/client.ts'
 import { aiJobs, aiReviewActions, aiRuns, facilities, manaQuestions, noteInsertions, patients, users } from '../db/schema.ts'
 import { conflict, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
-import { activeConsent, getPatientOr404 } from '../patients/service.ts'
+import { consentState } from '../consents/service.ts'
+import { getPatientOr404 } from '../patients/service.ts'
 import type { AppSettings } from '../settings/schema.ts'
 import { answerFromRecord, classifyQuestion, itemsForGeneration, MANA_RULES_VERSION } from './answers.ts'
 import { loadPatientRecord, toSource } from './record.ts'
@@ -123,12 +124,13 @@ export function registerManaRoutes(app: FastifyInstance, deps: ManaDeps) {
   }
 
   /** Whether the AI part may run, and if not, why (shown to the doctor; never replaced by placeholder text). */
-  async function generationGate(patientId: string, generate: boolean): Promise<{ status: ManaGenerationStatus; reason: string | null }> {
+  async function generationGate(patientId: string, generate: boolean): Promise<{ status: ManaGenerationStatus; reason: string | null; consentState?: string }> {
     if (!generate) return { status: 'not_requested', reason: 'Answer read from the record only; no AI summary was requested.' }
     if (!providers.qa) return { status: 'unavailable', reason: providers.reasons.qa ?? providers.reasons.llm ?? 'No AI provider is configured.' }
-    const c = await activeConsent(db, patientId, 'ai_record_assistant')
-    if (!c) return { status: 'consent_required', reason: 'The patient has not consented to Mana AI record summaries (record it under Consents on the patient record). The answer above is read directly from the record.' }
-    if (c.version !== CONSENT_VERSIONS.ai_record_assistant) return { status: 'consent_required', reason: 'The patient agreed to an earlier wording of the Mana AI consent; read the current wording and record consent again.' }
+    const { state } = await consentState(db, patientId, 'ai_record_assistant')
+    if (state === 'withdrawn') return { status: 'consent_required', consentState: state, reason: 'The patient has withdrawn consent to Mana AI record summaries, so nothing is sent to the AI service. The answer above is read directly from the record.' }
+    if (state === 'not_recorded') return { status: 'consent_required', consentState: state, reason: 'The patient has not consented to Mana AI record summaries (record it under Consents on the patient record). The answer above is read directly from the record.' }
+    if (state === 'outdated') return { status: 'consent_required', consentState: state, reason: 'The patient agreed to an earlier wording of the Mana AI consent; read the current wording and record consent again.' }
     return { status: 'pending', reason: null }
   }
 
@@ -214,6 +216,7 @@ export function registerManaRoutes(app: FastifyInstance, deps: ManaDeps) {
     const sections = answerFromRecord(intent, record, body.question, rules)
     const cited = new Set(sections.flatMap((s) => s.statements.flatMap((x) => x.refs)))
     const gate = await generationGate(id, body.generate)
+    if (gate.consentState) await audit(db, req, { action: 'consent.blocked', outcome: 'denied', entityType: 'patient', entityId: id, patientId: id, details: { type: 'ai_record_assistant', purpose: 'Mana AI summary', state: gate.consentState } })
     const sentItems = gate.status === 'pending' ? itemsForGeneration(intent, record, cited, settings.mana.maxContextChars) : []
     const sentRefs = new Set(sentItems.map((i) => i.ref))
     const sources = record.items.filter((i) => cited.has(i.ref) || sentRefs.has(i.ref)).map(toSource)
@@ -283,9 +286,10 @@ export function registerManaRoutes(app: FastifyInstance, deps: ManaDeps) {
     const job = q.jobId ? await db.query.aiJobs.findFirst({ where: eq(aiJobs.id, q.jobId) }) : null
     if (!job) throw conflict('This answer has no AI job to retry', 'no_job')
     if (!retryAllowed(q, job)) throw conflict(q.generationStatus === 'pending' ? 'This AI summary is still in progress' : 'This AI summary failure cannot be retried', q.generationStatus === 'pending' ? 'in_progress' : 'not_retryable')
-    await audit(db, req, { action: 'ai.job_retry', entityType: 'ai_job', entityId: job.id, patientId: q.patientId, details: { kind: job.kind, attempts: job.attempts } })
     await generate(req, q, job)
-    return (await toAnswer([(await questionOr404(me, id))]))[0]
+    const after = await questionOr404(me, id)
+    await audit(db, req, { action: 'ai.job_retry', outcome: after.generationStatus === 'succeeded' ? 'success' : 'failure', entityType: 'ai_job', entityId: job.id, patientId: q.patientId, details: { kind: job.kind, attempts: job.attempts } })
+    return (await toAnswer([after]))[0]
   })
 
   /** The doctor marks an answer as reviewed (recorded with name and time; the answer itself never changes). */

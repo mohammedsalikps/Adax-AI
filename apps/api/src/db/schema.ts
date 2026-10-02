@@ -123,9 +123,12 @@ export const auditEvents = pgTable(
     ip: text('ip'),
     userAgent: text('user_agent'),
     details: jsonb('details').notNull().default(sql`'{}'::jsonb`),
+    /** Facility the event belongs to (actor's or patient's); null for anonymous events and rows before migration 0017. */
+    facilityId: uuid('facility_id'),
   },
   (t) => [
     index('audit_events_occurred_idx').on(t.occurredAt),
+    index('audit_events_facility_idx').on(t.facilityId, t.occurredAt),
     index('audit_events_actor_idx').on(t.actorUserId),
     index('audit_events_patient_idx').on(t.patientId),
     index('audit_events_action_idx').on(t.action),
@@ -205,7 +208,12 @@ export const allergies = pgTable(
 export const consentType = pgEnum('consent_type', ['data_processing', 'ai_recording', 'thermal_imaging', 'device_monitoring', 'portal_access', 'research_use', 'clinical_photography', 'ai_image_analysis', 'ai_record_assistant'])
 export const consentMethod = pgEnum('consent_method', ['verbal', 'written', 'digital'])
 
-/** Consent records are never deleted; withdrawal is recorded on the row. */
+/**
+ * Consent records are never deleted or rewritten. A granted consent ends once:
+ * withdrawn (with who, when, why and how) or superseded by a renewal under
+ * newer wording (trigger, migration 0017). At most one ongoing grant per
+ * patient and purpose is active.
+ */
 export const consents = pgTable(
   'consents',
   {
@@ -226,8 +234,18 @@ export const consents = pgTable(
     recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
     withdrawnAt: timestamp('withdrawn_at', { withTimezone: true }),
     withdrawnBy: uuid('withdrawn_by').references(() => users.id),
+    /** Optional reason given at withdrawal (shown on the record; never copied into the audit log). */
+    withdrawReason: text('withdraw_reason'),
+    /** staff | patient_portal */
+    withdrawnVia: text('withdrawn_via'),
+    /** The renewal that replaced this grant (status superseded). */
+    supersededBy: uuid('superseded_by').references((): AnyPgColumn => consents.id),
   },
-  (t) => [index('consents_patient_idx').on(t.patientId, t.type)],
+  (t) => [
+    index('consents_patient_idx').on(t.patientId, t.type),
+    uniqueIndex('consents_one_active_ongoing_uq').on(t.patientId, t.type).where(sql`status = 'granted' and scope = 'ongoing'`),
+    check('consents_status_check', sql`${t.status} in ('granted', 'withdrawn', 'superseded')`),
+  ],
 )
 
 /** One-time codes a patient uses to activate their portal account. Only a hash is stored. */

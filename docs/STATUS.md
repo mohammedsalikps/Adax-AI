@@ -1,10 +1,202 @@
 # ADAXAI status
 
-**Last updated:** 2 Oct 2026.
+**Last updated:** 3 Oct 2026.
 
-ADAXAI is an MVP. It is not production-ready, not a medical device, and not clinically validated. All data is synthetic.
+ADAXAI is an MVP. It is not production-ready, not a medical device, and not clinically validated. All data is synthetic. Nothing here claims legal or regulatory compliance.
 
-## Current slice: Mana AI patient-context Q&A, and AI text in notes with provenance
+| Slice | Commit |
+| --- | --- |
+| 1. Mana AI patient-context Q&A; AI text in notes with provenance | `5cbefc1` |
+| 2. Consent and access control | this commit (see below) |
+
+## Slice 2: consent and access control
+
+The basis was a read-only scope audit of every API route (154 route records; 68 gaps confirmed by adversarial verification). Decisions are recorded in [ADR 0006](adr/0006-consent-lifecycle-and-enforcement.md) (consent) and [ADR 0007](adr/0007-default-deny-routes-facility-scope-and-denial-audit.md) (access).
+
+### Implemented
+
+**Consent model** (migration `0017`, additive)
+- **States:** granted (current wording), granted under an earlier wording (renew), withdrawn, not recorded. Computed in one place and shown in every app.
+- **Withdrawal record:** reason (optional, kept on the record, not in the audit log), who, and the channel (staff or patient portal).
+- **Renewal:** supersedes the earlier-wording grant atomically.
+- **Database rules:**
+  - rows are never deleted or rewritten, and end once (trigger);
+  - one active ongoing grant per purpose (unique index);
+  - deterministic lookup, current wording first.
+
+**Enforcement at the API boundary**, refusals audited as `consent.blocked`:
+- recording and AI assistance;
+- Mana AI summaries, including retries;
+- photographs and their AI description;
+- thermal images;
+- device assignment, recordings and ingestion;
+- portal activation, reset, sign-in and every portal request;
+- research dataset download and evaluation.
+
+The rule-based safety check reads the transcript only while recording consent is in place.
+
+**Withdrawal takes effect at once**, ending every grant of the purpose, including consultation-only ones:
+- **portal access:** the account is switched off, sessions end, codes are revoked;
+- **device consent:** assignments end;
+- **research consent:** datasets that include the patient are blocked;
+- **recording:** the browser recorder stops, sends nothing more and closes the live transcript.
+
+Patients can withdraw their own consents in the portal. Granting stays with staff, who read the wording. The portal shows the wording the patient actually agreed to.
+
+**Device readings** are filed to the patient the device was assigned to when they were measured, and only if consent was in place at that time. A renewal under newer wording counts as continuous consent. Readings outside an assignment or before consent are refused and audited.
+
+**Portal accounts**
+- Staff can issue a reset code (new password; switches the account back on; requires portal consent).
+- Staff can switch an account off at once.
+- Activation and reset re-check consent and record who issued the code.
+
+**Default deny**
+- Every `/api` route must declare `public`, a permission or `anySession`, or the API does not start.
+- A route-inventory test checks the public set (5 routes) and the any-session set (3 routes).
+- 401 is checked for every private route.
+- A 403 is checked for every role and route the role lacks permission for (over 150 pairs, each audited).
+
+**Facility scope**
+- Admin user list, edit and password reset; staff directory; overview counts; audit search.
+- Audit rows carry their facility.
+- A patient or consultation of another facility is "not found", and the attempt is audited with the reason.
+
+**Minimum necessary**
+- Admins see that a device is in use, not by whom.
+- Nurses see only reviewed AI photo descriptions.
+- Only the signing doctor amends a signed consultation (conservative default).
+- AI audit details carry counts only, never model text.
+
+**Every refusal leaves a trace**, without double entries:
+- in-route 403s;
+- cross-facility 404s;
+- portal record probes;
+- device rejections;
+- the patients disclosed by bulk reads;
+- CSRF refusals, throttled per address.
+
+**Sign-in**
+- Attempt slots are reserved before the password check, so there is no lockout race.
+- The same lockout rules apply to every username, so no account discovery.
+- Unknown usernames are never stored.
+- Wrong current passwords at a password change count towards the lockout.
+- Rate limits per address, account, user and device token (429 with `Retry-After`).
+
+**Logs:** request logs record paths only, never search terms.
+
+**De-identified thermal export:** staff-typed region names become neutral codes (case-insensitive, pairs preserved); the free-text body region is left out.
+
+**UI**
+- **Consents card:**
+  - the state of each purpose;
+  - renewal;
+  - withdrawal dialog with the effect and an optional reason;
+  - consultation-only grants;
+  - full history.
+- **Patient portal card:** activation, reset code, switch off.
+- **Portal consents page:** withdrawal in the patient's own words and effect; earlier-wording label.
+- **Sign-in notice** after a patient withdraws portal access.
+- **Admin device registry:** without patient identity.
+
+### Not implemented, or needing a decision
+
+- **"Care records" (`data_processing`) consent** is recorded and shown but not enforced. The withdrawal texts say so. What it means for care is a legal decision.
+- **Unauthenticated 401s** are not audited. This avoids noise from expired sessions; every other refusal is audited.
+- **Rate limits** are per process and in memory; a restart clears them.
+- **Amendment rights** (only the signing doctor) are a conservative default for the clinical owner to confirm.
+- **Unchanged areas:**
+  - the visit/encounter lifecycle;
+  - signed-content verification;
+  - the audit hash chain and app-role grants;
+  - the test-DB name guard.
+
+  These are slice 3.
+
+### Tests
+
+**Updated** where the behaviour intentionally changed:
+- search audit now lists the patients returned;
+- an activation code for an existing account is now a reset code;
+- portal probes are audited;
+- `outside_assignment` replaces `device_unassigned`, and withdrawing device consent ends assignments;
+- ROI codes in the export;
+- consent message wording.
+
+**New in `consents.test.ts` (13):**
+- lifecycle;
+- database guards;
+- enforcement: absent, granted, withdrawn;
+- consultation-only grants;
+- device timing and renewal chain;
+- buffered-reading attribution;
+- portal withdrawal and reset;
+- portal consent defence in depth;
+- patient self-withdrawal;
+- earlier wording;
+- switching an account off;
+- withdrawal texts.
+
+**New in `access.test.ts` (14):**
+- route inventory;
+- start-up refusal of an undeclared route;
+- 401 sweep;
+- role matrix;
+- in-route refusals;
+- facility isolation;
+- lockout under concurrency (incl. the one-correct-guess burst);
+- parity for inactive and unknown usernames;
+- password-change lockout;
+- rate limits;
+- CSRF audit volume;
+- log redaction.
+
+**Added to existing suites:**
+- `devices.test.ts`: admin view and list audit;
+- `images.test.ts`: nurse view;
+- `thermal-data.test.ts`: research withdrawal;
+- `mana.test.ts`: withdrawn consent and retry audit.
+
+**E2E:** `e2e/consent.spec.ts` covers portal withdrawal, staff withdrawal, reset code and portal self-withdrawal, on desktop and mobile.
+
+### Verified test results (slice 2, 3 Oct 2026)
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm run lint` | exit 0 |
+| `npm run test:api` | 22 files, **204 passed**, 0 failed |
+| `npm run test:web` | **5 passed** |
+| `npm run test:thermal` | **32 passed** |
+| `npx playwright test` | **43 passed, 0 failed, 0 timed out, 1 skipped**. The skip is the existing desktop-only keyboard test on mobile. The longest test took 30.9 s, within the 60 s budget. |
+
+**Browser check** (dev server, synthetic data): a read-only script signed in as `nurse.anil` and screenshotted the consents card with its history, the patient portal card and the withdraw dialog (opened and cancelled; no data changed). At 390 px there is no horizontal overflow (scrollWidth 390). Migration 0017 was applied to the dev database; it is additive, and there were no duplicate active grants beforehand.
+
+### Pre-commit adversarial review (slice 2)
+
+**Method:**
+- Five lenses: authorization bypass, consent logic, integrity and audit, regressions, UI.
+- A skeptic then tried to refute each finding.
+- 26 findings were raised: 22 confirmed, 4 refuted.
+
+**What was fixed:**
+- a sign-in lockout race that singled out the correct password;
+- enumeration through inactive accounts and through the reset window of unknown usernames;
+- missing facility on audit rows from public routes;
+- withdrawal texts that over-promised (incl. "Care records") or used staff wording for patients;
+- buffered device readings refused after a consent renewal;
+- consultation-only grants hiding withdrawals, and no way to withdraw them;
+- a renewal racing a withdrawal;
+- Mana's legacy consent path;
+- portal code issuance rejecting an earlier wording;
+- double audit rows;
+- the CSRF audit flood;
+- a failed Mana retry audited as a success;
+- case-sensitive ROI codes breaking pairs;
+- the live recorder after a consent refusal (it uploaded leftover audio, left the transcript "live", and kept showing stale consent);
+- "Add amendment" shown to doctors who may not amend;
+- the device gateway contract not documented.
+
+## Slice 1: Mana AI patient-context Q&A, and AI text in notes with provenance
 
 ### Implemented
 
@@ -222,22 +414,18 @@ The demo password was read from `.env` inside the script and never printed.
 
 ## Next planned work
 
-1. **Slice 2: consent and access control** ([AUDIT.md](AUDIT.md) §6):
-   - consent states, renewal and withdrawal reasons;
-   - portal withdrawal ends access;
-   - default-deny route guard;
-   - facility scoping of admin routes;
-   - rate limiting;
-   - audit of denials;
-   - log redaction;
-   - UI for consent status.
-2. Record lifecycle and integrity.
-3. Appointments.
-4. Devices and alerts.
-5. Consultation capture.
-6. Admin and operations.
-7. Evaluation harness.
-8. The full 14-step demo.
+1. **Slice 3: record lifecycle and integrity:**
+   - an unsigned-drafts worklist;
+   - visit/encounter transition guards;
+   - signed-content verification;
+   - audit hash chain and app-role grants;
+   - a test-DB name guard.
+2. Appointments.
+3. Devices and alerts.
+4. Consultation capture.
+5. Admin and operations.
+6. Evaluation harness.
+7. The full 14-step demo.
 
 ## External needs (not blocking the MVP build)
 
@@ -247,5 +435,11 @@ The demo password was read from `.env` inside the script and never printed.
   - allergy groups;
   - the "outdated" threshold;
   - consent wording.
-- **Legal / privacy review** of consent purposes and cross-border AI processing. Nothing here claims compliance.
+- **Legal / privacy review** of:
+  - consent purposes;
+  - what "Care records" (`data_processing`) consent means for care;
+  - cross-border AI processing.
+
+  Nothing here claims compliance.
+- **The clinical owner's confirmation** of amendment rights (currently only the signing doctor).
 - **Labelled, de-identified data**, needed before any model evaluation or training.

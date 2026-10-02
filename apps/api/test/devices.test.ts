@@ -69,7 +69,7 @@ describe('gateway ingestion boundary', () => {
 
     expect((await ingest(null, reading())).statusCode).toBe(401)
     expect((await ingest('adxdev_wrong', reading())).statusCode).toBe(401)
-    expect((await ingest(token, reading())).json().error).toBe('device_unassigned')
+    expect((await ingest(token, reading())).json().error).toBe('outside_assignment')
 
     const { p, v } = await patient()
     await call(ctx.app, 'POST', `/api/devices/${d.id}/assignments`, { cookie: nurse, body: { patientId: p.id, visitId: v.id } })
@@ -89,10 +89,19 @@ describe('gateway ingestion boundary', () => {
     expect(rows).toContainEqual({ actor_role: 'device', outcome: 'success' })
     expect(rows).toContainEqual({ actor_role: 'device', outcome: 'denied' })
 
-    // Consent withdrawn: nothing more is stored.
+    // Admins manage devices but do not see who wears them; staff do. Device list reads are audited.
+    const adminView = (await call(ctx.app, 'GET', '/api/devices', { cookie: admin })).json().devices.find((x: { id: string }) => x.id === d.id)
+    expect(adminView.assignment).toMatchObject({ patientId: null, patientName: null, mrn: null })
+    const staffView = (await call(ctx.app, 'GET', '/api/devices', { cookie: nurse })).json().devices.find((x: { id: string }) => x.id === d.id)
+    expect(staffView.assignment).toMatchObject({ patientId: p.id, mrn: p.mrn })
+    const listReads = (await adminQuery("SELECT details FROM audit_events WHERE action = 'device.list_read' ORDER BY id")).rows
+    expect(listReads.at(-1).details.patientIds).toEqual([p.id])
+
+    // Consent withdrawn: the assignment ends at once and nothing more is stored.
     const c = PatientDetail.parse((await call(ctx.app, 'GET', `/api/patients/${p.id}`, { cookie: nurse })).json()).consents.find((x) => x.type === 'device_monitoring')!
     await call(ctx.app, 'POST', `/api/patients/${p.id}/consents/${c.id}/withdraw`, { cookie: nurse, body: { reason: 'Patient changed mind' } })
-    expect((await ingest(token, reading())).json().error).toBe('consent_required')
+    expect((await adminQuery('SELECT end_reason FROM device_assignments WHERE ended_at IS NOT NULL')).rows).toEqual([{ end_reason: 'Consent to device readings withdrawn' }])
+    expect((await ingest(token, reading())).json().error).toBe('outside_assignment')
 
     // Revoked token, and retired devices, cannot post.
     await call(ctx.app, 'DELETE', `/api/admin/devices/${d.id}/token`, { cookie: admin })

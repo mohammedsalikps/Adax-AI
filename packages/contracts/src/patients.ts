@@ -166,11 +166,57 @@ export const CONSENT_VERSIONS: Record<ConsentType, string> = {
   ai_image_analysis: '2026-10-v1',
   ai_record_assistant: '2026-10-v1',
 }
+/** Earlier wordings, so a record shows what the patient actually agreed to (from the git history of this file). */
+export const CONSENT_EARLIER_WORDINGS: Partial<Record<ConsentType, Record<string, { title: string; description: string }>>> = {
+  ai_recording: {
+    '2026-10-v1': { title: 'Consultation recording & AI drafting', description: 'Record the consultation audio and process it with external speech-to-text and AI services to draft notes for the doctor to review.' },
+  },
+}
+
+/** The wording a patient agreed to for a given version, or null if that version's text is not known. */
+export function consentWording(type: ConsentType, version: string): { title: string; description: string } | null {
+  if (version === CONSENT_VERSIONS[type]) return CONSENT_LABELS[type]
+  return CONSENT_EARLIER_WORDINGS[type]?.[version] ?? null
+}
+
+// Granting is recorded by staff after explaining the wording to the patient;
+// withdrawal is possible at any time, by staff or by the patient in the portal.
+
+/** What withdrawing a consent does, for staff, shown before the withdrawal is confirmed (every purpose listed). */
+export const CONSENT_WITHDRAWAL_EFFECTS: Record<ConsentType, string> = {
+  data_processing: 'The withdrawal is recorded and shown on the patient record. ADAXAI does not stop keeping or using care records by itself: what it means for the patient’s care is the clinic’s decision (not yet defined).',
+  ai_recording: 'Recording and AI assistance stop at once for every consultation, including ones with a consultation-only consent.',
+  thermal_imaging: 'No new thermal images can be added. Images already taken stay in the record.',
+  device_monitoring: 'Device assignments of this patient end at once; readings are no longer accepted.',
+  portal_access: 'The patient’s portal account is switched off at once, they are signed out, and unused activation codes stop working.',
+  research_use: 'Existing research datasets that include this patient can no longer be downloaded or evaluated.',
+  clinical_photography: 'No new photographs can be added. Photographs already taken stay in the record.',
+  ai_image_analysis: 'Photographs are no longer sent to the AI service. Descriptions already reviewed stay in the record.',
+  ai_record_assistant: 'Mana stops sending record items to the AI service, including retries; answers read from the record still work.',
+}
+
+/** The same effects, worded for the patient in the portal. */
+export const CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT: Record<ConsentType, string> = {
+  data_processing: 'Your withdrawal is recorded and the clinic is told. Your care records are still kept and used for your care; ask the clinic what this means for you.',
+  ai_recording: 'Your consultations are no longer recorded or drafted with AI, including any you agreed to for one consultation only.',
+  thermal_imaging: 'No new thermal images are taken. Images already taken stay in your record for the care team.',
+  device_monitoring: 'Readings from your devices stop being accepted at once.',
+  portal_access: 'Your online access is switched off at once: you are signed out, and any unused activation codes stop working.',
+  research_use: 'Research datasets that already include your de-identified data can no longer be downloaded or evaluated.',
+  clinical_photography: 'No new photographs are taken. Photographs already taken stay in your record for the care team.',
+  ai_image_analysis: 'Your photographs are no longer sent to the AI service. Descriptions already reviewed stay in your record.',
+  ai_record_assistant: 'Parts of your record are no longer sent to the AI service for summaries. Your doctor can still read your record directly.',
+}
+
+/** granted: with the current wording · outdated: granted with an earlier wording · withdrawn · not_recorded */
+export const CONSENT_STATES = { granted: 'Granted', outdated: 'Granted (earlier wording)', withdrawn: 'Withdrawn', not_recorded: 'Not recorded' } as const
+export type ConsentState = keyof typeof CONSENT_STATES
+
 export const ConsentMethod = z.enum(['verbal', 'written', 'digital'])
 export const Consent = z.object({
   id: z.uuid(),
   type: ConsentType,
-  status: z.enum(['granted', 'withdrawn']),
+  status: z.enum(['granted', 'withdrawn', 'superseded']),
   method: ConsentMethod,
   scope: z.enum(['ongoing', 'encounter']),
   encounterId: z.uuid().nullable(),
@@ -178,11 +224,23 @@ export const Consent = z.object({
   recordedAt: z.string(),
   recordedByName: z.string().nullable(),
   withdrawnAt: z.string().nullable(),
+  withdrawnByName: z.string().nullable(),
+  withdrawReason: z.string().nullable(),
+  /** staff | patient_portal */
+  withdrawnVia: z.string().nullable(),
+  supersededBy: z.uuid().nullable(),
   version: z.string(),
+  /** Whether this grant used the current wording. */
+  currentWording: z.boolean(),
 })
 export type Consent = z.infer<typeof Consent>
 export const RecordConsentRequest = z.object({ type: ConsentType, method: ConsentMethod, notes: OptionalText(300) })
 export type RecordConsentRequest = z.input<typeof RecordConsentRequest>
+export const WithdrawConsentRequest = z.object({ reason: OptionalText(300) })
+export type WithdrawConsentRequest = z.input<typeof WithdrawConsentRequest>
+/** The state of each consent purpose for one patient (computed on the server). */
+export const ConsentSummary = z.object({ type: ConsentType, state: z.enum(['granted', 'outdated', 'withdrawn', 'not_recorded']), consentId: z.uuid().nullable() })
+export type ConsentSummary = z.infer<typeof ConsentSummary>
 
 export const PatientDetail = PatientSummary.extend({
   givenName: z.string(),
@@ -200,7 +258,9 @@ export const PatientDetail = PatientSummary.extend({
   noKnownAllergies: z.boolean(),
   allergies: z.array(Allergy),
   consents: z.array(Consent),
-  portalAccount: z.object({ active: z.boolean(), activationPending: z.boolean() }),
+  consentStates: z.array(ConsentSummary),
+  /** none: no account · active · deactivated: switched off (e.g. portal consent withdrawn); a reset code re-enables it. */
+  portalAccount: z.object({ state: z.enum(['none', 'active', 'deactivated']), active: z.boolean(), activationPending: z.boolean() }),
   createdAt: z.string(),
 })
 export type PatientDetail = z.infer<typeof PatientDetail>
@@ -208,5 +268,6 @@ export type PatientDetail = z.infer<typeof PatientDetail>
 export const DuplicateCandidate = z.object({ id: z.uuid(), mrn: z.string(), fullName: z.string(), dateOfBirth: z.string(), phone: z.string() })
 export type DuplicateCandidate = z.infer<typeof DuplicateCandidate>
 
-export const ActivationCodeResponse = z.object({ activationCode: z.string(), expiresAt: z.string(), mrn: z.string() })
+/** `reset`: the code sets a new password for an existing (possibly switched-off) portal account. */
+export const ActivationCodeResponse = z.object({ activationCode: z.string(), expiresAt: z.string(), mrn: z.string(), reset: z.boolean() })
 export type ActivationCodeResponse = z.infer<typeof ActivationCodeResponse>

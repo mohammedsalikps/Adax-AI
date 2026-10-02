@@ -67,9 +67,16 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 **Note insertion:** append-only.
 - At signing each insertion is recorded in the signed snapshot, with `retained: true/false`, meaning whether the inserted text is still present unchanged.
 
-**Consent:** `granted → withdrawn`.
-- *(planned)* `superseded` when renewed under newer wording.
-- Features that need newer wording check the version.
+**Consent** (implemented, [ADR 0006](adr/0006-consent-lifecycle-and-enforcement.md)): `granted → withdrawn`, or `granted → superseded` by a renewal under the current wording.
+- A row ends once (database trigger). At most one ongoing grant per purpose is active.
+- Computed states: granted, outdated (earlier wording), withdrawn, not recorded.
+- Withdrawal ends every grant of the purpose and applies its effects at once:
+  - portal account switched off, sessions ended, codes revoked;
+  - device assignments ended;
+  - research datasets blocked.
+- Patients withdraw in the portal; staff grant after reading the wording to the patient.
+
+**Portal account:** `none → active` (activation code). `active → deactivated` when portal consent is withdrawn or staff switch it off. `deactivated → active` with a reset code, after new consent.
 
 **Device assignment:** `active → ended`, and it can end only once.
 

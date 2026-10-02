@@ -1,6 +1,6 @@
 import { Radio, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { api, errorMessage } from '../../lib/api.ts'
+import { api, ApiError, errorMessage } from '../../lib/api.ts'
 import type { AiResponse } from '../../lib/ai.ts'
 import { Button } from '../ui/Button.tsx'
 
@@ -25,14 +25,18 @@ export function LiveRecorder({ encounterId, chunkSeconds, onUpdate, disabled }: 
   const index = useRef(0)
   const queue = useRef<Promise<void>>(Promise.resolve())
   const active = useRef(false)
+  /** Set when the server refuses a chunk for lack of consent: nothing more leaves the browser. */
+  const blocked = useRef(false)
   const timers = useRef<ReturnType<typeof setInterval>[]>([])
   const supported = typeof window !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined'
 
   const upload = (blob: Blob, i: number) => {
+    if (blocked.current) return
     setPending((n) => n + 1)
     // Chunks are sent one at a time, in order.
     queue.current = queue.current.then(async () => {
       try {
+        if (blocked.current) return
         const fd = new FormData()
         fd.append('chunkIndex', String(i))
         fd.append('file', blob, `chunk-${i}.webm`)
@@ -40,6 +44,15 @@ export function LiveRecorder({ encounterId, chunkSeconds, onUpdate, disabled }: 
         setSent((n) => n + 1)
       } catch (e) {
         setError(errorMessage(e))
+        // Consent withdrawn (or no longer valid): stop capturing audio at once, send nothing more,
+        // close the live transcript (allowed without consent) and refresh the panel's consent state.
+        if (e instanceof ApiError && e.code.startsWith('consent_')) {
+          blocked.current = true
+          stopAll()
+          setState('idle')
+          const tid = transcriptId.current
+          if (tid) void api<AiResponse>(`/transcripts/${tid}/end`, { method: 'POST' }).then(onUpdate, () => undefined)
+        }
       } finally {
         setPending((n) => n - 1)
       }
@@ -76,6 +89,7 @@ export function LiveRecorder({ encounterId, chunkSeconds, onUpdate, disabled }: 
 
   const start = async () => {
     setError(null)
+    blocked.current = false
     try {
       stream.current = await navigator.mediaDevices.getUserMedia({ audio: true })
       const res = await api<AiResponse & { transcriptId: string }>(`/encounters/${encounterId}/live-transcripts`, { method: 'POST' })

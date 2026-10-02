@@ -509,7 +509,7 @@ export function EncounterReadView({ e }: { e: Encounter }) {
               Print prescription
             </Link>
           )}
-          {signed && me?.role === 'doctor' && (
+          {signed && me?.role === 'doctor' && me.id === e.doctor.id && (
             <Button variant="secondary" icon={<FilePlus2 aria-hidden="true" className="size-4" />} onClick={() => setAmending(true)}>
               Add amendment
             </Button>

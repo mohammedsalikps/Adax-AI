@@ -134,7 +134,7 @@ export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; pr
         left join ai_runs run on run.id = coalesce(f.run_id, r.run_id, d.run_id, ia.run_id)
        where p.facility_id = ${me.facilityId} and a.action = ${q.decision} and a.subject_type <> 'routing_suggestion'
        order by a.created_at desc limit 100`)
-    await audit(db, req, { action: 'ai.review_outcomes_read', details: { decision: q.decision, count: rows.length } })
+    await audit(db, req, { action: 'ai.review_outcomes_read', details: { decision: q.decision, count: rows.length, patientIds: [...new Set(rows.map((r) => String(r.patient_id)))] } })
     return {
       items: rows.map((r) => ({
         id: r.id,

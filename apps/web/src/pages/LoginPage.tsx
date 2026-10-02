@@ -39,6 +39,11 @@ export function LoginPage() {
   return (
     <PublicLayout title="Sign in to ADAXAI" subtitle="Staff and patients use the same sign-in.">
       <form onSubmit={submit} noValidate className="space-y-4">
+        {params.get('notice') === 'portal_withdrawn' && !login.isError && (
+          <Alert tone="info" title="Online access switched off">
+            You withdrew your consent to the patient portal, so you have been signed out and your account is switched off. Your care is not affected. Ask the clinic if you want access again.
+          </Alert>
+        )}
         {login.isError && <Alert tone="error">{errorMessage(login.error)}</Alert>}
         <TextField
           label="Username"

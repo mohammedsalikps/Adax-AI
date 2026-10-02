@@ -15,6 +15,7 @@ PostgreSQL, and a Python thermal-imaging service.
 | Admin portal | Users (create, edit, deactivate, reset password), departments, audit log viewer, operational overview, system status |
 | Patients | Registration (auto MRN, duplicate warning with audited override), search by name/MRN/phone (incl. non-Latin scripts), profile, allergies with explicit “no known allergies”, consents (grant/withdraw, history kept), patient-portal activation codes |
 | OPD queue and nurse workflow | Check-in with atomic daily tokens, one open visit per patient per day, priority, department/doctor assignment, server-enforced status transitions, vitals with plausibility checks and adult reference-range flags (not applied under 18; display aid only), entered-in-error corrections, doctor “my patients” view, auto-refresh |
+| Doctor consultation | Start/continue from the queue, structured note (complaint, history, medical history, examination, assessment, plan, follow-up), diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid in this build), patient timeline |
 
 ## Accounts and security model
 

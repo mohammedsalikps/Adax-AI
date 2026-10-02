@@ -3,6 +3,8 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router'
 import { PortalLayout } from './components/PortalLayout.tsx'
+import { ConsultAction, ConsultationLink } from './components/clinical/ConsultAction.tsx'
+import { Timeline } from './components/clinical/Timeline.tsx'
 import { RequireAuth, RoleRedirect } from './components/RequireAuth.tsx'
 import { ToastProvider } from './components/ui/Toast.tsx'
 import { createQueryClient } from './lib/queryClient.ts'
@@ -16,6 +18,8 @@ import { PatientProfilePage } from './pages/clinical/PatientProfilePage.tsx'
 import { PatientsPage } from './pages/clinical/PatientsPage.tsx'
 import { QueuePage } from './pages/clinical/QueuePage.tsx'
 import { RegisterPatientPage } from './pages/clinical/RegisterPatientPage.tsx'
+import { ConsultationPage } from './pages/doctor/ConsultationPage.tsx'
+import { PrescriptionPrintPage } from './pages/doctor/PrescriptionPrintPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { NotYetBuiltPage } from './pages/NotYetBuiltPage.tsx'
@@ -26,7 +30,17 @@ const portal = (role: Role) => (
   </RequireAuth>
 )
 
+const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} />
+
 const router = createBrowserRouter([
+  {
+    path: '/print/encounters/:encounterId',
+    element: (
+      <RequireAuth roles={['doctor', 'nurse']}>
+        <PrescriptionPrintPage />
+      </RequireAuth>
+    ),
+  },
   { path: '/', element: <RoleRedirect /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/activate', element: <ActivatePage /> },
@@ -54,9 +68,10 @@ const router = createBrowserRouter([
     path: '/doctor',
     element: portal('doctor'),
     children: [
-      { index: true, element: <QueuePage /> },
+      { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} /> },
       { path: 'patients', element: <PatientsPage /> },
-      { path: 'patients/:patientId', element: <PatientProfilePage /> },
+      { path: 'patients/:patientId', element: profile },
+      { path: 'encounters/:encounterId', element: <ConsultationPage /> },
       { path: 'register', element: <RegisterPatientPage /> },
       { path: 'thermal', element: <NotYetBuiltPage title="Thermal" planned={['FLIR image upload and analysis']} /> },
     ],
@@ -68,7 +83,8 @@ const router = createBrowserRouter([
       { index: true, element: <QueuePage /> },
       { path: 'register', element: <RegisterPatientPage /> },
       { path: 'patients', element: <PatientsPage /> },
-      { path: 'patients/:patientId', element: <PatientProfilePage /> },
+      { path: 'patients/:patientId', element: profile },
+      { path: 'encounters/:encounterId', element: <ConsultationPage /> },
       { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device assignment and readings']} /> },
     ],
   },

@@ -1,0 +1,192 @@
+import { Encounter, PatientDetail, type TimelineEntry, Visit } from '@adaxai/contracts'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { canonicalJson, sha256 } from '../src/encounters/service.ts'
+import { adminQuery, call, createFixture, createTestApp, type Fixture, login, resetDatabase, samplePatient } from './helpers.ts'
+
+const ctx = createTestApp()
+let fx: Fixture
+let nurse = ''
+let doctor = ''
+
+beforeEach(async () => {
+  await resetDatabase()
+  fx = await createFixture(ctx.db)
+  nurse = await login(ctx.app, 't.nurse')
+  doctor = await login(ctx.app, 't.doctor')
+})
+afterAll(() => ctx.close())
+
+let seq = 0
+async function readyVisit(): Promise<Visit> {
+  seq++
+  const p = PatientDetail.parse((await call(ctx.app, 'POST', '/api/patients', { cookie: nurse, body: samplePatient({ givenName: `Enc${seq}`, phone: `91000${String(seq).padStart(5, '0')}` }) })).json())
+  const v = Visit.parse((await call(ctx.app, 'POST', '/api/visits', { cookie: nurse, body: { patientId: p.id, departmentId: fx.departments.gen, chiefComplaint: 'Fever and cough' } })).json())
+  await call(ctx.app, 'POST', `/api/visits/${v.id}/observations`, { cookie: nurse, body: { items: [{ kind: 'temperature', value: 38.4 }] } })
+  return Visit.parse((await call(ctx.app, 'POST', `/api/visits/${v.id}/status`, { cookie: nurse, body: { status: 'ready' } })).json())
+}
+const start = async (visitId: string, cookie = doctor) => call(ctx.app, 'POST', `/api/visits/${visitId}/encounter`, { cookie })
+
+const fullDraft = (version: number) => ({
+  version,
+  note: {
+    chiefComplaint: 'Fever and cough for 3 days',
+    history: 'Intermittent fever, dry cough. No breathlessness.',
+    pastHistory: 'No chronic illness.',
+    examination: 'Throat congested. Chest clear.',
+    assessment: 'Likely viral upper respiratory infection.',
+    plan: 'Symptomatic care, fluids, review if worse.',
+    followUp: 'Review in 5 days if not better.',
+  },
+  diagnoses: [{ description: 'Acute upper respiratory infection', code: 'j06.9', kind: 'primary' }],
+  prescription: [{ drugName: 'Paracetamol', strength: '500 mg', form: 'Tablet', dose: '1 tablet', route: 'Oral', frequency: 'Three times daily (TDS)', duration: '3 days', instructions: 'After food' }],
+})
+
+describe('starting a consultation', () => {
+  it('moves the visit to the doctor, prefills the complaint, and is idempotent', async () => {
+    const v = await readyVisit()
+    const res = await start(v.id)
+    expect(res.statusCode).toBe(201)
+    const e = Encounter.parse(res.json())
+    expect(e).toMatchObject({ status: 'in_progress', version: 1, canEdit: true, note: { chiefComplaint: 'Fever and cough' }, doctor: { id: fx.users.doctor } })
+    expect(e.vitals.map((o) => o.kind)).toEqual(['temperature'])
+    const again = await start(v.id)
+    expect(again.statusCode).toBe(200)
+    expect(again.json().id).toBe(e.id)
+    const visit = Visit.parse((await call(ctx.app, 'GET', `/api/visits/${v.id}`, { cookie: nurse })).json())
+    expect(visit).toMatchObject({ status: 'in_consultation', assignedDoctorId: fx.users.doctor, encounterId: e.id })
+  })
+
+  it('nurses cannot start or edit consultations, but can read them', async () => {
+    const v = await readyVisit()
+    expect((await start(v.id, nurse)).statusCode).toBe(403)
+    const e = Encounter.parse((await start(v.id)).json())
+    expect((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: nurse, body: fullDraft(1) })).statusCode).toBe(403)
+    const read = Encounter.parse((await call(ctx.app, 'GET', `/api/encounters/${e.id}`, { cookie: nurse })).json())
+    expect(read.canEdit).toBe(false)
+  })
+})
+
+describe('autosave', () => {
+  it('saves the whole draft and bumps the version; stale versions are rejected', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    const saved = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })).json())
+    expect(saved.version).toBe(2)
+    expect(saved.diagnoses).toEqual([{ description: 'Acute upper respiratory infection', code: 'J06.9', kind: 'primary' }])
+    expect(saved.prescription[0]).toMatchObject({ drugName: 'Paracetamol', frequency: 'Three times daily (TDS)' })
+    const stale = await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })
+    expect(stale.statusCode).toBe(409)
+    expect(stale.json().error).toBe('version_conflict')
+    // Replacing the list removes items.
+    const fewer = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: { ...fullDraft(2), prescription: [] } })).json())
+    expect(fewer.prescription).toEqual([])
+  })
+
+  it('only the authoring doctor can edit; oversized input is rejected', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    const other = await login(ctx.app, 't.doctor2')
+    expect((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: other, body: fullDraft(1) })).statusCode).toBe(403)
+    const huge = await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: { ...fullDraft(1), note: { ...fullDraft(1).note, plan: 'x'.repeat(8001) } } })
+    expect(huge.statusCode).toBe(400)
+    expect(huge.json().issues[0].path).toBe('note.plan')
+  })
+
+  it('saves incomplete rows as a draft, but signing lists every missing field', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    const partial = await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: { ...fullDraft(1), diagnoses: [{ description: 'Fever', code: 'not-icd' }], prescription: [{ drugName: 'Amoxi' }] } })
+    expect(partial.statusCode).toBe(200)
+    const sign = await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: partial.json().version, attestation: true } })
+    expect(sign.statusCode).toBe(400)
+    expect(sign.json().issues.map((i: { path: string }) => i.path)).toEqual(['diagnoses.0.code', 'prescription.0.dose', 'prescription.0.frequency', 'prescription.0.duration'])
+  })
+})
+
+describe('signing', () => {
+  it('requires a complete record and an explicit attestation', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    const empty = await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: { version: 1, note: { ...fullDraft(1).note, chiefComplaint: '' }, diagnoses: [], prescription: [] } })
+    const v = empty.json().version
+    const res = await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: v, attestation: true } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().issues.map((i: { path: string }) => i.path).sort()).toEqual(['diagnoses', 'note.chiefComplaint'])
+    expect((await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: v } })).statusCode).toBe(400)
+  })
+
+  it('freezes the record, stores a verifiable hash and completes the visit', async () => {
+    const v = await readyVisit()
+    const e = Encounter.parse((await start(v.id)).json())
+    const saved = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })).json())
+    const res = await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: saved.version, attestation: true } })
+    expect(res.statusCode).toBe(200)
+    const signed = Encounter.parse(res.json())
+    expect(signed).toMatchObject({ status: 'signed', canEdit: false })
+    expect(signed.signedAt).not.toBeNull()
+    const { rows } = await adminQuery('SELECT signed_snapshot, content_hash FROM encounters WHERE id = $1', [e.id])
+    expect(rows[0].content_hash).toBe(sha256(canonicalJson(rows[0].signed_snapshot)))
+    expect(signed.contentHash).toBe(rows[0].content_hash)
+    expect(rows[0].signed_snapshot.prescription[0].drugName).toBe('Paracetamol')
+    expect(Visit.parse((await call(ctx.app, 'GET', `/api/visits/${v.id}`, { cookie: nurse })).json()).status).toBe('completed')
+
+    // The API refuses edits ...
+    expect((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(signed.version) })).statusCode).toBe(409)
+    expect((await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: signed.version, attestation: true } })).statusCode).toBe(409)
+    // ... and so does the database, even for the application role.
+    const app = ctx.pool
+    await expect(app.query("UPDATE encounters SET plan = 'tampered' WHERE id = $1", [e.id])).rejects.toMatchObject({ code: '42501' })
+    await expect(app.query('DELETE FROM encounters WHERE id = $1', [e.id])).rejects.toMatchObject({ code: '42501' })
+    await expect(app.query("INSERT INTO diagnoses (encounter_id, description) VALUES ($1, 'sneaky')", [e.id])).rejects.toMatchObject({ code: '42501' })
+    await expect(app.query("UPDATE prescription_items SET dose = '10 tablets' WHERE encounter_id = $1", [e.id])).rejects.toMatchObject({ code: '42501' })
+    await expect(app.query('DELETE FROM prescription_items WHERE encounter_id = $1', [e.id])).rejects.toMatchObject({ code: '42501' })
+  })
+
+  it('another doctor cannot sign', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    const saved = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })).json())
+    const other = await login(ctx.app, 't.doctor2')
+    expect((await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: other, body: { version: saved.version, attestation: true } })).statusCode).toBe(403)
+  })
+})
+
+describe('amendments', () => {
+  it('appends attributed corrections without changing the signed record', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    expect((await call(ctx.app, 'POST', `/api/encounters/${e.id}/amendments`, { cookie: doctor, body: { reason: 'x', content: 'y' } })).statusCode).toBe(409)
+    const saved = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })).json())
+    const signed = Encounter.parse((await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: saved.version, attestation: true } })).json())
+    const res = await call(ctx.app, 'POST', `/api/encounters/${e.id}/amendments`, { cookie: doctor, body: { reason: 'Dose clarification', content: 'Paracetamol: maximum 4 tablets in 24 hours.' } })
+    expect(res.statusCode).toBe(201)
+    const amended = Encounter.parse(res.json())
+    expect(amended.amendments).toEqual([expect.objectContaining({ reason: 'Dose clarification', authorName: 'Test t.doctor' })])
+    expect(amended.contentHash).toBe(signed.contentHash)
+    expect(amended.note).toEqual(signed.note)
+    await expect(ctx.pool.query("UPDATE encounter_amendments SET content = 'changed'")).rejects.toMatchObject({ code: '42501' })
+    await expect(ctx.pool.query('DELETE FROM encounter_amendments')).rejects.toMatchObject({ code: '42501' })
+  })
+})
+
+describe('timeline and persistence', () => {
+  it('shows consultations with diagnoses and medicines, plus other visits', async () => {
+    const v = await readyVisit()
+    const e = Encounter.parse((await start(v.id)).json())
+    const saved = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })).json())
+    await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: saved.version, attestation: true } })
+    const entries = (await call(ctx.app, 'GET', `/api/patients/${v.patient.id}/timeline`, { cookie: nurse })).json().entries as TimelineEntry[]
+    expect(entries).toEqual([
+      expect.objectContaining({ kind: 'encounter', title: 'Consultation', status: 'signed', doctorName: 'Test t.doctor', diagnoses: ['Acute upper respiratory infection (J06.9)'], medications: ['Paracetamol 500 mg'] }),
+    ])
+  })
+
+  it('a signed consultation reads back identically from a fresh app instance', async () => {
+    const e = Encounter.parse((await start((await readyVisit()).id)).json())
+    const saved = Encounter.parse((await call(ctx.app, 'PUT', `/api/encounters/${e.id}/draft`, { cookie: doctor, body: fullDraft(1) })).json())
+    const signed = Encounter.parse((await call(ctx.app, 'POST', `/api/encounters/${e.id}/sign`, { cookie: doctor, body: { version: saved.version, attestation: true } })).json())
+    await ctx.app.close()
+    const fresh = createTestApp()
+    try {
+      const cookie = await login(fresh.app, 't.doctor')
+      const reread = Encounter.parse((await call(fresh.app, 'GET', `/api/encounters/${e.id}`, { cookie })).json())
+      expect({ ...reread, canEdit: undefined }).toEqual({ ...signed, canEdit: undefined })
+    } finally {
+      await fresh.close()
+    }
+  })
+})

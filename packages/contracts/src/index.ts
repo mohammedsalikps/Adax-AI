@@ -1,6 +1,7 @@
 export * from './admin.ts'
 export * from './auth.ts'
 export * from './common.ts'
+export * from './encounters.ts'
 export * from './health.ts'
 export * from './patients.ts'
 export * from './visits.ts'

@@ -335,3 +335,106 @@ export const observations = pgTable(
   },
   (t) => [index('observations_patient_kind_idx').on(t.patientId, t.kind, t.measuredAt), index('observations_visit_idx').on(t.visitId)],
 )
+
+// ---------------------------------------------------------------------------
+// Consultations (encounters), diagnoses, prescriptions, amendments
+// ---------------------------------------------------------------------------
+
+export const encounterStatus = pgEnum('encounter_status', ['in_progress', 'signed'])
+
+/**
+ * One consultation per visit. Once signed, the row and its diagnoses and
+ * prescription items are immutable (database triggers, migration 0006);
+ * corrections are appended as amendments.
+ */
+export const encounters = pgTable(
+  'encounters',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    visitId: uuid('visit_id')
+      .notNull()
+      .unique()
+      .references(() => visits.id),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => users.id),
+    status: encounterStatus('status').notNull().default('in_progress'),
+    version: integer('version').notNull().default(1),
+    chiefComplaint: text('chief_complaint').notNull().default(''),
+    history: text('history').notNull().default(''),
+    pastHistory: text('past_history').notNull().default(''),
+    examination: text('examination').notNull().default(''),
+    assessment: text('assessment').notNull().default(''),
+    plan: text('plan').notNull().default(''),
+    followUp: text('follow_up').notNull().default(''),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    signedAt: timestamp('signed_at', { withTimezone: true }),
+    /** Canonical JSON of what was signed, and its SHA-256. */
+    signedSnapshot: jsonb('signed_snapshot'),
+    contentHash: text('content_hash'),
+  },
+  (t) => [index('encounters_patient_idx').on(t.patientId), index('encounters_doctor_status_idx').on(t.doctorId, t.status)],
+)
+
+export const diagnosisKind = pgEnum('diagnosis_kind', ['provisional', 'primary', 'secondary'])
+
+export const diagnoses = pgTable(
+  'diagnoses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    description: text('description').notNull(),
+    /** ICD-10 code as typed; format-checked only, not validated against a code set. */
+    code: text('code'),
+    kind: diagnosisKind('kind').notNull().default('primary'),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [index('diagnoses_encounter_idx').on(t.encounterId)],
+)
+
+export const prescriptionItems = pgTable(
+  'prescription_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    drugName: text('drug_name').notNull(),
+    strength: text('strength').notNull().default(''),
+    form: text('form').notNull().default(''),
+    dose: text('dose').notNull(),
+    route: text('route').notNull().default('Oral'),
+    frequency: text('frequency').notNull(),
+    duration: text('duration').notNull(),
+    instructions: text('instructions').notNull().default(''),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [index('prescription_items_encounter_idx').on(t.encounterId)],
+)
+
+/** Post-signing corrections. Append-only (triggers block UPDATE/DELETE). */
+export const encounterAmendments = pgTable(
+  'encounter_amendments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    authorId: uuid('author_id')
+      .notNull()
+      .references(() => users.id),
+    reason: text('reason').notNull(),
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('amendments_encounter_idx').on(t.encounterId)],
+)

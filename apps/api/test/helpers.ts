@@ -1,4 +1,5 @@
 import net from 'node:net'
+import type pg from 'pg'
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify'
 import { buildApp } from '../src/app.ts'
 import { hashPassword } from '../src/auth/password.ts'
@@ -95,6 +96,8 @@ export async function createFixture(db: Db): Promise<Fixture> {
 export interface TestContext {
   app: FastifyInstance
   db: Db
+  /** The application-role pool, for testing what the app role itself may do in SQL. */
+  pool: pg.Pool
   close: () => Promise<void>
 }
 
@@ -104,6 +107,7 @@ export function createTestApp(overrides: Partial<Parameters<typeof buildApp>[0]>
   return {
     app,
     db: createDb(pool),
+    pool,
     close: async () => {
       await app.close()
       await pool.end()

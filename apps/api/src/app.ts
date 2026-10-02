@@ -3,6 +3,8 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
 import { registerActivationRoutes } from './auth/activation.ts'
+import { encounterIdsForVisits } from './encounters/service.ts'
+import { registerEncounterRoutes } from './encounters/routes.ts'
 import { registerPatientRoutes } from './patients/routes.ts'
 import { registerVisitRoutes } from './visits/routes.ts'
 import { registerAuth } from './auth/plugin.ts'
@@ -36,7 +38,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerActivationRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
   registerAdminRoutes(app, { db })
   registerPatientRoutes(app, { db })
-  registerVisitRoutes(app, { db })
+  registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
+  registerEncounterRoutes(app, { db })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

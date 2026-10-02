@@ -36,6 +36,20 @@
       "when": 1790926750364,
       "tag": "0004_patients_visits_observations",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790928111111,
+      "tag": "0005_encounters",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790928113513,
+      "tag": "0006_encounter_integrity",
+      "breakpoints": true
     }
   ]
 }

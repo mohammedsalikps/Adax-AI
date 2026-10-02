@@ -17,7 +17,8 @@ import { hashPassword } from '../auth/password.ts'
 import { currentUser } from '../auth/plugin.ts'
 import { revokeUserSessions } from '../auth/sessions.ts'
 import { type Db, pgCode } from '../db/client.ts'
-import { auditEvents, departments, sessions, users } from '../db/schema.ts'
+import { auditEvents, departments, sessions, users, visits } from '../db/schema.ts'
+import { facilityToday } from '../patients/service.ts'
 import { conflict, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 
@@ -229,7 +230,18 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
 
   // ---- Operational overview (counts only; no clinical content) ----
 
-  app.get('/api/admin/overview', { config: { permission: 'overview:read' } }, async () => {
+  app.get('/api/admin/overview', { config: { permission: 'overview:read' } }, async (req) => {
+    const me = currentUser(req)
+    const today = await facilityToday(db, me.facilityId)
+    const [queue] = await db
+      .select({
+        total: sql<number>`count(*)::int`,
+        waiting: sql<number>`count(*) filter (where ${visits.status} in ('waiting', 'in_triage', 'ready'))::int`,
+        withDoctor: sql<number>`count(*) filter (where ${visits.status} = 'in_consultation')::int`,
+        completed: sql<number>`count(*) filter (where ${visits.status} = 'completed')::int`,
+      })
+      .from(visits)
+      .where(and(eq(visits.facilityId, me.facilityId), eq(visits.visitDate, today)))
     const roleCounts = await db
       .select({ role: users.role, active: sql<number>`count(*) filter (where ${users.isActive})::int`, total: sql<number>`count(*)::int` })
       .from(users)
@@ -245,6 +257,7 @@ export function registerAdminRoutes(app: FastifyInstance, { db }: { db: Db }) {
       activeSessions: sessionCount?.n ?? 0,
       activeDepartments: deptCount?.n ?? 0,
       failedLogins24h: failedLogins?.n ?? 0,
+      queueToday: queue ?? { total: 0, waiting: 0, withDoctor: 0, completed: 0 },
     }
   })
 }

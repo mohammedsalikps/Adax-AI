@@ -43,6 +43,20 @@ export interface ThermalService {
   flags(input: FlagsInput): Promise<ThermalFlags>
   /** Evaluates a dataset ZIP against its clinician labels. */
   evaluate(datasetZip: Buffer): Promise<EvaluationResult>
+  /** Validates a clinical photograph and returns a metadata-free JPEG preview. */
+  inspectImage(data: Buffer, opts: { allowed: string[]; maxPixels: number; previewMaxSide: number }): Promise<InspectedImage>
+}
+
+export interface InspectedImage {
+  format: string
+  mimeType: string
+  width: number
+  height: number
+  hadExif: boolean
+  hadGps: boolean
+  preview: Buffer
+  previewWidth: number
+  previewHeight: number
 }
 
 const unavailable = () => new HttpError(503, 'thermal_unavailable', 'The thermal processing service is not reachable. Try again shortly.')
@@ -89,6 +103,15 @@ export function httpThermalService(baseUrl: string, fetchImpl: typeof fetch = fe
       const form = new FormData()
       form.append('file', new Blob([new Uint8Array(datasetZip)], { type: 'application/zip' }), 'dataset.zip')
       return (await call('/evaluate', { method: 'POST', body: form })) as EvaluationResult
+    },
+    async inspectImage(data, opts) {
+      const form = new FormData()
+      form.append('allowed', opts.allowed.join(','))
+      form.append('max_pixels', String(opts.maxPixels))
+      form.append('preview_max_side', String(opts.previewMaxSide))
+      form.append('file', new Blob([new Uint8Array(data)]), 'image')
+      const b = (await call('/image/inspect', { method: 'POST', body: form })) as Omit<InspectedImage, 'preview'> & { preview: string }
+      return { ...b, preview: Buffer.from(b.preview, 'base64') }
     },
   }
 }

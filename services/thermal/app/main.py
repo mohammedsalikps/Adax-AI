@@ -11,11 +11,13 @@ import platform
 from typing import Annotated
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from app import __version__
 from app.evaluate import DatasetError, evaluate_dataset, to_markdown
 from app.flags import FlagsRequest, evaluate
+from app.images import ImageRejected
+from app.images import inspect as inspect_image
 from app.radiometric import ExtractionError, extract, extractor_info, parameters
 from app.roi import RoiStatsRequest, compute, encode_matrix
 
@@ -37,7 +39,13 @@ def health() -> dict:
         "service": "thermal",
         "version": __version__,
         "python": platform.python_version(),
-        "capabilities": ["flir_radiometric_jpeg", "roi_stats", "experimental_flags", "dataset_evaluation"],
+        "capabilities": [
+            "flir_radiometric_jpeg",
+            "roi_stats",
+            "experimental_flags",
+            "dataset_evaluation",
+            "image_inspect",
+        ],
     }
 
 
@@ -101,3 +109,33 @@ async def evaluate_endpoint(file: Annotated[UploadFile, File()]) -> dict:
         msg = str(e) if isinstance(e, DatasetError) else f"The dataset is malformed ({type(e).__name__})."
         raise HTTPException(status_code=422, detail={"error": "invalid_dataset", "message": msg}) from e
     return {"report": report, "markdown": to_markdown(report)}
+
+
+@app.post("/image/inspect")
+async def image_inspect(
+    file: Annotated[UploadFile, File()],
+    allowed: Annotated[str, Form()] = "image/jpeg,image/png,image/webp",
+    max_pixels: Annotated[int, Form(gt=0, le=200_000_000)] = 40_000_000,
+    preview_max_side: Annotated[int, Form(ge=64, le=8192)] = 2048,
+) -> dict:
+    """Validates a clinical photograph and returns a metadata-free preview."""
+    data = await file.read(MAX_FILE_BYTES + 1)
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413, detail={"error": "too_large", "message": "File is larger than 30 MB."}
+        )
+    try:
+        r = inspect_image(data, set(allowed.split(",")), max_pixels, preview_max_side)
+    except ImageRejected as e:
+        raise HTTPException(status_code=422, detail={"error": e.code, "message": e.message}) from e
+    return {
+        "format": r.format,
+        "mimeType": r.mime_type,
+        "width": r.width,
+        "height": r.height,
+        "hadExif": r.had_exif,
+        "hadGps": r.had_gps,
+        "preview": base64.b64encode(r.preview_jpeg).decode("ascii"),
+        "previewWidth": r.preview_width,
+        "previewHeight": r.preview_height,
+    }

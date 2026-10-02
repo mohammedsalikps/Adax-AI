@@ -29,6 +29,7 @@ export const PERMISSIONS = {
   'encounters:sign': ['doctor'],
   'ai:use': ['doctor'],
   'thermal:write': ['doctor', 'nurse'],
+  'images:write': ['doctor', 'nurse'],
   'thermal:approve': ['doctor'],
   'thermal:label': ['doctor'],
   'thermal:export': ['doctor', 'admin'],

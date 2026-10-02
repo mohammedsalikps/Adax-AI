@@ -21,6 +21,7 @@ def test_health_lists_only_implemented_capabilities():
         "roi_stats",
         "experimental_flags",
         "dataset_evaluation",
+        "image_inspect",
     ]
 
 

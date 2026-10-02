@@ -26,6 +26,7 @@ import { PrescriptionPrintPage } from './pages/doctor/PrescriptionPrintPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { NotYetBuiltPage } from './pages/NotYetBuiltPage.tsx'
+import { ClinicalImagesCard } from './components/clinical/ClinicalImagesCard.tsx'
 
 const portal = (role: Role) => (
   <RequireAuth roles={[role]}>
@@ -33,7 +34,13 @@ const portal = (role: Role) => (
   </RequireAuth>
 )
 
-const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={(p) => <PatientThermalCard patient={p} />} />
+const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={(p) => (
+      <div className="grid gap-6 xl:grid-cols-2">
+        <PatientThermalCard patient={p} />
+        <ClinicalImagesCard patientId={p.id} />
+      </div>
+    )}
+  />
 
 const router = createBrowserRouter([
   {
@@ -74,7 +81,19 @@ const router = createBrowserRouter([
       { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} /> },
       { path: 'patients', element: <PatientsPage /> },
       { path: 'patients/:patientId', element: profile },
-      { path: 'encounters/:encounterId', element: <ConsultationPage sidePanel={(e, append) => <AiAssistantPanel encounter={e} append={append} />} /> },
+      {
+        path: 'encounters/:encounterId',
+        element: (
+          <ConsultationPage
+            sidePanel={(e, append) => (
+              <>
+                <AiAssistantPanel encounter={e} append={append} />
+                <ClinicalImagesCard patientId={e.patient.id} encounter={e} append={append} />
+              </>
+            )}
+          />
+        ),
+      },
       { path: 'register', element: <RegisterPatientPage /> },
       { path: 'thermal', element: <ThermalListPage /> },
       { path: 'thermal/:captureId', element: <ThermalDetailPage /> },

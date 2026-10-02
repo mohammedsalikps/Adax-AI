@@ -10,6 +10,7 @@ import { effectiveSettings, loadAppSettings, RoutingRulesSource } from './settin
 import type { AppSettings } from './settings/schema.ts'
 import { registerFileRoutes } from './files/routes.ts'
 import { httpThermalService, type ThermalService } from './thermal/client.ts'
+import { registerImageRoutes } from './images/routes.ts'
 import { registerRoutingRoutes } from './routing/routes.ts'
 import { registerThermalDatasetRoutes } from './thermal/datasets.ts'
 import { registerThermalRoutes } from './thermal/routes.ts'
@@ -51,7 +52,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const db = createDb(deps.pool)
   const fetchImpl = deps.fetchImpl ?? fetch
 
-  void app.register(multipart, { limits: { fileSize: deps.config.maxUploadBytes, files: 1, fields: 5 } })
+  void app.register(multipart, { limits: { fileSize: deps.config.maxUploadBytes, files: 1, fields: 8 } })
   registerAuth(app, { db, cookieSecure: deps.config.cookieSecure })
   registerHealthRoutes(app, { config: deps.config, pool: deps.pool, fetchImpl })
   registerAuthRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
@@ -66,11 +67,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const providers = deps.ai ?? providersFromConfig(deps.config, settings)
   const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety } })
   const executors = new Map<string, JobExecutor>()
-  registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
-  registerRoutingRoutes(app, { db, routing })
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
+  registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
+  registerImageRoutes(app, { db, config: deps.config, settings, providers, thermal, jobs, executors })
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })
+  registerRoutingRoutes(app, { db, routing })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

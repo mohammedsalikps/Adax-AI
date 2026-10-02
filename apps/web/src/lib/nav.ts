@@ -10,6 +10,7 @@ import {
   ScrollText,
   ShieldCheck,
   Building2,
+  BrainCircuit,
   Stethoscope,
   UserPlus,
   Users,
@@ -31,12 +32,14 @@ export const NAV: Record<Role, NavItem[]> = {
     { to: '/admin/departments', label: 'Departments', icon: Building2 },
     { to: '/admin/devices', label: 'Devices', icon: Watch },
     { to: '/admin/thermal-data', label: 'Thermal data', icon: ScanLine },
+    { to: '/admin/ai', label: 'AI operations', icon: BrainCircuit },
     { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
   ],
   doctor: [
     { to: '/doctor', label: 'OPD queue', icon: Stethoscope, end: true },
     { to: '/doctor/patients', label: 'Patients', icon: Search },
     { to: '/doctor/thermal', label: 'Thermal', icon: ScanLine },
+    { to: '/doctor/ai-review', label: 'AI review', icon: BrainCircuit },
   ],
   nurse: [
     { to: '/nurse', label: 'OPD queue', icon: ClipboardList, end: true },

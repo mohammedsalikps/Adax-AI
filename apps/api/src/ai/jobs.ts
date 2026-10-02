@@ -67,12 +67,16 @@ export class JobService {
 
   /** Registers prompt checksums; refuses a prompt whose text changed under an existing id. */
   async ensurePrompts(db: DbOrTx) {
+    // One idempotent statement per job so the registry can never be missing...
+    await db
+      .insert(aiPromptVersions)
+      .values(ALL_PROMPTS.map((p) => ({ id: p.id, kind: p.kind, sha256: promptSha256(p) })))
+      .onConflictDoNothing()
+    // ...and the checksum comparison once per process.
     if (this.promptsChecked) return
     for (const p of ALL_PROMPTS) {
-      const hash = promptSha256(p)
-      await db.insert(aiPromptVersions).values({ id: p.id, kind: p.kind, sha256: hash }).onConflictDoNothing()
       const [row] = await db.select().from(aiPromptVersions).where(eq(aiPromptVersions.id, p.id))
-      if (row && row.sha256 !== hash) throw new HttpError(500, 'prompt_version_conflict', `Prompt ${p.id} changed without a new version id. Give it a new id.`)
+      if (row && row.sha256 !== promptSha256(p)) throw new HttpError(500, 'prompt_version_conflict', `Prompt ${p.id} changed without a new version id. Give it a new id.`)
     }
     this.promptsChecked = true
   }

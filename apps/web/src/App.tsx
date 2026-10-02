@@ -12,7 +12,9 @@ import { createQueryClient } from './lib/queryClient.ts'
 import { AdminAuditPage } from './pages/admin/AdminAuditPage.tsx'
 import { AdminDepartmentsPage } from './pages/admin/AdminDepartmentsPage.tsx'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.tsx'
+import { AdminAiOperationsPage } from './pages/admin/AdminAiOperationsPage.tsx'
 import { AdminThermalDataPage } from './pages/admin/AdminThermalDataPage.tsx'
+import { AiReviewPage } from './pages/doctor/AiReviewPage.tsx'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx'
 import { ActivatePage } from './pages/ActivatePage.tsx'
 import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
@@ -71,6 +73,7 @@ const router = createBrowserRouter([
       { path: 'departments', element: <AdminDepartmentsPage /> },
       { path: 'devices', element: <NotYetBuiltPage title="Devices" planned={['Device registry (band, stethoscope, thermal camera)']} /> },
       { path: 'thermal-data', element: <AdminThermalDataPage /> },
+      { path: 'ai', element: <AdminAiOperationsPage /> },
       { path: 'audit', element: <AdminAuditPage /> },
     ],
   },
@@ -96,6 +99,7 @@ const router = createBrowserRouter([
       },
       { path: 'register', element: <RegisterPatientPage /> },
       { path: 'thermal', element: <ThermalListPage /> },
+      { path: 'ai-review', element: <AiReviewPage /> },
       { path: 'thermal/:captureId', element: <ThermalDetailPage /> },
     ],
   },

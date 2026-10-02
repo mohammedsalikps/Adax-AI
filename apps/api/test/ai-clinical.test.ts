@@ -382,3 +382,41 @@ describe('authorisation and isolation', () => {
     expect((await call(withAi.app, 'POST', `/api/encounters/${e.id}/recommendations`, { cookie: doctor, body: {} })).json().error).toBe('encounter_signed')
   })
 })
+
+describe('oversight', () => {
+  it('admins see aggregate counts only; doctors see rejected outputs with their content; snapshots are stored as evaluation runs', async () => {
+    const { p, e, doctor, nurse } = await scenario(withAi)
+    const t = await withTranscript(withAi, e.id, doctor)
+    const ai = EncounterAi.parse((await call(withAi.app, 'POST', `/api/transcripts/${t.id}/extract`, { cookie: doctor })).json())
+    const fever = ai.facts.find((f) => f.text === 'Fever for three days.')!
+    const cough = ai.facts.find((f) => f.text === 'Cough.')!
+    await call(withAi.app, 'POST', `/api/ai-review/fact/${fever.id}`, { cookie: doctor, body: { action: 'accepted' } })
+    await call(withAi.app, 'POST', `/api/ai-review/fact/${cough.id}`, { cookie: doctor, body: { action: 'rejected', reason: 'Doctor asked, patient did not say this' } })
+
+    const admin = await login(withAi.app, 't.admin')
+    const res = await call(withAi.app, 'GET', '/api/ai-oversight/overview', { cookie: admin })
+    expect(res.statusCode).toBe(200)
+    const o = res.json()
+    expect(o.jobs).toContainEqual({ kind: 'extraction', status: 'succeeded', data_origin: 'synthetic', n: 1 })
+    const facts = o.outcomes.find((x: { subject: string }) => x.subject === 'fact')
+    expect(facts).toMatchObject({ provider: 'fake', model: 'fake-extract', version: 'extract-v1', decided: 2, acceptedShare: 0.5, counts: { accepted: 1, rejected: 1, pending: 5 } })
+    expect(o.prompts.map((x: { id: string }) => x.id)).toContain('extract-v1')
+    // No patient-level content in the administrator's view.
+    const text = JSON.stringify(o)
+    for (const s of [p.givenName, p.mrn, 'Fever for three days', 'Doctor asked']) expect(text).not.toContain(s)
+
+    const snap = await call(withAi.app, 'POST', '/api/ai-oversight/evaluations', { cookie: admin })
+    expect(snap.statusCode).toBe(201)
+    expect(snap.json().metrics).toMatchObject({ version: 'ai-review-metrics-v1', validated: false })
+    expect(snap.json().metrics.statements[0]).toMatch(/synthetic or demonstration data/)
+    expect((await call(withAi.app, 'GET', '/api/ai-oversight/overview', { cookie: admin })).json().evaluations).toHaveLength(1)
+    await expect(withAi.pool.query('DELETE FROM evaluation_runs')).rejects.toMatchObject({ code: '42501' })
+
+    const list = (await call(withAi.app, 'GET', '/api/ai/review-outcomes?decision=rejected', { cookie: doctor })).json().items
+    expect(list).toEqual([
+      expect.objectContaining({ subjectType: 'fact', category: 'symptom', originalText: 'Cough.', reason: 'Doctor asked, patient did not say this', reviewer: 'Test t.doctor', producedBy: { provider: 'fake', model: 'fake-extract', version: 'extract-v1' } }),
+    ])
+    expect((await call(withAi.app, 'GET', '/api/ai/review-outcomes', { cookie: admin })).statusCode).toBe(403)
+    expect((await call(withAi.app, 'GET', '/api/ai-oversight/overview', { cookie: nurse })).statusCode).toBe(403)
+  })
+})

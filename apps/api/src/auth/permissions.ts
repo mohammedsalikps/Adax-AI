@@ -28,6 +28,8 @@ export const PERMISSIONS = {
   'encounters:write': ['doctor'],
   'encounters:sign': ['doctor'],
   'ai:use': ['doctor'],
+  /** Aggregate AI operations and review metrics (no patient-level content). */
+  'ai:oversight': ['admin', 'doctor'],
   'thermal:write': ['doctor', 'nurse'],
   'images:write': ['doctor', 'nurse'],
   'thermal:approve': ['doctor'],

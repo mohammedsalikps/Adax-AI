@@ -83,6 +83,28 @@ test('extraction with evidence and record conflicts, rule and AI recommendations
   await expect(activity).toContainText('deferred a fact')
   await activity.getByText(/^Audit trail/).click()
   await expect(activity).toContainText('ai.review')
+
+  // Doctors can review rejected AI output across consultations.
+  await page.goto('/doctor/ai-review')
+  await expect(page.getByRole('heading', { name: 'AI review' })).toBeVisible()
+  await expect(page.getByRole('listitem').filter({ hasText: 'Possibly mentions night sweats.' }).first()).toContainText('extract-v1')
+  await expectNoAxeViolations(page)
+})
+
+test('administrators see AI operations as counts only', async ({ page }) => {
+  await signIn(page, 'admin')
+  await page.goto('/admin/ai')
+  await expect(page.getByRole('heading', { name: 'AI operations' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Providers' })).toContainText('Available · anthropic · claude-opus-5-5')
+  await expect(page.getByRole('region', { name: 'Providers' })).toContainText('Speech-to-text')
+  const outcomes = page.getByRole('region', { name: 'Doctor review outcomes' })
+  await expect(outcomes.getByRole('row').filter({ hasText: 'Extracted facts' }).first()).toContainText('extract-v1')
+  await expect(outcomes).toContainText('Includes synthetic')
+  await expect(page.locator('main')).not.toContainText('night sweats')
+  await outcomes.getByRole('button', { name: 'Store snapshot' }).click()
+  await expect(outcomes).toContainText('ai-review-metrics-v1')
+  await expectNoAxeViolations(page)
+  await expectNoHorizontalOverflow(page)
 })
 
 test('clinical photograph in a consultation: validated upload, AI description marked unverified, doctor review before it reaches the note', async ({ page, baseURL }) => {

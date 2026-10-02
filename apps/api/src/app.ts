@@ -5,6 +5,7 @@ import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
 import { type AiProviders, providersFromConfig } from './ai/providers.ts'
 import { JobService } from './ai/jobs.ts'
+import { registerOversightRoutes } from './ai/oversight.ts'
 import { type JobExecutor, registerAiRoutes } from './ai/routes.ts'
 import { effectiveSettings, loadAppSettings, RoutingRulesSource } from './settings/load.ts'
 import type { AppSettings } from './settings/schema.ts'
@@ -73,6 +74,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })
   registerRoutingRoutes(app, { db, routing })
+  registerOversightRoutes(app, { db, providers, jobs })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

@@ -1,15 +1,16 @@
-import { afterAll, describe, expect, it } from 'vitest'
+import { sql } from 'drizzle-orm'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createDb } from '../src/db/client.ts'
 import { createAppPool } from '../src/db/pool.ts'
-import { SEED_FACILITIES, seedFacilities } from '../src/db/seed.ts'
-import { testConfig } from './helpers.ts'
+import { SEED_USERS, seed } from '../src/db/seed.ts'
+import { resetDatabase, testConfig } from './helpers.ts'
 
 // Runs as the application role against the migrated test database.
 const pool = createAppPool(testConfig.db)
+const db = createDb(pool)
 
-afterAll(async () => {
-  await pool.query('DELETE FROM facilities WHERE code = ANY($1)', [SEED_FACILITIES.map((f) => f.code)])
-  await pool.end()
-})
+beforeAll(() => resetDatabase())
+afterAll(() => pool.end())
 
 describe('test database', () => {
   it('is UTF-8 with the builtin C.UTF-8 locale', async () => {
@@ -33,7 +34,7 @@ describe('application role privileges', () => {
 
   it('can read but not write the migration ledger', async () => {
     const { rows } = await pool.query('SELECT count(*)::int AS n FROM meta.schema_migrations')
-    expect(rows[0].n).toBeGreaterThanOrEqual(2)
+    expect(rows[0].n).toBeGreaterThanOrEqual(4)
     await expect(pool.query("INSERT INTO meta.schema_migrations (name, checksum) VALUES ('x', 'y')")).rejects.toMatchObject({ code: '42501' })
   })
 
@@ -43,11 +44,31 @@ describe('application role privileges', () => {
   })
 })
 
-describe('seed data', () => {
-  it('is idempotent', async () => {
-    await seedFacilities(pool)
-    expect(await seedFacilities(pool)).toBe(0)
-    const { rows } = await pool.query('SELECT count(*)::int AS n FROM facilities WHERE code = $1', [SEED_FACILITIES[0]!.code])
+describe('audit trail immutability', () => {
+  it('rejects UPDATE, DELETE and TRUNCATE from the application role', async () => {
+    await pool.query("INSERT INTO audit_events (action) VALUES ('test.immutability')")
+    await expect(pool.query("UPDATE audit_events SET action = 'tampered'")).rejects.toMatchObject({ code: '42501' })
+    await expect(pool.query('DELETE FROM audit_events')).rejects.toMatchObject({ code: '42501' })
+    await expect(pool.query('TRUNCATE audit_events')).rejects.toMatchObject({ code: '42501' })
+    const { rows } = await pool.query("SELECT count(*)::int AS n FROM audit_events WHERE action = 'test.immutability'")
     expect(rows[0].n).toBe(1)
+  })
+})
+
+describe('seed data', () => {
+  it('is idempotent and stores demo passwords hashed', async () => {
+    const first = await seed(db, 'Demo-password-for-tests')
+    expect(first.users).toBe(SEED_USERS.length)
+    const second = await seed(db, 'Demo-password-for-tests')
+    expect(second).toEqual({ facilities: 0, departments: 0, users: 0 })
+    const { rows } = await db.execute(sql`select password_hash from users where username = 'admin'`)
+    expect(String(rows[0]?.password_hash)).toMatch(/^\$argon2id\$/)
+  })
+
+  it('skips demo users when no demo password is configured', async () => {
+    await resetDatabase()
+    const r = await seed(db, undefined)
+    expect(r.users).toBe(0)
+    expect(r.skippedUsers).toMatch(/SEED_DEMO_PASSWORD/)
   })
 })

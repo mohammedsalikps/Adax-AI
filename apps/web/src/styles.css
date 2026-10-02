@@ -26,6 +26,9 @@
   --color-pending-soft: #fef3c7;
   --color-notice: #1e3a8a;
   --color-notice-soft: #eff6ff;
+  /* AI-generated draft content: always visually distinct from signed records. */
+  --color-ai: #5b21b6;
+  --color-ai-soft: #f5f3ff;
 }
 
 @layer base {

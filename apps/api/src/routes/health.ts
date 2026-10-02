@@ -31,7 +31,7 @@ async function timed<T>(fn: () => Promise<T>): Promise<{ value: T; latencyMs: nu
 export function registerHealthRoutes(app: FastifyInstance, deps: Deps): void {
   const { config, pool, fetchImpl } = deps
 
-  app.get('/api/health', async (): Promise<HealthResponse> => ({
+  app.get('/api/health', { config: { public: true } }, async (): Promise<HealthResponse> => ({
     status: 'ok',
     service: 'api',
     version: config.version,
@@ -39,7 +39,7 @@ export function registerHealthRoutes(app: FastifyInstance, deps: Deps): void {
     time: new Date().toISOString(),
   }))
 
-  app.get('/api/ready', async (_req, reply) => {
+  app.get('/api/ready', { config: { public: true } }, async (_req, reply) => {
     try {
       const { latencyMs } = await timed(() => pool.query('SELECT 1'))
       const body: ReadyResponse = { status: 'ready', checks: { database: { status: 'up', latencyMs } } }
@@ -50,7 +50,7 @@ export function registerHealthRoutes(app: FastifyInstance, deps: Deps): void {
     }
   })
 
-  app.get('/api/system/status', async (): Promise<SystemStatusResponse> => {
+  app.get('/api/system/status', { config: { permission: 'system:status' } }, async (): Promise<SystemStatusResponse> => {
     const [database, thermal] = await Promise.all([checkDatabase(pool), checkThermal(config.thermalUrl, fetchImpl)])
     return {
       checkedAt: new Date().toISOString(),

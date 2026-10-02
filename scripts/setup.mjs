@@ -39,18 +39,26 @@ function checkNode() {
   say(`Node ${process.versions.node}`)
 }
 
+const fillPassword = (line) => (/^[A-Z_]+_PASSWORD=$/.test(line) ? `${line}${crypto.randomBytes(24).toString('base64url')}` : line)
+
 function ensureEnvFile() {
-  if (fs.existsSync(ENV_FILE)) {
-    say('.env exists; leaving it unchanged')
+  const exampleLines = fs.readFileSync(ENV_EXAMPLE, 'utf8').split(/\r?\n/)
+  if (!fs.existsSync(ENV_FILE)) {
+    fs.writeFileSync(ENV_FILE, exampleLines.map(fillPassword).join('\n'), { mode: 0o600 })
+    say('.env created from .env.example with generated local passwords (git-ignored, not printed)')
     return
   }
-  const filled = fs
-    .readFileSync(ENV_EXAMPLE, 'utf8')
-    .split(/\r?\n/)
-    .map((line) => (/^[A-Z_]+_PASSWORD=$/.test(line) ? `${line}${crypto.randomBytes(24).toString('base64url')}` : line))
-    .join('\n')
-  fs.writeFileSync(ENV_FILE, filled, { mode: 0o600 })
-  say('.env created from .env.example with generated local passwords (git-ignored, not printed)')
+  // Existing .env: keep every value, and append variables added to
+  // .env.example since it was created (generating any new passwords).
+  const current = fs.readFileSync(ENV_FILE, 'utf8')
+  const present = new Set([...current.matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1]))
+  const missing = exampleLines.filter((l) => /^[A-Z_][A-Z0-9_]*=/.test(l) && !present.has(l.split('=')[0]))
+  if (!missing.length) {
+    say('.env exists and has every variable from .env.example')
+    return
+  }
+  fs.appendFileSync(ENV_FILE, `${current.endsWith('\n') ? '' : '\n'}\n# Added by setup\n${missing.map(fillPassword).join('\n')}\n`)
+  say(`.env updated with new variables: ${missing.map((l) => l.split('=')[0]).join(', ')} (values not printed)`)
 }
 
 try {
@@ -72,6 +80,7 @@ try {
   step('Migrations and seed data')
   await run('npm', ['run', 'migrate', '--workspace', '@adaxai/api'])
   await run('npm', ['run', 'migrate', '--workspace', '@adaxai/api', '--', '--target', 'test'])
+  await run('npm', ['run', 'migrate', '--workspace', '@adaxai/api', '--', '--target', 'e2e'])
   await run('npm', ['run', 'seed', '--workspace', '@adaxai/api'])
 
   step('Thermal service virtualenv')

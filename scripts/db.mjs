@@ -221,7 +221,11 @@ const commands = {
     requireSecrets(cfg)
     const admin = assertIdentifier(cfg.db.adminUser, 'DB_ADMIN_USER')
     const app = assertIdentifier(cfg.db.appUser, 'DB_APP_USER')
-    const databases = [assertIdentifier(cfg.db.name, 'DB_NAME'), assertIdentifier(cfg.db.testName, 'DB_TEST_NAME')]
+    const databases = [
+      assertIdentifier(cfg.db.name, 'DB_NAME'),
+      assertIdentifier(cfg.db.testName, 'DB_TEST_NAME'),
+      assertIdentifier(cfg.db.e2eName, 'DB_E2E_NAME'),
+    ]
     await commands.start()
     await withAdmin('postgres', async (c) => {
       const pw = c.escapeLiteral(cfg.db.appPassword)
@@ -253,6 +257,22 @@ const commands = {
       })
     }
     say('grants applied')
+  },
+
+  // Empties every application table of the test or e2e database (never the
+  // development database). Superuser + session_replication_role = replica is
+  // the only way past the append-only audit triggers.
+  async reset() {
+    requireSecrets(cfg)
+    const target = process.argv[3]
+    const db = target === 'test' ? cfg.db.testName : target === 'e2e' ? cfg.db.e2eName : null
+    if (!db) throw new Error('usage: node scripts/db.mjs reset <test|e2e>  (the development database is never reset)')
+    await withAdmin(assertIdentifier(db, 'database'), async (c) => {
+      await c.query('SET session_replication_role = replica')
+      const { rows } = await c.query("SELECT quote_ident(tablename) AS t FROM pg_tables WHERE schemaname = 'public'")
+      if (rows.length) await c.query(`TRUNCATE ${rows.map((r) => r.t).join(', ')} RESTART IDENTITY CASCADE`)
+    })
+    say(`reset ${db}: all application tables emptied`)
   },
 
   // Verifies, on this machine: UTF-8 round-trip, a clean stop (no

@@ -1,11 +1,15 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Starts (or reuses) the real API, thermal service and web app. PostgreSQL is
-// started beforehand by `npm run test:e2e` (scripts/db.mjs start).
-const WEB = 'http://127.0.0.1:5173'
+// The suite runs its own API, thermal service and web app on separate ports,
+// against the dedicated e2e database (reset and seeded in global-setup), so it
+// can run while `npm run dev` is up and never touches development data.
+const PORTS = { api: 4100, thermal: 8101, web: 5273 }
+const WEB = `http://127.0.0.1:${PORTS.web}`
+const E2E_DB = process.env.DB_E2E_NAME || 'adaxai_e2e'
 
 export default defineConfig({
   testDir: 'e2e',
+  globalSetup: './e2e/global-setup.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -16,8 +20,26 @@ export default defineConfig({
     { name: 'mobile-chromium', use: { ...devices['Pixel 7'] } },
   ],
   webServer: [
-    { command: 'npm run dev:api', url: 'http://127.0.0.1:4000/api/health', reuseExistingServer: true, timeout: 60_000 },
-    { command: 'npm run dev:thermal', url: 'http://127.0.0.1:8001/health', reuseExistingServer: true, timeout: 60_000 },
-    { command: 'npm run dev:web', url: WEB, reuseExistingServer: true, timeout: 60_000 },
+    {
+      command: 'npm run start --workspace @adaxai/api',
+      url: `http://127.0.0.1:${PORTS.api}/api/health`,
+      env: { DB_NAME: E2E_DB, API_PORT: String(PORTS.api), THERMAL_URL: `http://127.0.0.1:${PORTS.thermal}` },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: 'node scripts/thermal.mjs dev',
+      url: `http://127.0.0.1:${PORTS.thermal}/health`,
+      env: { THERMAL_PORT: String(PORTS.thermal) },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: 'npm run dev --workspace @adaxai/web',
+      url: WEB,
+      env: { WEB_PORT: String(PORTS.web), API_PORT: String(PORTS.api) },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
   ],
 })

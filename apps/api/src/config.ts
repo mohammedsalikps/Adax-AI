@@ -28,6 +28,9 @@ const EnvSchema = z.object({
   DB_ADMIN_USER: identifier.default('adaxai_admin'),
   DB_ADMIN_PASSWORD: z.string().optional(),
   THERMAL_URL: z.url().default('http://127.0.0.1:8001'),
+  /** Defaults to true in production; local HTTP development needs false. */
+  COOKIE_SECURE: z.enum(['true', 'false', '']).optional(),
+  STORAGE_DIR: z.string().min(1).default('storage'),
 })
 
 export interface DbConfig {
@@ -47,6 +50,9 @@ export interface Config {
   api: { host: string; port: number }
   db: DbConfig
   thermalUrl: string
+  cookieSecure: boolean
+  /** Absolute path for uploaded files (git-ignored). */
+  storageDir: string
 }
 
 /** Validates the environment. Error messages name variables, never their values. */
@@ -72,5 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       adminPassword: e.DB_ADMIN_PASSWORD || undefined,
     },
     thermalUrl: e.THERMAL_URL.replace(/\/+$/, ''),
+    cookieSecure: e.COOKIE_SECURE ? e.COOKIE_SECURE === 'true' : e.NODE_ENV === 'production',
+    storageDir: path.resolve(REPO_ROOT, e.STORAGE_DIR),
   }
 }

@@ -31,7 +31,7 @@
     "test": "npm run test:api && npm run test:thermal && npm run test:e2e",
     "test:api": "node scripts/db.mjs start && npm run migrate --workspace @adaxai/api -- --target test && npm run test --workspace @adaxai/api",
     "test:thermal": "node scripts/thermal.mjs test",
-    "test:e2e": "node scripts/db.mjs start && playwright test"
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

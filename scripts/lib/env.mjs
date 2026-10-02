@@ -20,6 +20,7 @@ export function loadEnv() {
       port: int(e.DB_PORT, 5433),
       name: e.DB_NAME || 'adaxai',
       testName: e.DB_TEST_NAME || 'adaxai_test',
+      e2eName: e.DB_E2E_NAME || 'adaxai_e2e',
       adminUser: e.DB_ADMIN_USER || 'adaxai_admin',
       adminPassword: e.DB_ADMIN_PASSWORD || '',
       appUser: e.DB_APP_USER || 'adaxai_app',

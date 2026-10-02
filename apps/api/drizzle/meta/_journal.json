@@ -50,6 +50,13 @@
       "when": 1790928113513,
       "tag": "0006_encounter_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790929074822,
+      "tag": "0007_files_and_ai",
+      "breakpoints": true
     }
   ]
 }

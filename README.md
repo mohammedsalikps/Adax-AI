@@ -16,6 +16,7 @@ PostgreSQL, and a Python thermal-imaging service.
 | Patients | Registration (auto MRN, duplicate warning with audited override), search by name/MRN/phone (incl. non-Latin scripts), profile, allergies with explicit “no known allergies”, consents (grant/withdraw, history kept), patient-portal activation codes |
 | OPD queue and nurse workflow | Check-in with atomic daily tokens, one open visit per patient per day, priority, department/doctor assignment, server-enforced status transitions, vitals with plausibility checks and adult reference-range flags (not applied under 18; display aid only), entered-in-error corrections, doctor “my patients” view, auto-refresh |
 | Doctor consultation | Start/continue from the queue, structured note (complaint, history, medical history, examination, assessment, plan, follow-up), diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid in this build), patient timeline |
+| AI consultation assistant | Patient consent (ongoing or per consultation), browser recording / audio upload / typed transcript, numbered transcript segments, speech-to-text (OpenAI-compatible endpoint) and note drafting with Claude (`claude-opus-5-5`, structured output, server-side refusal fallback) when keys are configured, identifiers replaced before sending, per-suggestion accept/edit/reject with cited transcript lines, unsourced suggestions flagged, every AI call logged (model, prompt version, tokens, outcome). Without keys the app states that AI is unavailable. |
 
 ## Accounts and security model
 
@@ -71,6 +72,21 @@ PostgreSQL runs in the background and keeps running after `npm run dev` exits:
 ```bash
 npm run db:stop
 ```
+
+## AI assistant: what is and is not real
+
+- **Drafting only.** The assistant suggests passages for the note sections. It never adds diagnoses
+  or prescriptions, and nothing reaches the note until the doctor accepts or edits a suggestion.
+  Signing is a separate, attested doctor action.
+- **Configuration.** Set `ANTHROPIC_API_KEY` (drafting) and `AI_STT_API_KEY` (+ base URL/model) in
+  `.env`. Without them the UI says the feature is unavailable; it never shows placeholder output.
+- **Not validated.** Draft quality and transcription accuracy have not been evaluated on real
+  consultations or Indian languages. The adapters are tested against local mocks of the provider
+  APIs (request shape, parsing, error mapping), not against the live services.
+- **Privacy.** Registered names, MRN and phone number are replaced before text is sent; other
+  identifiers mentioned in conversation may still be present. Audio is stored locally under
+  `storage/`. Sending data to a provider requires the patient’s recorded consent and an
+  appropriate data-processing agreement with that provider.
 
 ## Services and ports
 

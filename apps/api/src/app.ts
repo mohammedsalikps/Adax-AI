@@ -1,7 +1,11 @@
 import crypto from 'node:crypto'
+import multipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify'
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
+import { type AiProviders, providersFromConfig } from './ai/providers.ts'
+import { registerAiRoutes } from './ai/routes.ts'
+import { registerFileRoutes } from './files/routes.ts'
 import { registerActivationRoutes } from './auth/activation.ts'
 import { encounterIdsForVisits } from './encounters/service.ts'
 import { registerEncounterRoutes } from './encounters/routes.ts'
@@ -19,6 +23,8 @@ export interface AppDeps {
   pool: pg.Pool
   /** Injected so tests can simulate the thermal service; defaults to global fetch. */
   fetchImpl?: typeof fetch
+  /** AI providers; tests inject fakes. Defaults to the configured real providers (or none). */
+  ai?: AiProviders
   logger?: FastifyServerOptions['logger']
 }
 
@@ -32,6 +38,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const db = createDb(deps.pool)
   const fetchImpl = deps.fetchImpl ?? fetch
 
+  void app.register(multipart, { limits: { fileSize: deps.config.maxUploadBytes, files: 1, fields: 5 } })
   registerAuth(app, { db, cookieSecure: deps.config.cookieSecure })
   registerHealthRoutes(app, { config: deps.config, pool: deps.pool, fetchImpl })
   registerAuthRoutes(app, { db, cookieSecure: deps.config.cookieSecure })
@@ -40,6 +47,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerPatientRoutes(app, { db })
   registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
   registerEncounterRoutes(app, { db })
+  registerFileRoutes(app, { db, config: deps.config })
+  registerAiRoutes(app, { db, config: deps.config, providers: deps.ai ?? providersFromConfig(deps.config) })
 
   app.setNotFoundHandler((req, reply) => {
     void reply.code(404).send({ error: 'not_found', message: `No route for ${req.method} ${req.url.split('?')[0]}` })

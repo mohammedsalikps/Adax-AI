@@ -1,19 +1,5 @@
-import { expect, request as pwRequest, test } from '@playwright/test'
-import { DEMO_PASSWORD, expectNoAxeViolations, expectNoHorizontalOverflow, signIn, uniq } from './support.ts'
-
-/** Nurse side via the API (its UI is covered by nurse-workflow.spec): register, check in, vitals, ready. */
-async function nurseHandsOverPatient(baseURL: string) {
-  const api = await pwRequest.newContext({ baseURL, extraHTTPHeaders: { 'x-adaxai-csrf': '1' } })
-  expect((await api.post('/api/auth/login', { data: { username: 'nurse.anil', password: DEMO_PASSWORD } })).ok()).toBe(true)
-  const given = `Meena${uniq()}`
-  const patient = await (await api.post('/api/patients', { data: { givenName: given, familyName: 'Synthetic', dateOfBirth: '1984-02-11', sex: 'female', phone: `7${String(Date.now()).slice(-9)}` } })).json()
-  const depts = (await (await api.get('/api/departments')).json()).departments
-  const visit = await (await api.post('/api/visits', { data: { patientId: patient.id, departmentId: depts.find((d: { code: string }) => d.code === 'GEN').id, chiefComplaint: 'Sore throat and fever' } })).json()
-  await api.post(`/api/visits/${visit.id}/observations`, { data: { items: [{ kind: 'temperature', value: 38.2 }, { kind: 'heart_rate', value: 92 }] } })
-  await api.post(`/api/visits/${visit.id}/status`, { data: { status: 'ready' } })
-  await api.dispose()
-  return { name: `${given} Synthetic`, patientId: patient.id as string, mrn: patient.mrn as string }
-}
+import { expect, test } from '@playwright/test'
+import { expectNoAxeViolations, expectNoHorizontalOverflow, nurseHandsOverPatient, signIn } from './support.ts'
 
 test('doctor consults, writes the note, prescribes, signs, prints and amends; nurse sees the saved record', async ({ page, browser, baseURL, isMobile }) => {
   const p = await nurseHandsOverPatient(baseURL!)

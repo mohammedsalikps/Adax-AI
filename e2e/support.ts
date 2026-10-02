@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
-import { expect, type Page } from '@playwright/test'
+import { expect, type Page, request as pwRequest } from '@playwright/test'
 
 const envFile = path.resolve(import.meta.dirname, '..', '.env')
 if (fs.existsSync(envFile)) process.loadEnvFile(envFile)
@@ -44,3 +44,18 @@ export async function signOut(page: Page) {
 
 /** A unique suffix so tests can run repeatedly against the same dev database. */
 export const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+
+/** Nurse side via the API (its UI is covered by nurse-workflow.spec): register, check in, vitals, ready. */
+export async function nurseHandsOverPatient(baseURL: string) {
+  const api = await pwRequest.newContext({ baseURL, extraHTTPHeaders: { 'x-adaxai-csrf': '1' } })
+  expect((await api.post('/api/auth/login', { data: { username: 'nurse.anil', password: DEMO_PASSWORD } })).ok()).toBe(true)
+  const given = `Meena${uniq()}`
+  const patient = await (await api.post('/api/patients', { data: { givenName: given, familyName: 'Synthetic', dateOfBirth: '1984-02-11', sex: 'female', phone: `7${String(Date.now()).slice(-9)}` } })).json()
+  const depts = (await (await api.get('/api/departments')).json()).departments
+  const visit = await (await api.post('/api/visits', { data: { patientId: patient.id, departmentId: depts.find((d: { code: string }) => d.code === 'GEN').id, chiefComplaint: 'Sore throat and fever' } })).json()
+  await api.post(`/api/visits/${visit.id}/observations`, { data: { items: [{ kind: 'temperature', value: 38.2 }, { kind: 'heart_rate', value: 92 }] } })
+  await api.post(`/api/visits/${visit.id}/status`, { data: { status: 'ready' } })
+  await api.dispose()
+  return { name: `${given} Synthetic`, patientId: patient.id as string, mrn: patient.mrn as string }
+}
+

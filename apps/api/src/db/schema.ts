@@ -421,6 +421,117 @@ export const prescriptionItems = pgTable(
   (t) => [index('prescription_items_encounter_idx').on(t.encounterId)],
 )
 
+// ---------------------------------------------------------------------------
+// Uploaded files and the AI consultation assistant
+// ---------------------------------------------------------------------------
+
+/** Uploaded binaries live on disk (STORAGE_DIR); this row is their metadata and access anchor. */
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id').references(() => patients.id),
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    /** consultation_audio | stethoscope_audio | thermal_raw | thermal_matrix | thermal_visual | dataset_export */
+    kind: text('kind').notNull(),
+    storageKey: text('storage_key').notNull().unique(),
+    originalName: text('original_name'),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+    uploadedBy: uuid('uploaded_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('files_encounter_idx').on(t.encounterId), index('files_patient_idx').on(t.patientId)],
+)
+
+/** Every call to an external AI provider: what ran, with which model and prompt version, and how it ended. Content is not duplicated here. */
+export const aiRuns = pgTable(
+  'ai_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    kind: text('kind').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    promptVersion: text('prompt_version'),
+    status: text('status').notNull(),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    inputSha256: text('input_sha256'),
+    outputSha256: text('output_sha256'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    latencyMs: integer('latency_ms'),
+    providerRequestId: text('provider_request_id'),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_runs_encounter_idx').on(t.encounterId)],
+)
+
+export const transcripts = pgTable(
+  'transcripts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    source: text('source').notNull(),
+    audioFileId: uuid('audio_file_id').references(() => files.id),
+    sttRunId: uuid('stt_run_id').references(() => aiRuns.id),
+    /** [{ id: "S1", speaker: "Doctor" | null, text }] */
+    segments: jsonb('segments').notNull(),
+    createdBy: uuid('created_by').references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('transcripts_encounter_idx').on(t.encounterId)],
+)
+
+export const aiDrafts = pgTable(
+  'ai_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    transcriptId: uuid('transcript_id')
+      .notNull()
+      .references(() => transcripts.id),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => aiRuns.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_drafts_encounter_idx').on(t.encounterId)],
+)
+
+/** One suggested passage. Nothing reaches the note until a doctor accepts or edits it. */
+export const aiDraftItems = pgTable(
+  'ai_draft_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    draftId: uuid('draft_id')
+      .notNull()
+      .references(() => aiDrafts.id),
+    section: text('section').notNull(),
+    text: text('text').notNull(),
+    sourceSegmentIds: jsonb('source_segment_ids').notNull(),
+    unsupported: boolean('unsupported').notNull().default(false),
+    decision: text('decision').notNull().default('pending'),
+    finalText: text('final_text'),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    sortOrder: integer('sort_order').notNull().default(0),
+  },
+  (t) => [index('ai_draft_items_draft_idx').on(t.draftId)],
+)
+
 /** Post-signing corrections. Append-only (triggers block UPDATE/DELETE). */
 export const encounterAmendments = pgTable(
   'encounter_amendments',

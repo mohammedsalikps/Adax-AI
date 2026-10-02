@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router'
 import { PortalLayout } from './components/PortalLayout.tsx'
+import { AiAssistantPanel } from './components/clinical/AiAssistantPanel.tsx'
 import { ConsultAction, ConsultationLink } from './components/clinical/ConsultAction.tsx'
 import { Timeline } from './components/clinical/Timeline.tsx'
 import { RequireAuth, RoleRedirect } from './components/RequireAuth.tsx'
@@ -71,7 +72,7 @@ const router = createBrowserRouter([
       { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} /> },
       { path: 'patients', element: <PatientsPage /> },
       { path: 'patients/:patientId', element: profile },
-      { path: 'encounters/:encounterId', element: <ConsultationPage /> },
+      { path: 'encounters/:encounterId', element: <ConsultationPage sidePanel={(e, append) => <AiAssistantPanel encounter={e} append={append} />} /> },
       { path: 'register', element: <RegisterPatientPage /> },
       { path: 'thermal', element: <NotYetBuiltPage title="Thermal" planned={['FLIR image upload and analysis']} /> },
     ],

@@ -291,6 +291,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
       )}
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-6">
+          {sidePanel?.(initial, append)}
           <Card title="Consultation note">
             <div className="space-y-4">
               {NOTE_SECTIONS.map((s) => (
@@ -322,7 +323,6 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
               Record vitals
             </Button>
           </Card>
-          {sidePanel?.(initial, append)}
           <Timeline patientId={initial.patient.id} />
         </aside>
       </div>

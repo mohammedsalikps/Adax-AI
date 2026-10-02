@@ -1,0 +1,86 @@
+import { expect, test } from '@playwright/test'
+import { expectNoAxeViolations, expectNoHorizontalOverflow, nurseHandsOverPatient, signIn } from './support.ts'
+
+// The API talks to the TEST-ONLY mock of the Anthropic Messages API
+// (e2e/mock-anthropic.mjs) through the real SDK. The patient is synthetic.
+
+test('extraction with evidence and record conflicts, rule and AI recommendations, review gates, and the activity trail', async ({ page, baseURL }) => {
+  const p = await nurseHandsOverPatient(baseURL!, { allergies: ['Penicillin'] })
+  await signIn(page, 'dr.meera')
+  await page.getByRole('listitem').filter({ hasText: p.name }).getByRole('button', { name: 'Start consultation' }).click()
+  await expect(page).toHaveURL(/\/doctor\/encounters\//)
+  const panel = page.getByRole('region', { name: 'AI consultation assistant' })
+  await panel.getByRole('button', { name: 'Patient agrees (verbal)' }).click()
+  await panel.getByLabel('Or type / paste the transcript').fill(
+    ['Doctor: What brings you in today?', 'Patient: I have a sore throat and some chest pain since yesterday.', 'Doctor: Any allergies?', 'Patient: No, no allergies.', 'Doctor: Your throat is red. Take warm saline gargles.'].join('\n'),
+  )
+  await panel.getByRole('button', { name: 'Save transcript' }).click()
+  await expect(panel.getByRole('list', { name: 'Transcript segments' })).toContainText('S4 Patient: No, no allergies.')
+
+  // Facts: linked to transcript lines and checked against the record.
+  await panel.getByRole('button', { name: 'Extract facts' }).click()
+  const facts = panel.getByRole('region', { name: 'Extracted facts' })
+  await expect(facts.getByTestId('fact')).toHaveCount(3)
+  const allergy = facts.getByTestId('fact').filter({ hasText: 'Denies any allergies.' })
+  await expect(allergy).toContainText('Conflicts with the existing record')
+  await allergy.getByText(/^Sources: S4/).click()
+  await expect(allergy).toContainText('Existing record')
+  await expect(allergy).toContainText('Penicillin')
+  // A flagged fact cannot be accepted without explicit confirmation.
+  await expect(allergy.getByRole('button', { name: 'Accept' })).toBeDisabled()
+  await allergy.getByRole('button', { name: 'Defer' }).click()
+  await expect(allergy).toContainText('Deferred')
+  const unsure = facts.getByTestId('fact').filter({ hasText: 'night sweats' })
+  await expect(unsure).toContainText('Uncertain or unclear in the conversation')
+  await expect(unsure).toContainText('Not linked to any transcript line')
+  await unsure.getByRole('button', { name: 'Reject' }).click()
+  await expect(unsure).toContainText('Rejected')
+  const cc = facts.getByTestId('fact').filter({ hasText: 'Reports: I have a sore throat' })
+  await expect(cc).toContainText('Patient said')
+  await cc.getByRole('button', { name: 'Accept' }).click()
+  await cc.getByRole('button', { name: 'Add to Chief complaint' }).click()
+  await expect(page.getByLabel('Chief complaint')).toHaveValue(/Reports: I have a sore throat/)
+  await expectNoAxeViolations(page)
+
+  // A prescription that matches the recorded allergy group, then recommendations.
+  await page.getByRole('button', { name: 'Add medicine' }).click()
+  await page.getByLabel('Medicine', { exact: true }).fill('Amoxicillin')
+  await expect(page.getByTestId('save-state')).toContainText('Saved', { timeout: 10_000 })
+  await panel.getByRole('button', { name: 'Get recommendations' }).click()
+  const recs = panel.getByRole('region', { name: 'Recommendations' })
+  const allergyCheck = recs.getByTestId('recommendation').filter({ hasText: 'Check Amoxicillin' })
+  await expect(allergyCheck).toContainText('Rule-based check')
+  await expect(allergyCheck).toContainText('Needs attention')
+  await expect(allergyCheck).toContainText('safety-rules-v1')
+  const redFlag = recs.getByTestId('recommendation').filter({ hasText: 'Red-flag statement' })
+  await expect(redFlag).toContainText('Configured escalation instruction')
+  await expect(redFlag).toContainText('Inform the duty doctor')
+  const conflict = recs.getByTestId('recommendation').filter({ hasText: 'Clarify: "Denies any allergies."' })
+  await expect(conflict).toBeVisible()
+  const aiRec = recs.getByTestId('recommendation').filter({ hasText: 'Consider confirming the history' })
+  await expect(aiRec).toContainText('AI suggestion')
+  await expect(aiRec).toContainText('recommend-v1')
+  await expect(aiRec).toContainText('Duration of symptoms')
+  const unsupported = recs.getByTestId('recommendation').filter({ hasText: 'Unsupported test recommendation.' })
+  await expect(unsupported).toContainText('None of the data this suggestion cites could be verified')
+  await expect(unsupported.getByRole('button', { name: 'Accept' })).toBeDisabled()
+  await unsupported.getByRole('button', { name: 'Reject' }).click()
+  await allergyCheck.getByRole('button', { name: 'Accept' }).click()
+  await expect(allergyCheck).toContainText('Accepted')
+  // Accepting a recommendation does not touch the note or the prescription.
+  await expect(page.getByLabel('Plan', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('Medicine', { exact: true })).toHaveValue('Amoxicillin')
+  await expectNoAxeViolations(page)
+  await expectNoHorizontalOverflow(page)
+
+  // Activity: jobs with model and prompt/rules versions, review decisions, audit trail.
+  await panel.getByRole('tab', { name: /Activity/ }).click()
+  const activity = panel.getByRole('region', { name: 'AI activity' })
+  await expect(activity.getByTestId('ai-job').filter({ hasText: 'Fact extraction' })).toContainText('mock-anthropic-e2e · prompt extract-v1')
+  await expect(activity.getByTestId('ai-job').filter({ hasText: 'Safety rules' })).toContainText('safety-rules-v1 · rules routing-rules-v1')
+  await expect(activity.getByTestId('ai-job').first()).toContainText('Synthetic data')
+  await expect(activity).toContainText('Dr. Meera')
+  await expect(activity).toContainText('deferred a fact')
+  await activity.getByText(/^Audit trail/).click()
+  await expect(activity).toContainText('ai.review')
+})

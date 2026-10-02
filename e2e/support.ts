@@ -46,11 +46,12 @@ export async function signOut(page: Page) {
 export const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
 
 /** Nurse side via the API (its UI is covered by nurse-workflow.spec): register, check in, vitals, ready. */
-export async function nurseHandsOverPatient(baseURL: string) {
+export async function nurseHandsOverPatient(baseURL: string, opts: { allergies?: string[] } = {}) {
   const api = await pwRequest.newContext({ baseURL, extraHTTPHeaders: { 'x-adaxai-csrf': '1' } })
   expect((await api.post('/api/auth/login', { data: { username: 'nurse.anil', password: DEMO_PASSWORD } })).ok()).toBe(true)
   const given = `Meena${uniq()}`
   const patient = await (await api.post('/api/patients', { data: { givenName: given, familyName: 'Synthetic', dateOfBirth: '1984-02-11', sex: 'female', phone: `7${String(Date.now()).slice(-9)}` } })).json()
+  for (const substance of opts.allergies ?? []) await api.post(`/api/patients/${patient.id}/allergies`, { data: { substance, severity: 'moderate' } })
   const depts = (await (await api.get('/api/departments')).json()).departments
   const visit = await (await api.post('/api/visits', { data: { patientId: patient.id, departmentId: depts.find((d: { code: string }) => d.code === 'GEN').id, chiefComplaint: 'Sore throat and fever' } })).json()
   await api.post(`/api/visits/${visit.id}/observations`, { data: { items: [{ kind: 'temperature', value: 38.2 }, { kind: 'heart_rate', value: 92 }] } })

@@ -1,9 +1,10 @@
 import { Encounter, EncounterAi, PatientDetail, type TranscriptSegment, Visit } from '@adaxai/contracts'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { AiProviderError, type AiProviders, type ExtractedFact, type FactExtractor, type RecommendationInput, type RecommendationOut, type Recommender, type Transcriber } from '../src/ai/providers.ts'
+import { AiProviderError, type AiProviders, type ExtractedFact, type FactExtractor, type RecommendationInput, type RecommendationOut, type Recommender } from '../src/ai/providers.ts'
 import { runRetention } from '../src/files/retention.ts'
 import { loadAppSettings } from '../src/settings/load.ts'
 import { testConfig } from './helpers.ts'
+import { FakeTranscriber } from './speech-support.ts'
 import { adminQuery, call, createFixture, createTestApp, type Fixture, login, resetDatabase, samplePatient, type TestContext } from './helpers.ts'
 
 // --- Test doubles for the external providers (tests only; the product never fakes AI output) ---
@@ -40,21 +41,6 @@ class FakeRecommender implements Recommender {
     return { recommendations: this.out, insufficientData: this.out.length === 0, insufficientDataReason: this.out.length ? null : 'Not enough information.', model: 'fake-recommend', inputTokens: 10, outputTokens: 5, requestId: null }
   }
 }
-class FakeTranscriber implements Transcriber {
-  readonly provider = 'fake-stt'
-  readonly model = 'fake-stt-model'
-  n = 0
-  failNext = false
-  async transcribe() {
-    if (this.failNext) {
-      this.failNext = false
-      throw new AiProviderError('unreachable', 'The speech-to-text service could not be reached.', true)
-    }
-    this.n++
-    return { text: `Patient: part ${this.n} words`, requestId: null }
-  }
-}
-
 const extractor = new FakeExtractor()
 const recommender = new FakeRecommender()
 const transcriber = new FakeTranscriber()
@@ -326,13 +312,13 @@ describe('live transcription', () => {
     const tid = start.json().transcriptId as string
     const chunk = (i: number) => {
       const boundary = '----chunk'
-      const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunkIndex"\r\n\r\n${i}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="c.webm"\r\nContent-Type: audio/webm\r\n\r\n`), Buffer.from(`audio-${i}`), Buffer.from(`\r\n--${boundary}--\r\n`)])
+      const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunkIndex"\r\n\r\n${i}\r\n--${boundary}\r\nContent-Disposition: form-data; name="offsetMs"\r\n\r\n${i * 1000}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="c.webm"\r\nContent-Type: audio/webm\r\n\r\n`), Buffer.from(`audio-${i}`), Buffer.from(`\r\n--${boundary}--\r\n`)])
       return withAi.app.inject({ method: 'POST', url: `/api/transcripts/${tid}/chunks`, headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, cookie: doctor, 'x-adaxai-csrf': '1' }, payload })
     }
     expect((await chunk(0)).statusCode).toBe(201)
     transcriber.failNext = true
     const failed = await chunk(1)
-    expect(failed.json().notice).toMatch(/Part 2: The speech-to-text service could not be reached/)
+    expect(failed.json().notice).toMatch(/Part 2: The local speech service could not be reached/)
     await chunk(2)
     const failedJob = EncounterAi.parse(failed.json()).jobs.find((j) => j.status === 'failed')!
     await call(withAi.app, 'POST', `/api/ai-jobs/${failedJob.id}/retry`, { cookie: doctor })

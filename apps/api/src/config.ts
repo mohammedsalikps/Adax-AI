@@ -37,13 +37,16 @@ const EnvSchema = z.object({
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(200).default(25),
   /** AI note drafting (Claude). Unset = the feature reports itself unavailable. */
   ANTHROPIC_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
-  /** Optional overrides of config/adaxai.yaml (ai.llm.model, ai.stt.*). */
+  /** Optional override of config/adaxai.yaml (ai.llm.model). */
   AI_NOTE_MODEL: z.string().optional().transform((v) => v || undefined),
-  /** Speech-to-text via an OpenAI-compatible /audio/transcriptions endpoint. Unset key = unavailable. */
-  AI_STT_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
-  AI_STT_BASE_URL: z.union([z.url(), z.literal('')]).optional().transform((v) => v || undefined),
-  AI_STT_MODEL: z.string().optional().transform((v) => v || undefined),
-  AI_STT_PROVIDER_NAME: z.string().optional().transform((v) => v || undefined),
+  /**
+   * Speech-to-text runs on this machine only. "none" (the default) or "local" (the speech service in services/speech). There is no
+   * hosted option and nothing falls back to one: an old AI_STT_API_KEY is ignored.
+   */
+  SPEECH_PROVIDER: z.union([z.enum(['none', 'local']), z.literal('')]).optional().transform((v) => v || undefined),
+  /** Where the local speech service listens (default http://127.0.0.1:8002). Loopback only unless SPEECH_ALLOW_NON_LOOPBACK is "true". */
+  SPEECH_URL: z.union([z.url(), z.literal('')]).optional().transform((v) => v || undefined),
+  SPEECH_ALLOW_NON_LOOPBACK: z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
 })
 
 export interface DbConfig {
@@ -73,7 +76,10 @@ export interface Config {
     anthropicApiKey: string | undefined
     /** Env overrides; undefined means "use config/adaxai.yaml". */
     noteModel: string | undefined
-    stt: { apiKey: string | undefined; baseUrl: string | undefined; model: string | undefined; providerName: string | undefined }
+    /** Env overrides of ai.stt in config/adaxai.yaml; undefined means "use the file". */
+    speech: { provider: 'none' | 'local' | undefined; url: string | undefined; allowNonLoopback: boolean }
+    /** An AI_STT_API_KEY is set in the environment. It is never used; the server says so at start-up. */
+    hostedSttKeyIgnored: boolean
   }
 }
 
@@ -111,7 +117,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ai: {
       anthropicApiKey: e.ANTHROPIC_API_KEY,
       noteModel: e.AI_NOTE_MODEL,
-      stt: { apiKey: e.AI_STT_API_KEY, baseUrl: e.AI_STT_BASE_URL?.replace(/\/+$/, ''), model: e.AI_STT_MODEL, providerName: e.AI_STT_PROVIDER_NAME },
+      speech: { provider: e.SPEECH_PROVIDER, url: e.SPEECH_URL?.replace(/\/+$/, ''), allowNonLoopback: e.SPEECH_ALLOW_NON_LOOPBACK },
+      hostedSttKeyIgnored: !!env.AI_STT_API_KEY,
     },
   }
 }

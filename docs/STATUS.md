@@ -1,6 +1,6 @@
 # ADAXAI status
 
-**Last updated:** 3 Oct 2026.
+**Last updated:** 4 Oct 2026.
 
 ADAXAI is an MVP. It is not production-ready, not a medical device, and not clinically validated. All data is synthetic. Nothing here claims legal or regulatory compliance.
 
@@ -14,6 +14,125 @@ What the Doctor App actually does today, and the plan for its first complete con
 | 4. Appointments, check-in, schedules, notifications, and the design foundation | `4be6256` |
 | 4a. Authentication and application entry (a dedicated slice before the consultation workstation) | `5f0505d` |
 | 4A / V1. Know the patient: patient history, today's patients, the consultation workstation, a synthetic hospital dataset | the commit titled "Doctor App slice 4A" (see `git log`) |
+| V2. Live consultation capture: local speech-to-text, timed transcript, doctor-assigned speakers, important points | the commit titled "Doctor App slice V2" (see `git log`) |
+
+## Slice V2: live consultation capture (local speech-to-text, timed transcript, doctor-assigned speakers, important points)
+
+**Basis:** plan item **V2** in [DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md); the decision record is [ADR 0014](adr/0014-local-speech-service-and-capture-pipeline.md), the model card and measurements are [safety/AI_MODELS.md](safety/AI_MODELS.md), the dataset is in [safety/DATASETS.md](safety/DATASETS.md). Nothing here is clinically validated, a medical device or production-ready; all data is synthetic. **It does not build the consultation summary (V3), full Mana (V4), the health band or stethoscope analysis (V5) or thermal ML (V6).**
+
+**Naming:** this is the second slice of the Doctor App plan (V1 was the owner's "Slice 4A").
+
+### What a doctor can do now, and what is real
+
+| Step | State |
+| --- | --- |
+| Start the consultation, see the consent state | Real (existing consent model; the on-screen wording now says the audio stays on this computer, which **needs a legal and clinical-governance review before any real use**) |
+| Start recording | **Real, in a real browser**: needs the patient's recorded consent, a click, the browser's microphone permission and a ready local speech service; each of those states has its own message |
+| Pause / resume / stop; recording clock; microphone level | Real (the clock counts recorded time only) |
+| Local speech-to-text | **Real**: `faster-whisper` `small` (CTranslate2, int8, CPU) in `services/speech`, on `127.0.0.1:8002`; transcribes each 20-second part after it is recorded |
+| Timestamped transcript, language per line, model score | Real; times are on the recording's own timeline |
+| Speaker labels | Not identified by any model: **the doctor assigns** Doctor / Patient / Nurse / Relative / Attendant / Other per line; stored as an append-only review |
+| Important points (extraction) | **Real, rule-based, on this computer** (`extract-rules-v1`, English only); each point has category, source lines, rules version, time, review flags |
+| Confirm / reject | Real; flagged or speaker-guessed points need an explicit tick (enforced by the server) |
+| Available to a later summary | `listConfirmedPoints` returns only doctor-confirmed points (no consumer yet) |
+| Consent withdrawn mid-recording | Real: the microphone stops, the part in progress is discarded, the recording ends with `consent_withdrawn`, further parts are refused |
+| **Not built** | The consultation summary; speaker identification; word-by-word live text; translation; non-English extraction; retention schedule |
+
+### Implemented
+
+**Database (additive migration `0025_capture_v2`; applied to the development, test and e2e databases; the development database was copied first, see below).** `transcript_chunks` (one row per recorded part: offset on the recording, duration from the decoded audio, language, status), `transcript_segment_speakers` (append-only speaker review; trigger-protected like the other evidence tables), new columns on `transcript_segments` (language, model score, no-speech probability, run), `transcripts.end_reason`, `ai_runs.locality / runtime / weights_sha256`, a partial unique index allowing **one live recording per consultation**, and database checks on part offsets and status, end reasons, run locality and speaker labels.
+
+**Local speech service (`services/speech`, Python/FastAPI).** `GET /health`, `POST /v1/transcribe` (multipart audio, optional language), loopback only (it refuses a `Host` that is not a loopback name, has no CORS, no docs routes), model loaded from a directory with the hub offline, audio decoded in memory and never written to disk, text never logged, `task = transcribe` always, voice-activity filter, replies carry the model identity and weights SHA-256. `npm run speech:setup` builds its virtualenv; `npm run speech:model` is the explicit, hash-verified model download (`models.lock.json`); `npm run dev:speech` / `npm run dev` start it. 24 Python tests (one optional test loads the real model).
+
+**API.** `Transcriber` interface with one implementation, `LocalSpeechTranscriber` (loopback enforced, redirects refused, replies schema-checked, errors mapped to words a doctor can act on); provider `none` by default; **the hosted adapter is gone and `AI_STT_API_KEY` is ignored with a warning**; `aiStatus` is asynchronous and health-checks the service (cached 4 s); parts are stored in order with an offset checked against the recording's wall-clock age; a duplicate part is a 409; consent is re-checked on every part, upload, retry and extraction; withdrawal ends the live recording; speaker assignment (`POST /api/transcripts/:id/speakers`) validates that every segment belongs to the transcript and is audited; `GET /api/encounters/:id/capture` (can this consultation record now, and must a recording stop) carries no patient content; `POST /api/transcripts/:id/end`; the extractor defaults to the local rules and the hosted language-model extractor needs `ai.extraction.provider: llm`; confirmed points are read through `listConfirmedPoints`. New facts categories: duration, patient concern, investigation mention.
+
+**Web.** `components/capture/` (Recorder, TranscriptView, CapturePanel): the three-tier presentation in [DESIGN.md](DESIGN.md) §4c; the AI assistant panel keeps note suggestions, recommendations and activity only; the workstation's left column leads with capture at 1400px and up, and the two-column layout at 1280px was mirrored so that capture stays on the left.
+
+**Evaluation (synthetic only).** `data/eval/consultations-v1` (15 scripted consultations, hand-labelled; dev/test split), the extraction harness `apps/api/src/eval/{score,cli}.ts`, offline audio synthesis `synthesise-audio.ps1` (Windows voices), the speech harness `apps/api/src/eval/stt.ts` with a word-error-rate module `wer.ts`.
+
+### Measured results (synthetic data only)
+
+Full tables and caveats: [safety/AI_MODELS.md](safety/AI_MODELS.md); raw: `data/eval/results/stt-v1.md`, `extraction-v1.md`.
+
+| What | Result | Read it as |
+| --- | --- | --- |
+| Speech model (`faster-whisper-small`), word error rate on synthetic text-to-speech speech, 302 English turns | **1.8 %** (1.7 % development files, 1.9 % test files) | A sanity check on clean, quiet, one-voice audio. **Not** an estimate for clinic audio |
+| Language identification (no hint given) | English for 302 of 302 turns | Same caveat; no other language was evaluated |
+| Long recordings (3 consultations, 161 to 229 s) | session word error rate 0.6 to 1.5 %; times ordered and inside the audio; median turn-start error 145 to 2,260 ms | The model joins neighbouring turns, so starts can be early |
+| Speed on this CPU | 0.13 to 0.17 times real time on long audio; about 5 s per short request; a 20-second part appears about 3 to 7 s after it ends | |
+| Important points, **held-out test split** (English, 4 files, 130 gold points), speakers labelled | **precision 75 %, recall 53 %** (speakers unlabelled: 69 % / 43 %) | The honest figure. The rules miss what they do not know |
+| Important points, development split (the rules were tuned on it) | 83 % / 89 % (unlabelled 79 % / 69 %) | Optimistic by construction; the gap to the test split is the finding |
+| Rules fed the speech model's text instead of the script (12 English files) | recall 75 % -> 63 %, precision 81 % -> 72 % | Transcription errors cost points |
+| Negation / hedging / who-said-it on matched points | 99-100 % / 93-98 % / 96-100 % | |
+| Hindi and Hinglish text (3 files) | nothing extracted, all lines skipped and counted | Intended for an unsupported language |
+
+**Real model, real browser:** A real Chromium recorded synthetic speech (a WAV played as the fake microphone) and the real API sent it to the real local model (`faster-whisper-small`, new service code): 12 timed English lines ("…I have fever and a dry cough, and my throat is sore also… no, no chest pain…"), important points proposed, screenshot reviewed (`e2e/capture-real.spec.ts`, opt-in, passes in about 50 s). The audio is synthetic text-to-speech: this shows the chain works, not accuracy.
+
+### Tests
+
+- **API** (`npm run test:api`): 36 files: **434 passed, 10 skipped, and one suite (`hospital-seed.test.ts`, a V1 test) that cannot run between about 00:00 and 02:35 local time** because of a time-of-day limitation in the V1 seed, run at 00:55 (see the failures section). New or extended for V2: `capture.test.ts` (31: consent and the recording's lifecycle, timeline and ordering, speaker assignment and its append-only audit, extraction, confirmation and rejection, the raw/extracted/confirmed separation, authorization and facility isolation, no external call, and the security-review regressions below), `speech.test.ts` (26: the local transcriber, loopback enforcement, error mapping), `extract-rules.test.ts` (32, including the held-out test-split floors), `eval-wer.test.ts` (4), plus updated `ai.test.ts`, `ai-clinical.test.ts`, `config.test.ts`.
+- **Speech service** (`npm run test:speech`): 31 Python tests (one optional test loads the real model).
+- **Web unit** (`npm run test:web`): 30 (3 new: times, language names, the focus store).
+- **Thermal** (`npm run test:thermal`): 32 (unchanged).
+- **End to end** (`npx playwright test --workers=4`): full run at 4 workers: **160 passed, 21 skipped, 1 failed** (a load-sensitive V1 mobile history test that passes 6 of 6 times alone); the opt-in real-model spec is skipped here. New: `e2e/capture.spec.ts` (consent first and the server refusing too; record, pause, resume and stop with the browser's synthetic microphone; timed lines in order; doctor-assigned speakers that never change the words; extracted drafts; confirm and reject; "Add to note" as a separate act; reload persistence; microphone permission denied; unsupported browser; consent withdrawn mid-recording; local service unavailable; doctor-only access and signed-out access; no request to anything but the app and no transcript text in any address or page title; layout and axe at four widths). Updated: `ai-assistant.spec.ts`, `ai-clinical.spec.ts`. The browser tests use **labelled test stand-ins** (`e2e/mock-speech.mjs`: a fixed synthetic script, no model; `e2e/mock-anthropic.mjs`) so the suite needs no model and no key; the real model is covered by the evaluation and by the opt-in `e2e/capture-real.spec.ts`.
+- **Evaluation harnesses** (not in the gate): `apps/api/src/eval/{cli,stt}.ts`.
+- **Lint and types:** `npm run typecheck`, `npm run lint` (oxlint, ruff for both Python services): clean.
+
+### Failures found during this slice, and what was done
+
+- **PyAV 19 is incompatible with faster-whisper 1.2.1** (`open() got an unexpected keyword argument 'metadata_errors'`): transcription returned an internal error. Pinned `av==16.0.1` (a ~32 MB wheel) and wrote the reason in `requirements.txt`.
+- **The model download script was blocked by its own offline setting** (`HF_HUB_OFFLINE=1` is set when the engine is imported): the downloader now sets the hub online for its single run before importing, and verifies against `models.lock.json`.
+- **Extractor:** a negated symptom beside a chief complaint ("No breathing trouble, just the cough") was dropped, and fact text kept trailing punctuation; both fixed after unit tests failed.
+- **Development API hot-reloaded new code before the development database had migration 0025**: stopped only my own watcher, took an in-server clone (`adaxai_backup_20261003_pre0025`, row counts verified), migrated the development, test and end-to-end databases (identity confirmed for each), restarted my stack.
+- **Found by the browser tests:** when consent was withdrawn mid-recording the explanation vanished together with the recorder (the recorder was unmounted when consent flipped); points whose speaker nobody assigned read "Patient said" next to a guess flag (now "Speaker not assigned: guessed patient"); at 1280 px the two-column layout put the transcript on the right (mirrored so capture stays on the left); the start button stayed disabled after consent was recorded in the screen (status is refetched when consent changes).
+- **`e2e/appointments.spec.ts` ("a nurse books, is told a slot is taken…") failed once** in a full run at four workers while other work was using the machine, and passes alone on both projects; it is an existing, load-sensitive test (see the V1 notes) and was not changed.
+- **Migration checksum guard:** I added a clean-up statement to the applied `0025` and the migration runner refused it ("modified after it was applied"); the edit was reverted and the clean-up documented as a pre-step instead (ADR 0014).
+- **`e2e/history.spec.ts` ("when the history cannot be loaded…", mobile) failed once** in the final full run (a click raced a re-render and the test timed out); it passed 6 of 6 times alone on both projects. A load-sensitive V1 test; not changed.
+- **`apps/api/test/hospital-seed.test.ts` (V1) fails between about 00:00 and 02:35 local time.** The seed puts today's appointments at offsets from the clinic's time of day, down to 150 minutes ago; just after midnight those offsets clamp to the same minutes, so a doctor gets two appointments at one time (`appointments_doctor_no_overlap`) or a "no-show" that has not started. **This is V1 code that V2 did not touch** (the file is identical to its committed version); it was written and passed in the daytime. I tried a fix, found it cannot work in general (there is not enough of today left to hold the past appointments), and restored the file rather than ship a half-fix. **Verified only as far as the API gate at 00:55 local: 434 passed, 10 skipped, this one suite failing to start**; re-run it after 02:35.
+- **The ADR claimed protections the service did not have** (Host check, no spooling, log suppression): found by the security review below, now real and tested.
+
+### Pre-commit adversarial review (slice V2)
+
+An independent, read-only adversarial review of the whole slice (consent races, audio and transcript leakage, cross-patient and cross-facility access, external calls, key exposure, speaker manipulation, extraction treated as confirmed, timestamps, concurrent recordings, stale state, resource exhaustion, parsers and injection, the Python service, test hygiene) reported 22 findings. **Fixed, each with a regression test:**
+
+| Finding | Fix |
+| --- | --- |
+| **Negation lost across part boundaries** ("I do not" / "have chest pain." gave a *positive*, unflagged chief complaint) | Recorded lines that end mid-sentence and continue in lower case from the same speaker are read together (both lines are the source); a line still cut at a boundary is flagged and needs the tick |
+| Consent withdrawn *during* transcription still stored the part's text | Consent and visit state are re-checked after the model returns and before storing; the part is marked failed |
+| Capture ignored the visit state (a paused visit's recorder kept filling the old record) | The visit must be with the doctor to start, send a part or transcribe; the capture status carries `closedReason` and the recorder stops on it |
+| Jobs left "running" forever (refused preconditions, storage errors, restarts) | The job is failed (retryable) in every such path; interrupted jobs are failed at start-up |
+| Speaker changed after a point was found: the point stayed confirmable as "patient said" | Server-enforced tick when a source line is now marked as the other side; the screen shows it, also on confirmed points |
+| Re-running extraction brought back rejected points and duplicated confirmed ones | Decisions carry forward |
+| Quadratic reading time on long unpunctuated text (5.8 s for 50,000 characters froze the API) | Lookbacks windowed, units and typed lines capped; timing tests |
+| The service's Host check was not wired; uploads over 1 MiB were spooled to disk; tracebacks were logged by the server | Host and client-header middleware, in-memory uploads, a log filter, tests that forge the header |
+| The speech launcher passed every `.env` secret (database passwords, keys) to Python and pip | Allow-listed environment; the launcher refuses a non-loopback bind |
+| Consultation audio was playable by nurses | Doctor only (others: not found, audited) |
+| The end reason was whatever the browser said | Derived from the consent state |
+| Database errors could log the transcript being stored | Logger serializer; typed text with NUL is refused |
+| A part could start before the previous one; part numbers unbounded | Ordering check; at most 1,000 parts |
+| The recorder retried closed-consultation errors and lost audio, waited a fixed 300 ms before the last part, and stopped at 30 minutes silently | Terminal errors stop the microphone with the reason; the last part is awaited by its stop event; the limit is announced; consent is polled in background tabs |
+| Model weights were not compared with the pinned hash at load | Checked at every load |
+| Relative / attendant statements read as "Patient said" without a flag | Flagged |
+| Timeouts reported as "unreachable"; segment caps silently truncated long uploads | Distinct timeout message; cap raised to 5,000 lines |
+
+**Not fixed, recorded openly** ([ADR 0014](adr/0014-local-speech-service-and-capture-pipeline.md), [risk register](safety/RISK_REGISTER.md)): transcript text can still go to the hosted language-model service from drafting and recommendations when a key is set (disclosed on screen now; an explicit egress setting is the first item for V3); no content sniffing or decoded-duration cap before audio decode and no sign-in on the service; no rate limits beyond size limits; a lost part leaves no gap marker after a reload; a live transcript abandoned by a closed tab is not ended by signing; audio and text are not purged on withdrawal, discarded consultations keep audio, no encryption at rest (owner decisions); migration 0025 needs a clean-up pre-step on a database with several V1 `live` recordings of one consultation.
+
+### Remaining limitations
+
+- **Everything is measured on synthetic data**; nothing is known about real clinic audio, accents, noise, children or other languages. **English only is supported.** Hindi, Tamil and code-mixed speech were **not** evaluated.
+- **Important-point recall is 53 % on held-out text**: the rules miss what is not in their lists. Points are drafts for the doctor; a missing point is not an absence.
+- **The speech model identifies no speakers.** The doctor assigns them; until then every point's side is a guess and is flagged.
+- **Not word by word:** a part is transcribed after it is recorded (about 3 to 7 s after a 20-second part ends on this CPU).
+- **Hosted text egress** from drafting and recommendations (see the review above).
+- **Consent wording** changed (audio stays on this computer; the language-model sentence only if drafting is available) and **needs a legal and clinical-governance review**; no consent policy was invented.
+- **Retention, erasure and encryption** of captured audio and text are not decided or built.
+- **The consultation summary is not built** (V3). `listConfirmedPoints` has no consumer yet.
+- **Chromium only** was tested; Firefox, Safari and a real microphone were not.
+- **Environment notes for the owner:** the running development stack was started before the service hardening, so restart `npm run dev` to load it; `.env` still holds `AI_STT_API_KEY` (now ignored) and an Anthropic key; `av` is pinned to 16.0.1; the model download is about 486 MB in `.data/models`; the earlier pg-warning task chip (verify.ts) is still open; the secondary-apps branch uses ADR numbers 0013 to 0015 and its own migration numbers, which collide with `main` and must be renumbered by whoever merges second.
+
+### Browser verification
+
+Checked in Chromium (Playwright) at **1440×900, 1280×800, 1024×768 and 390×844** (and the 412 px Pixel 7 project) by `e2e/capture.spec.ts` "layout": no horizontal overflow (the shared `expectNoHorizontalOverflow` check), both capture cards inside the page width, at 1440 px the note to the right of capture, axe WCAG 2.2 AA clean in the recorded, empty-consent, microphone-denied and layout states; the screenshots it writes (top of the consultation, the capture cards, the points, one point card, at each width) were looked at. **At 1440 px the left column is 20 rem wide, so point cards are tall** (flags and the confirmation tick take lines); that is deliberate. **A real microphone and browsers other than Chromium were not tested.** A real Chromium recorded synthetic speech (a WAV played as the fake microphone) and the real API sent it to the real local model (`faster-whisper-small`, new service code): 12 timed English lines ("…I have fever and a dry cough, and my throat is sore also… no, no chest pain…"), important points proposed, screenshot reviewed (`e2e/capture-real.spec.ts`, opt-in, passes in about 50 s). The audio is synthetic text-to-speech: this shows the chain works, not accuracy.
 
 ## Slice 4A (plan item V1): know the patient — history, today's patients and the consultation workstation
 
@@ -1010,8 +1129,8 @@ The demo password was read from `.env` inside the script and never printed.
 The Doctor App is the hero product; work is organised as vertical slices through every layer ([DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md)):
 
 1. ~~**V1: know the patient.**~~ Done (slice 4A above): dashboard and *Today's patients*, the consultation workstation, a longitudinal history model with the *Past History* panel and a profile sheet, a synthetic hospital dataset.
-2. **V2: capture the consultation (recommended next, not started).** Local-first AI provider registry ([ADR 0012](adr/0012-local-first-ai-hosted-providers-opt-in.md)); timestamped, language-tagged transcript with doctor-assigned speakers; waveform; extended extraction; *Key Points (AI)*; evaluation harness.
-3. **V3: summarise, review, approve.** A sourced consultation summary, the review panel, signing and the patient's view.
+2. ~~**V2: capture the consultation.**~~ Done (slice V2 above): local speech-to-text, timed transcript, doctor-assigned speakers, important points, evaluation on synthetic data. **Not done and carried forward:** the language-model provider registry and "a key alone enables nothing" for the language-model steps (ADR 0012 items 1, 3, 6), hosted-text egress control, retention/erasure/encryption decisions, the consent-wording review.
+3. **V3: summarise, review, approve (recommended next, not started).** First the language-model provider registry and the explicit egress setting; then a sourced consultation summary built only from doctor-confirmed points (`listConfirmedPoints`), the review panel, signing and the patient's view.
 4. Then: Mana workstation, devices (reading states, labelled simulators, stethoscope boundary), thermal in the consultation, prescription and documents, the consultation audit trail, handwriting.
 
 ## External needs (not blocking the MVP build)

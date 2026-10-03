@@ -6,7 +6,7 @@ import { E2E_DB } from './e2e/db-names.ts'
 // can run while `npm run dev` is up and never touches development data.
 // Importing db-names stops the run here, before any server starts, if the
 // database names are ambiguous (e.g. the e2e name equals the development one).
-const PORTS = { api: 4100, thermal: 8101, web: 5273, mockAnthropic: 4199 }
+const PORTS = { api: 4100, thermal: 8101, web: 5273, mockAnthropic: 4199, mockSpeech: 8199 }
 const WEB = `http://127.0.0.1:${PORTS.web}`
 
 export default defineConfig({
@@ -30,7 +30,8 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         // Chromium's synthetic microphone, so browser recording can be tested.
         permissions: ['microphone'],
-        launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
+        // E2E_FAKE_AUDIO_FILE (opt-in, e2e/capture-real.spec.ts): the synthetic microphone plays this WAV (synthetic speech) instead of a beep.
+        launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', ...(process.env.E2E_FAKE_AUDIO_FILE ? [`--use-file-for-fake-audio-capture=${process.env.E2E_FAKE_AUDIO_FILE}`] : [])] },
       },
     },
     { name: 'mobile-chromium', use: { ...devices['Pixel 7'] } },
@@ -41,6 +42,14 @@ export default defineConfig({
       command: 'node e2e/mock-anthropic.mjs',
       url: `http://127.0.0.1:${PORTS.mockAnthropic}/health`,
       env: { MOCK_ANTHROPIC_PORT: String(PORTS.mockAnthropic) },
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
+      // TEST-ONLY stand-in for the local speech service (e2e/mock-speech.mjs): a fixed synthetic script, no model, loopback only.
+      command: 'node e2e/mock-speech.mjs',
+      url: `http://127.0.0.1:${PORTS.mockSpeech}/health`,
+      env: { MOCK_SPEECH_PORT: String(PORTS.mockSpeech) },
       reuseExistingServer: false,
       timeout: 30_000,
     },
@@ -56,7 +65,10 @@ export default defineConfig({
         // Points the real Anthropic SDK at the local mock; the key is a placeholder, not a credential.
         ANTHROPIC_API_KEY: 'e2e-placeholder-not-a-key',
         ANTHROPIC_BASE_URL: `http://127.0.0.1:${PORTS.mockAnthropic}`,
-        AI_STT_API_KEY: '',
+        // Speech-to-text: the local service boundary, pointed at the loopback stand-in. There is no hosted provider to configure.
+        SPEECH_PROVIDER: 'local',
+        // Opt-in real-model run (e2e/capture-real.spec.ts): E2E_SPEECH_URL points at a running local speech service instead of the stand-in.
+        SPEECH_URL: process.env.E2E_SPEECH_URL ?? `http://127.0.0.1:${PORTS.mockSpeech}`,
       },
       reuseExistingServer: false,
       timeout: 60_000,

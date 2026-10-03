@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import multipart from '@fastify/multipart'
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyError, type FastifyInstance } from 'fastify'
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
 import { type NotificationChannel } from './appointments/notifications.ts'
@@ -65,7 +65,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             level: 'info',
             redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
             // Request logs record the path only: query strings can hold patient names, phone numbers or MRNs (search).
-            serializers: { req: (r: { method: string; url: string; ip?: string }) => ({ method: r.method, url: r.url.split('?')[0], remoteAddress: r.ip }) },
+            serializers: {
+              req: (r: { method: string; url: string; ip?: string }) => ({ method: r.method, url: r.url.split('?')[0], remoteAddress: r.ip }),
+              // A database error's message carries the values that were being stored (a transcript, a note): log what failed and the code, never those.
+              err: (e: FastifyError) => {
+                const code = (e.cause as { code?: string } | undefined)?.code ?? e.code ?? 'unknown'
+                return /^Failed query|DrizzleQueryError/.test(`${e.name} ${e.message}`) ? { type: e.name, message: `database query failed (code ${code})`, stack: '' } : { type: e.name, message: e.message, stack: e.stack ?? '' }
+              },
+            },
             ...(deps.logger?.stream && { stream: deps.logger.stream }),
           },
     genReqId: () => crypto.randomUUID(),
@@ -96,6 +103,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const providers = deps.ai ?? providersFromConfig(deps.config, settings)
   const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety, mana: settings.mana } })
   const executors = new Map<string, JobExecutor>()
+  // A step that was running when the system stopped will never finish: fail it (retryable) so its doctor is not left waiting on it.
+  app.addHook('onReady', async () => {
+    try {
+      const n = await jobs.sweepInterrupted()
+      if (n) app.log.warn({ jobs: n }, 'AI steps left running by a stop were marked failed (retryable)')
+    } catch {
+      // Not worth stopping the server for: the sweep runs again at the next start.
+    }
+  })
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
   registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
   registerManaRoutes(app, { db, providers, settings, jobs, executors, dataOrigin: deps.config.dataOrigin })

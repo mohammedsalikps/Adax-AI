@@ -571,10 +571,16 @@ export const aiRuns = pgTable(
     outputTokens: integer('output_tokens'),
     latencyMs: integer('latency_ms'),
     providerRequestId: text('provider_request_id'),
+    /** local: ran on this machine (a rule set, the local speech model); external: the text left it. Null on runs recorded before V2. */
+    locality: text('locality'),
+    /** The runtime that ran it, e.g. "faster-whisper 1.2.1 / ctranslate2 4.8.2". */
+    runtime: text('runtime'),
+    /** SHA-256 of the model weights file, so a transcript can be tied to the exact model that made it. */
+    weightsSha256: text('weights_sha256'),
     createdBy: uuid('created_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('ai_runs_encounter_idx').on(t.encounterId), index('ai_runs_job_idx').on(t.jobId)],
+  (t) => [index('ai_runs_encounter_idx').on(t.encounterId), index('ai_runs_job_idx').on(t.jobId), check('ai_runs_locality_check', sql`${t.locality} is null or ${t.locality} in ('local', 'external')`)],
 )
 
 export const transcripts = pgTable(
@@ -590,10 +596,47 @@ export const transcripts = pgTable(
     /** final | live (recording in progress; segments still being added) */
     status: text('status').notNull().default('final'),
     endedAt: timestamp('ended_at', { withTimezone: true }),
+    /** doctor_stopped | consent_withdrawn | stale_replaced | error: why a live recording ended. */
+    endReason: text('end_reason'),
     createdBy: uuid('created_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('transcripts_encounter_idx').on(t.encounterId)],
+  (t) => [
+    index('transcripts_encounter_idx').on(t.encounterId),
+    // Two recordings cannot run at once on one consultation (two tabs, a retry): the second is refused.
+    uniqueIndex('transcripts_one_live_uq').on(t.encounterId).where(sql`status = 'live'`),
+    check('transcripts_end_reason_check', sql`${t.endReason} is null or ${t.endReason} in ('doctor_stopped', 'consent_withdrawn', 'stale_replaced', 'error')`),
+  ],
+)
+
+/**
+ * One recorded part of a live transcript. `offsetMs` is where it starts on the recording's own timeline (recorded audio only, pauses
+ * excluded) and `durationMs` is what the speech service decoded; segment times are offset + the part's own times. The unique index
+ * makes a re-sent part a refusal, not a duplicate.
+ */
+export const transcriptChunks = pgTable(
+  'transcript_chunks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    transcriptId: uuid('transcript_id')
+      .notNull()
+      .references(() => transcripts.id),
+    chunkIndex: integer('chunk_index').notNull(),
+    fileId: uuid('file_id').references(() => files.id),
+    offsetMs: integer('offset_ms').notNull(),
+    durationMs: integer('duration_ms'),
+    language: text('language'),
+    runId: uuid('run_id').references(() => aiRuns.id),
+    /** received | transcribed | failed */
+    status: text('status').notNull().default('received'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('transcript_chunks_part_uq').on(t.transcriptId, t.chunkIndex),
+    check('transcript_chunks_status_check', sql`${t.status} in ('received', 'transcribed', 'failed')`),
+    check('transcript_chunks_offset_check', sql`${t.offsetMs} >= 0 and (${t.durationMs} is null or ${t.durationMs} >= 0)`),
+  ],
 )
 
 export const aiDrafts = pgTable(
@@ -657,9 +700,39 @@ export const transcriptSegments = pgTable(
     startMs: integer('start_ms'),
     endMs: integer('end_ms'),
     confidence: numeric('confidence', { precision: 4, scale: 3, mode: 'number' }),
+    /** Language the speech model detected for this line (a code such as "en"); null for typed text. */
+    language: text('language'),
+    /** What the model reported for the decoded window: kept as reported, never edited. */
+    avgLogprob: numeric('avg_logprob', { precision: 8, scale: 4, mode: 'number' }),
+    noSpeechProb: numeric('no_speech_prob', { precision: 6, scale: 4, mode: 'number' }),
+    /** The speech run (model, runtime, weights) that produced it; null for typed text and for lines made before V2. */
+    runId: uuid('run_id').references((): AnyPgColumn => aiRuns.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('transcript_segments_label_uq').on(t.transcriptId, t.label), index('transcript_segments_order_idx').on(t.transcriptId, t.chunkIndex, t.seq)],
+)
+
+/**
+ * Who the doctor says spoke a line. Append-only: the segment (the words) never changes; the latest assignment is the reviewed speaker,
+ * and every earlier one stays. "Unknown" clears an assignment.
+ */
+export const transcriptSegmentSpeakers = pgTable(
+  'transcript_segment_speakers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    segmentId: uuid('segment_id')
+      .notNull()
+      .references(() => transcriptSegments.id),
+    speaker: text('speaker').notNull(),
+    assignedBy: uuid('assigned_by')
+      .notNull()
+      .references(() => users.id),
+    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('transcript_segment_speakers_segment_idx').on(t.segmentId, t.assignedAt),
+    check('transcript_segment_speakers_check', sql`${t.speaker} in ('Doctor', 'Patient', 'Nurse', 'Relative', 'Attendant', 'Other', 'Unknown')`),
+  ],
 )
 
 /** Prompt text versions, registered at start-up; an id can never change its text (checksum). */

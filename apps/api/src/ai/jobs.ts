@@ -24,6 +24,9 @@ export const toRun = (r: RunRow): AiRun => ({
   provider: r.provider,
   model: r.model,
   promptVersion: r.promptVersion,
+  locality: r.locality as AiRun['locality'],
+  runtime: r.runtime,
+  weightsSha256: r.weightsSha256,
   errorCode: r.errorCode,
   errorMessage: r.errorMessage,
   latencyMs: r.latencyMs,
@@ -42,7 +45,13 @@ export interface RunRecord {
   inputTokens?: number | null
   outputTokens?: number | null
   providerRequestId?: string | null
+  /** Where it ran. Defaults from `capability`: rules and speech run here; a language model or vision model is external. */
+  locality?: 'local' | 'external'
+  runtime?: string | null
+  weightsSha256?: string | null
 }
+
+const localityOf = (r: Pick<RunRecord, 'locality' | 'capability'>): 'local' | 'external' => r.locality ?? (r.capability === 'llm' || r.capability === 'vision' ? 'external' : 'local')
 
 export interface JobServiceDeps {
   db: Db
@@ -154,7 +163,7 @@ export class JobService {
       await db.transaction(async (tx) => {
         const [run] = await tx
           .insert(aiRuns)
-          .values({ jobId: job.id, patientId: job.patientId, encounterId: job.encounterId, kind: fr.kind, provider: fr.provider, model: fr.model, promptVersion: fr.promptVersion, status: 'failed', errorCode: pe.code, errorMessage: pe.message, inputSha256: fr.inputSha256, latencyMs: Date.now() - started, createdBy: req.user?.id ?? null })
+          .values({ jobId: job.id, patientId: job.patientId, encounterId: job.encounterId, kind: fr.kind, provider: fr.provider, model: fr.model, promptVersion: fr.promptVersion, status: 'failed', errorCode: pe.code, errorMessage: pe.message, inputSha256: fr.inputSha256, locality: localityOf(fr), runtime: fr.runtime ?? null, weightsSha256: fr.weightsSha256 ?? null, latencyMs: Date.now() - started, createdBy: req.user?.id ?? null })
           .returning({ id: aiRuns.id })
         await tx.update(aiJobs).set({ status: 'failed', lastErrorCode: pe.code, lastErrorMessage: pe.message, retryable: pe.retryable, updatedAt: new Date(), completedAt: new Date() }).where(eq(aiJobs.id, job.id))
         await audit(tx, req, { action: `ai.${job.kind}`, outcome: 'failure', entityType: 'ai_job', entityId: job.id, patientId: job.patientId, details: { runId: run!.id, code: pe.code, provider: fr.provider, model: fr.model } })
@@ -162,6 +171,40 @@ export class JobService {
       if (!(err instanceof AiProviderError) && !(err instanceof HttpError)) req.log.error({ err, jobId: job.id }, 'AI job failed unexpectedly')
       throw new HttpError(502, `ai_${pe.code}`, `${pe.message}${pe.retryable ? ' You can retry.' : ''}`)
     }
+    try {
+      return await this.persistRun(req, job, out, started)
+    } catch (err) {
+      // The result could not be stored (a database error, or a check made just before storing refused it): the job must not stay "running".
+      await this.fail(job, err).catch(() => undefined)
+      throw err
+    }
+  }
+
+  /**
+   * Marks a job failed when something went wrong outside the provider call (a precondition that was refused, or a storage error), so it
+   * never sits at "running" with no way forward. Only a code and a safe message are kept: never the text of a database error, which can
+   * hold what was being stored.
+   */
+  async fail(job: JobRow, err: unknown): Promise<void> {
+    const http = err instanceof HttpError
+    const code = http ? err.code : err instanceof AiProviderError ? err.code : 'internal_error'
+    const message = http ? err.message : err instanceof AiProviderError ? err.message : 'Processing failed unexpectedly.'
+    const retryable = http ? err.statusCode >= 500 : err instanceof AiProviderError ? err.retryable : true
+    await this.deps.db.update(aiJobs).set({ status: 'failed', lastErrorCode: code, lastErrorMessage: message.slice(0, 400), retryable, updatedAt: new Date(), completedAt: new Date() }).where(and(eq(aiJobs.id, job.id), eq(aiJobs.status, 'running')))
+  }
+
+  /** Jobs left "running" by a restart or a crash are failed (retryable) so their doctor can try again. Called at start-up. */
+  async sweepInterrupted(olderThanMinutes = 10): Promise<number> {
+    const rows = await this.deps.db
+      .update(aiJobs)
+      .set({ status: 'failed', lastErrorCode: 'interrupted', lastErrorMessage: 'This step was interrupted (the system restarted or stopped). You can retry.', retryable: true, updatedAt: new Date(), completedAt: new Date() })
+      .where(and(eq(aiJobs.status, 'running'), sql`${aiJobs.updatedAt} < now() - make_interval(mins => ${olderThanMinutes})`))
+      .returning({ id: aiJobs.id })
+    return rows.length
+  }
+
+  private async persistRun<T>(req: FastifyRequest, job: JobRow, out: { run: RunRecord; summary: Record<string, unknown>; persist: (tx: DbOrTx, runId: string) => Promise<T> }, started: number): Promise<T> {
+    const { db } = this.deps
     return db.transaction(async (tx) => {
       const r = out.run
       const [run] = await tx
@@ -181,6 +224,9 @@ export class JobService {
           outputTokens: r.outputTokens ?? null,
           latencyMs: Date.now() - started,
           providerRequestId: r.providerRequestId ?? null,
+          locality: localityOf(r),
+          runtime: r.runtime ?? null,
+          weightsSha256: r.weightsSha256 ?? null,
           createdBy: req.user?.id ?? null,
         })
         .returning({ id: aiRuns.id })
@@ -192,7 +238,7 @@ export class JobService {
       await tx.update(aiJobs).set({ status: 'succeeded', lastErrorCode: null, lastErrorMessage: null, retryable: false, summary: out.summary, updatedAt: new Date(), completedAt: new Date() }).where(eq(aiJobs.id, job.id))
       // Counts and flags only: text in a summary (e.g. a model's reason) is clinical content and stays out of the audit log.
       const counts = Object.fromEntries(Object.entries(out.summary).filter(([, v]) => typeof v !== 'string'))
-      await audit(tx, req, { action: `ai.${job.kind}`, entityType: 'ai_job', entityId: job.id, patientId: job.patientId, details: { runId: run!.id, provider: r.provider, model: r.model, promptVersion: r.promptVersion, ...counts } })
+      await audit(tx, req, { action: `ai.${job.kind}`, entityType: 'ai_job', entityId: job.id, patientId: job.patientId, details: { runId: run!.id, provider: r.provider, model: r.model, promptVersion: r.promptVersion, locality: localityOf(r), ...counts } })
       return result
     })
   }

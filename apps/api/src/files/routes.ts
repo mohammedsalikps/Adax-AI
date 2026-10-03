@@ -6,7 +6,7 @@ import { currentUser } from '../auth/plugin.ts'
 import type { Config } from '../config.ts'
 import type { Db } from '../db/client.ts'
 import { files } from '../db/schema.ts'
-import { HttpError, notFound } from '../http/errors.ts'
+import { deniedNotFound, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { readStoredBytes } from './storage.ts'
 
@@ -18,6 +18,8 @@ export function registerFileRoutes(app: FastifyInstance, { db, config }: { db: D
     // Dataset exports have their own route and permission (thermal:export).
     const f = await db.query.files.findFirst({ where: and(eq(files.id, id), eq(files.facilityId, me.facilityId), ne(files.kind, 'dataset_export')) })
     if (!f) throw notFound('File')
+    // A recording of a consultation is consultation data: only doctors (who can use the assistant) may play it, as for the transcript it came from.
+    if (f.kind === 'consultation_audio' && me.role !== 'doctor') throw deniedNotFound('File', { entityType: 'file', entityId: id, reason: 'consultation_audio_role' })
     if (f.deletedAt) throw new HttpError(410, 'file_deleted', 'This file was deleted under the retention policy. Its record and any transcript are kept.')
     const data = await readStoredBytes(config.storageDir, f.storageKey)
     await audit(db, req, { action: 'file.read', entityType: 'file', entityId: id, patientId: f.patientId, details: { kind: f.kind } })

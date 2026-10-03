@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router'
 import { PortalLayout } from './components/PortalLayout.tsx'
+import { CapturePanel } from './components/capture/CapturePanel.tsx'
 import { AiAssistantPanel } from './components/clinical/AiAssistantPanel.tsx'
 import { ConsultAction, ConsultationLink } from './components/clinical/ConsultAction.tsx'
 import { Timeline } from './components/clinical/Timeline.tsx'
@@ -108,6 +109,7 @@ const router = createBrowserRouter([
         path: 'encounters/:encounterId',
         element: (
           <ConsultationPage
+            capturePanel={(e, inserter) => <CapturePanel encounter={e} inserter={inserter} />}
             leftPanel={(e, inserter) => (
               <>
                 <AuscultationCard patientId={e.patient.id} encounterId={e.id} />

@@ -1,6 +1,6 @@
 # Datasets and their provenance
 
-**Status: started 3 Oct 2026.** One entry per dataset used in development, demonstration or testing. Nothing in this repository comes from a real patient, and **no external dataset is used**: before one is, its licence, permitted use, source, preprocessing and de-identification must be verified and written here.
+**Status: started 3 Oct 2026, updated 4 Oct 2026 (slice V2).** One entry per dataset used in development, demonstration or testing. Nothing in this repository comes from a real patient, and **no external dataset is used**: before one is, its licence, permitted use, source, preprocessing and de-identification must be verified and written here.
 
 ## Synthetic hospital dataset v1 (`npm run demo:hospital`)
 
@@ -12,9 +12,27 @@
 | Dates | Relative to the day it runs (histories always look recent). Earlier consultations are signed with a historical date by holding the clock the API reads for the one signing request; they verify as untouched. The audit log shows the day the seed ran |
 | Medical content | Ordinary, conservative examples (for example metformin 500 mg twice daily, HbA1c 7.2 %, an iron-deficiency picture with a low ferritin). **It is not clinical guidance, not a validated case set, and was not reviewed by a clinician.** A test checks that no medicine in a patient's history is one that patient is recorded as allergic to, **by name and by drug class** (for example a penicillin allergy also excludes amoxicillin) |
 | Use | Demonstration, interface testing and the automated tests of the history model. **Not a training set and not an evaluation set**: 12 hand-written patients are far too few and too uniform to say anything about a model's performance |
-| Splits, metrics, failure cases | Not applicable (no model is trained or evaluated on it). The AI evaluation set planned for slice V2 will be a separate dataset with its own entry here |
+| Splits, metrics, failure cases | Not applicable (no model is trained or evaluated on it). The AI evaluation set built in slice V2 is a separate dataset with its own entry below |
 | Gaps against the target list | Not yet in the dataset: device readings, thermal studies, stethoscope recordings, transcripts, AI outputs, a portal account for any patient, more than one facility |
 | Re-running | Idempotent and resumable: a patient is recognised by **full name and date of birth** (not by phone number) and is never made twice; each step of a patient's history (consent, allergy, condition, medicine, result, earlier consultation) is done only if it is not already there, so a run that stopped half way is completed by the next one; today's activity is added once per day. Dates and times are changed directly in the database only inside one transaction with the trigger-skipping setting scoped to it |
+
+## Synthetic consultation set v1 (`data/eval/consultations-v1`), with its synthetic speech (slice V2)
+
+| | |
+| --- | --- |
+| What | **15 scripted, fictional doctor-patient consultations** (General Medicine outpatient): 12 in English (c01 to c12, 24 to 26 turns each), 2 in Hindi (Devanagari, h01, h02) and 1 in Hinglish (Roman script, x01), with **hand-labelled "gold" important points** (406 rows; categories: chief complaint, symptoms, durations, patient concerns, history, allergies, medicines, investigations, examination, assessment, plan, follow-up, vital signs, red flags), including negated, hedged, irrelevant (small talk, questions, hypotheticals) and ambiguous statements |
+| Origin | Written by an AI assistant (Claude) on 3 Oct 2026 as fictional dialogue; the gold labels were assigned by the same author in one pass. **No real patient, clinic, person, recording or record is described, copied or derived; no external dataset is used.** Names are invented first names; there are no real phone numbers or identifiers |
+| Marking | Every file has `"synthetic": true` (checked by `validate.mjs` and by the loader) and says so in its README. The files are test data only and are never loaded into a patient record |
+| Medical content | Ordinary and illustrative; **not reviewed by a clinician, not clinical guidance, not a validated case set** |
+| Use | **Evaluation and regression tests of the important-point rules and of the speech pipeline only.** Not a training set (the rules are hand-written and nothing is trained), not a validation set for any clinical claim |
+| Splits | `dev` c01 to c08 (used while writing the rules: tuning against it is expected); `test` c09 to c12, h01, h02, x01 (held out; run **once** after the rules were frozen). A change tuned on `test` turns it into a development split and must be recorded here and in [AI_MODELS.md](AI_MODELS.md) |
+| Speech audio | The English files are read aloud by the three **offline Windows text-to-speech voices** on this computer (`synthesise-audio.ps1`: David en-US for the doctor, Zira en-US and Hazel en-GB for the patient). The audio (about 64 MB, 302 WAV files) is generated locally, **git-ignored** (`data/eval/audio/`) and never leaves the machine. It is clean, quiet, one voice at a time: **not representative of clinic audio**. No Hindi or Hinglish audio exists (no voice for those languages is installed, and installing one is a download that was not approved) |
+| Metrics | Per-category precision, recall and F1 of the important points (one-to-one matching on category, turn and key phrase), negation and hedge agreement, who-said-it agreement; word error rate with a documented normalisation, language identification, speed and segment-time error of the speech model. Results: [`data/eval/results/extraction-v1.md`](../../data/eval/results/extraction-v1.md), [`data/eval/results/stt-v1.md`](../../data/eval/results/stt-v1.md), summarised and caveated in [AI_MODELS.md](AI_MODELS.md) |
+| Known failure cases | Held-out recall is much lower than development recall (53 % against 89 %): the rule lists do not know phrasings they were not written for. Assessments, examination findings, past history and symptoms are missed most; durations are weak (precision 17 %, recall 20 % on the test split); all red-flag rows were missed (1 on dev, 3 on test). Hindi and Hinglish: nothing is extracted (intended) |
+| Limits | Small (a difference of a few points is noise); one author and one annotator, no inter-annotator agreement; scripted text is tidier than speech; one specialty and setting; synthetic voices only; no accents, noise, overlap, children or long recordings |
+| Gaps against the target list | Real recorded consultations (none exist here), Tamil, Hindi audio, code-mixed audio, a second annotator, a clinician review of the labels |
+
+**Model weights are an external artifact, not a dataset.** The speech model (`Systran/faster-whisper-small`, MIT) was downloaded with the owner's approval; its provenance, checksum and training-data statement are in [AI_MODELS.md](AI_MODELS.md). No data from this repository is used to train, fine-tune or adapt it.
 
 ## Test fixtures
 

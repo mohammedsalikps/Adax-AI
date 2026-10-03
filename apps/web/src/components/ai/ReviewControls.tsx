@@ -24,6 +24,7 @@ export function ReviewControls({
   status,
   confirm,
   editLabel = 'Edit before accepting',
+  labels,
   onDecided,
 }: {
   encounterId: string
@@ -33,12 +34,15 @@ export function ReviewControls({
   status: string
   confirm: string | null
   editLabel?: string
+  /** Words for the buttons (the important points say "Confirm" where other AI output says "Accept"). */
+  labels?: Partial<Record<'accept' | 'edit' | 'reject' | 'defer' | 'saveEdited', string>>
   onDecided?: (r: AiResponse) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(text)
   const [confirmed, setConfirmed] = useState(false)
   const review = useReview(encounterId, type, id)
+  const L = { accept: 'Accept', edit: 'Edit', reject: 'Reject', defer: 'Defer', saveEdited: 'Save edited text', ...labels }
   if (status !== 'pending' && status !== 'deferred') return null
   const blocked = !!confirm && !confirmed
   const act = (action: 'accepted' | 'edited' | 'rejected' | 'deferred') =>
@@ -62,7 +66,7 @@ export function ReviewControls({
         {editing ? (
           <>
             <Button size="sm" icon={<Check aria-hidden="true" className="size-4" />} loading={review.isPending} disabled={!draft.trim() || blocked} onClick={() => act('edited')}>
-              Save edited text
+              {L.saveEdited}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               Cancel
@@ -71,17 +75,17 @@ export function ReviewControls({
         ) : (
           <>
             <Button size="sm" icon={<Check aria-hidden="true" className="size-4" />} loading={review.isPending && review.variables?.action === 'accepted'} disabled={blocked} onClick={() => act('accepted')}>
-              Accept
+              {L.accept}
             </Button>
             <Button size="sm" variant="secondary" icon={<Pencil aria-hidden="true" className="size-4" />} onClick={() => setEditing(true)}>
-              Edit
+              {L.edit}
             </Button>
             <Button size="sm" variant="ghost" icon={<X aria-hidden="true" className="size-4" />} loading={review.isPending && review.variables?.action === 'rejected'} onClick={() => act('rejected')}>
-              Reject
+              {L.reject}
             </Button>
             {status === 'pending' && (
               <Button size="sm" variant="ghost" icon={<Clock aria-hidden="true" className="size-4" />} loading={review.isPending && review.variables?.action === 'deferred'} onClick={() => act('deferred')}>
-                Defer
+                {L.defer}
               </Button>
             )}
           </>

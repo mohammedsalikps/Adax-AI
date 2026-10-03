@@ -249,7 +249,7 @@ function ReviewAndSignDialog({ draft, encounter, insertions, onClose, onSign, si
   )
 }
 
-function ConsultationEditor({ initial, sidePanel, leftPanel }: { initial: Encounter; sidePanel?: SidePanel | undefined; leftPanel?: SidePanel | undefined }) {
+function ConsultationEditor({ initial, sidePanel, leftPanel, capturePanel }: { initial: Encounter; sidePanel?: SidePanel | undefined; leftPanel?: SidePanel | undefined; capturePanel?: SidePanel | undefined }) {
   const qc = useQueryClient()
   const toast = useToast()
   const base = usePortalBase()
@@ -470,9 +470,11 @@ function ConsultationEditor({ initial, sidePanel, leftPanel }: { initial: Encoun
           .
         </Alert>
       )}
-      {/* Three columns from 1400px: this visit and capture | past history and the note | Mana and the assistant. From 1280px two (the first column joins the third); below that one. */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem] xl:grid-rows-[auto_1fr] wide:grid-cols-[16.5rem_minmax(0,1fr)_24rem] wide:grid-rows-none">
-        <aside className="space-y-6 xl:col-start-2 xl:row-start-1 wide:col-start-1" aria-label="Visit information">
+      {/* Three columns from 1400px: capture (live transcription, important points) and this visit | past history and the note | patient summary, Mana and the assistant. From 1280px two, in the same left-to-right order (capture and this visit, with the summary and the assistant under them | the note); below that one. */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[26rem_minmax(0,1fr)] xl:grid-rows-[auto_1fr] wide:grid-cols-[20rem_minmax(0,1fr)_22rem] wide:grid-rows-none">
+        <aside className="space-y-6 xl:col-start-1 xl:row-start-1 wide:col-start-1" aria-label="Visit information">
+          {/* Capture first: the live transcription and the important points are the primary clinical content of a consultation. */}
+          {capturePanel?.(initial, inserter)}
           <Card title="This visit">
             {initial.visit.reasonForVisit && <p className="mb-3 text-sm">Reason: “{initial.visit.reasonForVisit}”</p>}
             <VitalsTiles vitals={initial.vitals} />
@@ -486,7 +488,7 @@ function ConsultationEditor({ initial, sidePanel, leftPanel }: { initial: Encoun
           <WritingPadCard />
         </aside>
         {/* The editors inside lay themselves out by the width of this column (container queries), which is narrow at 1400px and wide on a tablet. */}
-        <div className="@container min-w-0 space-y-6 xl:col-start-1 xl:row-span-2 xl:row-start-1 wide:col-start-2 wide:row-span-1">
+        <div className="@container min-w-0 space-y-6 xl:col-start-2 xl:row-span-2 xl:row-start-1 wide:col-start-2 wide:row-span-1">
           <Card
             title="Past history"
             bodyClassName="p-4"
@@ -523,7 +525,7 @@ function ConsultationEditor({ initial, sidePanel, leftPanel }: { initial: Encoun
           <DiagnosesEditor items={draft.diagnoses} onChange={(diagnoses) => update((d) => ({ ...d, diagnoses }))} />
           <PrescriptionEditor encounter={initial} items={draft.prescription} onChange={(prescription) => update((d) => ({ ...d, prescription }))} />
         </div>
-        <div className="min-w-0 space-y-6 xl:col-start-2 xl:row-start-2 wide:col-start-3 wide:row-start-1">
+        <div className="min-w-0 space-y-6 xl:col-start-1 xl:row-start-2 wide:col-start-3 wide:row-start-1">
           <Card title="Patient summary">
             <RecordSummary patientId={initial.patient.id} testId="patient-summary" />
           </Card>
@@ -744,7 +746,7 @@ export function EncounterReadView({ e }: { e: Encounter }) {
   )
 }
 
-export function ConsultationPage({ sidePanel, leftPanel }: { sidePanel?: SidePanel; leftPanel?: SidePanel }) {
+export function ConsultationPage({ sidePanel, leftPanel, capturePanel }: { sidePanel?: SidePanel; leftPanel?: SidePanel; capturePanel?: SidePanel }) {
   const { encounterId } = useParams()
   const q = useEncounter(encounterId)
   const navigate = useNavigate()
@@ -761,5 +763,5 @@ export function ConsultationPage({ sidePanel, leftPanel }: { sidePanel?: SidePan
     )
   // The editor starts from the server's current version, never from a cached copy (another tab or an earlier visit may have saved since).
   if (q.data.canEdit && !q.isFetchedAfterMount) return <Spinner label="Opening the latest version…" />
-  return q.data.canEdit ? <ConsultationEditor key={q.data.id} initial={q.data} sidePanel={sidePanel} leftPanel={leftPanel} /> : <EncounterReadView key={q.data.id} e={q.data} />
+  return q.data.canEdit ? <ConsultationEditor key={q.data.id} initial={q.data} sidePanel={sidePanel} leftPanel={leftPanel} capturePanel={capturePanel} /> : <EncounterReadView key={q.data.id} e={q.data} />
 }

@@ -6,6 +6,7 @@ import type { SessionUser } from '../auth/sessions.ts'
 import type { Db, DbOrTx } from '../db/client.ts'
 import { aiDraftItems, aiDrafts, aiEvidence, aiRecommendations, aiReviewActions, clinicalFacts, clinicalImages, encounters, imageAnalyses } from '../db/schema.ts'
 import { badRequest, conflict, HttpError, notFound } from '../http/errors.ts'
+import { CLINICIAN_SIDE, loadSegments, PATIENT_SIDE } from './transcripts.ts'
 
 export type SubjectType = 'fact' | 'recommendation' | 'draft_item' | 'image_analysis'
 
@@ -37,7 +38,18 @@ async function load(db: Db, type: SubjectType, id: string, facilityId: string): 
     const [f] = await db.select({ f: clinicalFacts, facility: encounters.facilityId }).from(clinicalFacts).innerJoin(encounters, eq(encounters.id, clinicalFacts.encounterId)).where(eq(clinicalFacts.id, id))
     if (!f || f.facility !== facilityId) throw notFound('Extracted fact')
     const flags = (f.f.flags as string[]).filter((x) => (CONFIRM_FLAGS as string[]).includes(x))
-    return { status: f.f.status, text: f.f.text, patientId: f.f.patientId, encounterId: f.f.encounterId, confirmReason: flags.length ? `This fact is flagged (${flags.join(', ').replace(/_/g, ' ')}). Confirm that you have checked it against the conversation and the record.` : null, section: FACT_SECTION[f.f.category as FactCategory] }
+    // Who said it can change after a point was found (the doctor assigns speakers line by line): a point that says "the patient said" about a
+    // line that is now marked as the doctor's (or the reverse) is stale, and is not confirmed without the doctor's explicit tick.
+    let staleSpeaker: string | null = null
+    const side = f.f.attribution
+    if (side === 'patient_reported' || side === 'clinician_stated') {
+      const refs = (await db.select({ ref: aiEvidence.sourceRef }).from(aiEvidence).where(and(eq(aiEvidence.subjectId, id), eq(aiEvidence.sourceType, 'transcript_segment'), eq(aiEvidence.relation, 'supports')))).map((r) => r.ref)
+      const lines = ((await loadSegments(db, [f.f.transcriptId])).get(f.f.transcriptId) ?? []).filter((x) => refs.includes(x.id) && x.speaker)
+      const contradicting = lines.find((x) => (side === 'patient_reported' ? CLINICIAN_SIDE.has(x.speaker!) : PATIENT_SIDE.has(x.speaker!)))
+      if (contradicting) staleSpeaker = `This point says the ${side === 'patient_reported' ? 'patient' : 'doctor'} said it, but its source line ${contradicting.id} is now marked as ${contradicting.speaker}. Confirm that you have checked who said it.`
+    }
+    const reason = [flags.length ? `This fact is flagged (${flags.join(', ').replace(/_/g, ' ')}). Confirm that you have checked it against the conversation and the record.` : null, staleSpeaker].filter(Boolean).join(' ')
+    return { status: f.f.status, text: f.f.text, patientId: f.f.patientId, encounterId: f.f.encounterId, confirmReason: reason || null, section: FACT_SECTION[f.f.category as FactCategory] }
   }
   if (type === 'recommendation') {
     const [r] = await db.select({ r: aiRecommendations, facility: encounters.facilityId }).from(aiRecommendations).innerJoin(encounters, eq(encounters.id, aiRecommendations.encounterId)).where(eq(aiRecommendations.id, id))

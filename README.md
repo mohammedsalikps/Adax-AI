@@ -27,7 +27,8 @@ decisions: [docs/adr/](docs/adr/) · what the Doctor App actually does today:
 | Doctor consultation | Structured note, diagnoses (ICD-10 format check only), prescription editor, autosave with conflict detection, review-and-sign with attestation, signed records frozen in the database with a SHA-256 content hash, append-only amendments, printable prescription (labelled not valid), patient timeline |
 | Mana AI (patient-record companion) | Doctor asks about one patient (suggested questions or free text): pre-consultation briefing, history summary, last prescription, vital signs compared with the previous reading, changes since the previous visit, allergies, diagnoses, record search. Answers come from the record by explicit versioned rules (`mana-record-v1`, no AI key needed): every statement cites the record item (type, consultation, date, field, status, provenance) with a link; absence, conflicts, outdated and amended records are flagged. Optional AI summary (`mana-qa-v1`) only with a provider key **and** the patient's `ai_record_assistant` consent, labelled AI-generated, citations verified on the server. Answers are immutable and audited; doctors mark them reviewed or insert them into the note |
 | AI text in notes | AI or rule output enters a note only through a server-recorded insertion of reviewed output, which keeps a reference to the AI artifact (provider, model, prompt or rules version); shown under the note section, in the sign dialog and on the signed record; listed in the signed snapshot |
-| AI consultation assistant | Consent, typed/pasted transcript, audio upload and recording, live chunked transcription (needs STT key), note drafting, fact extraction with speaker attribution and transcript evidence, deterministic comparison with the record, rule-based safety checks (no AI needed), history-aware recommendations citing record items, accept/edit/reject/defer for every AI output with confirmation gates, jobs with retry and idempotency, activity and audit trail. See [AI: what is and is not real](#ai-what-is-and-is-not-real) |
+| Live consultation capture (V2) | Consent check, browser microphone recording (start, pause, resume, stop), **local speech-to-text** in 20-second parts (a speech model that runs on this computer; no hosted speech service exists in the product), a timestamped transcript with language, doctor-assigned speakers, **important points** proposed by fixed rules and confirmed or rejected by the doctor (raw transcript, extracted draft and doctor-confirmed are kept visibly apart). Needs the one-time `npm run speech:model` download; without it the screen says "Local transcription unavailable" |
+| AI consultation assistant | Consent, note drafting, deterministic comparison with the record, evidence-backed fact review, (the transcript and important points are in the capture cards), deterministic comparison with the record, rule-based safety checks (no AI needed), history-aware recommendations citing record items, accept/edit/reject/defer for every AI output with confirmation gates, jobs with retry and idempotency, activity and audit trail. See [AI: what is and is not real](#ai-what-is-and-is-not-real) |
 | Clinical photographs | Consent-gated JPEG/PNG/WebP upload validated by the Python service (DICOM rejected), original kept unchanged, metadata-free preview, optional AI description marked unverified and reviewed before use |
 | FLIR thermal imaging | Consent-gated radiometric JPEG upload with capture protocol, per-pixel °C matrix via `flyr`, viewer, regions with statistics and paired differences, doctor approval (then frozen) |
 | Thermal data workflow | Clinician labels (versioned taxonomy, withdraw-only), data origin per image, experimental rule-based flags (not validated), de-identified dataset export (research consent only), evaluation pipeline that refuses to train without enough labelled data |
@@ -126,8 +127,12 @@ decisions: [docs/adr/](docs/adr/) · what the Doctor App actually does today:
   `embedded-postgres` npm package.
 - Verified on Windows 11 (x64) only. macOS/Linux binaries exist in the same package but these
   scripts are **not verified** there.
-- Optional: `ANTHROPIC_API_KEY` (drafting, extraction, recommendations, image description),
-  `AI_STT_API_KEY` (speech-to-text). Everything else works without them.
+- Optional: `ANTHROPIC_API_KEY` (drafting, recommendations, image description). Speech-to-text needs
+  **no key**: it is a local model (below). Everything else works without them.
+- Optional, one-time **download** for live transcription (about 70 MB of Python packages and a
+  486 MB model, from PyPI and Hugging Face; MIT-licensed): `npm run speech:setup` (done by
+  `npm run setup`) then `npm run speech:model`. `npm run dev` starts the local speech service on
+  `127.0.0.1:8002` and the API uses it when `SPEECH_PROVIDER=local` is in `.env`.
 
 ## Quick start
 
@@ -166,8 +171,9 @@ PostgreSQL keeps running after `npm run dev` exits; stop it with `npm run db:sto
 | Mana record answers (briefing, history, last prescription, vitals comparison, changes, allergies, diagnoses, search) | Works without credentials; deterministic, versioned (`mana-record-v1`) |
 | Mana AI summaries | **Need `ANTHROPIC_API_KEY`** and the patient's `ai_record_assistant` consent; otherwise the answer says why and shows the record answer only |
 | Note drafting, fact extraction, recommendations, image description | **Need `ANTHROPIC_API_KEY`.** Without it the UI says the feature is unavailable and never shows placeholder output |
-| Transcription of uploaded or recorded audio, live chunked transcription | **Need `AI_STT_API_KEY`** (OpenAI-compatible endpoint). Finished text per chunk; no interim text |
-| Speaker identification | Only from “Doctor:” / “Patient:” labels in the text; provider diarisation is not implemented |
+| Transcription of recorded or uploaded audio, live in 20-second parts | **Local speech service** (`faster-whisper` small, CPU) after `npm run speech:model`; no key, **no audio leaves this computer**; finished text per part, no interim text; English is the supported language |
+| Important points | **Fixed rules on this computer** (`extract-rules-v1`, English only); no key. A hosted language-model extractor exists only if `ai.extraction.provider: llm` is set on purpose |
+| Speaker identification | **Not done by any model.** The doctor assigns Doctor / Patient / … line by line (kept as a review); typed “Doctor:” / “Patient:” labels are the typed text's own |
 | Clinical accuracy of any AI output | **Not evaluated.** Tested only against test doubles and a local mock of the provider API |
 
 - **Drafts only.** Nothing reaches the note until the doctor accepts or edits an item and adds
@@ -344,7 +350,7 @@ validated strictly at start-up:
 | --- | --- | --- |
 | [`config/adaxai.yaml`](config/adaxai.yaml) | AI features, models, effort, timeouts, live chunk length, context limits, Mana record window and outdated threshold, upload types and limits, retention, safety-rule groups and tolerances | **API restart** |
 | [`config/routing.yaml`](config/routing.yaml) | Routing rules, red-flag phrases and instructions, required intake | **At runtime** (re-read on change; an invalid edit keeps the last valid rules) |
-| `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `AI_STT_*` | **Restart** |
+| `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `SPEECH_PROVIDER`, `SPEECH_URL` (the old `AI_STT_*` settings are ignored) | **Restart** |
 
 `DATA_ORIGIN` (default `synthetic`) is recorded on AI jobs, photographs, stethoscope recordings
 and thermal images; set `clinical` only in a real clinical deployment.
@@ -396,8 +402,10 @@ and thermal images; set `clinical` only in a real clinical deployment.
 **Compatibility**
 - Verified on Windows 11 x64 with Chromium (Playwright) only; other browsers and macOS/Linux are
   untested. Web Bluetooth and direct device connections are not used.
-- Speech-to-text needs an OpenAI-compatible endpoint; live transcription restarts the browser
-  recorder per chunk (short gaps between chunks are possible).
+- Speech-to-text is a local model on CPU: a part appears after it has been recorded and
+  transcribed (seconds to tens of seconds), not word by word. Live transcription restarts the
+  browser recorder per 20-second part (a very short gap between parts is possible). Measured on
+  synthetic speech only: see `docs/safety/AI_MODELS.md`.
 - Images: JPEG, PNG, WebP only (no DICOM). Thermal: FLIR radiometric JPEGs readable by `flyr`.
 
 ## Project layout

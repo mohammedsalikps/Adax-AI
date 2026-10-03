@@ -3,10 +3,10 @@ import type net from 'node:net'
 import { Encounter, EncounterAi, PatientDetail, type TranscriptSegment, Visit } from '@adaxai/contracts'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAnthropicDrafter, NOTE_PROMPT_VERSION } from '../src/ai/anthropic.ts'
-import { AiProviderError, type AiProviders, type NoteDrafter, type Transcriber } from '../src/ai/providers.ts'
-import { OpenAiCompatibleTranscriber } from '../src/ai/stt.ts'
+import { AiProviderError, type AiProviders, type NoteDrafter } from '../src/ai/providers.ts'
 import { pseudonymize, segmentTranscript } from '../src/ai/text.ts'
 import { adminQuery, call, createFixture, createTestApp, type Fixture, login, resetDatabase, samplePatient, type TestContext } from './helpers.ts'
+import { FakeTranscriber } from './speech-support.ts'
 
 // --- Fakes for the external services (tests only; the product never fakes AI output) ---
 class FakeDrafter implements NoteDrafter {
@@ -31,17 +31,14 @@ class FakeDrafter implements NoteDrafter {
     }
   }
 }
-class FakeTranscriber implements Transcriber {
-  readonly provider = 'fake-stt'
-  readonly model = 'fake-stt-model'
-  async transcribe() {
-    return { text: 'Doctor: What brings you in?\nPatient: Cough for a week.', requestId: null }
-  }
-}
-
+const speech = new FakeTranscriber()
+speech.script = () => [
+  { startMs: 0, endMs: 1800, text: 'What brings you in?', confidence: 0.9, avgLogprob: -0.1, noSpeechProb: 0.01 },
+  { startMs: 1800, endMs: 4200, text: 'Cough for a week.', confidence: 0.8, avgLogprob: -0.2, noSpeechProb: 0.02 },
+]
 const noKeys = createTestApp()
 const drafter = new FakeDrafter()
-const withAi = createTestApp({ ai: { drafter, transcriber: new FakeTranscriber(), reasons: { llm: null, stt: null } } satisfies AiProviders })
+const withAi = createTestApp({ ai: { drafter, transcriber: speech, reasons: { llm: null, stt: null } } satisfies AiProviders })
 let fx: Fixture
 
 beforeEach(async () => {
@@ -85,7 +82,8 @@ describe('without configured providers', () => {
     const status = (await call(noKeys.app, 'GET', '/api/ai/status', { cookie: doctor })).json()
     expect(status.llm).toMatchObject({ available: false, model: null })
     expect(status.llm.reason).toMatch(/ANTHROPIC_API_KEY/)
-    expect(status.stt.available).toBe(false)
+    expect(status.stt).toMatchObject({ available: false, state: 'not_configured', local: true })
+    expect(status.extraction).toMatchObject({ available: true, provider: 'adaxai-rules', local: true, languages: ['en'] })
 
     await call(noKeys.app, 'POST', `/api/encounters/${e.id}/ai-consent`, { cookie: doctor, body: { method: 'verbal' } })
     const ai = EncounterAi.parse((await call(noKeys.app, 'POST', `/api/encounters/${e.id}/transcripts`, { cookie: doctor, body: { text: TRANSCRIPT } })).json())
@@ -101,7 +99,7 @@ describe('without configured providers', () => {
     const res = await upload(noKeys, e.id, doctor, { name: 'visit.wav', type: 'audio/wav', data: WAV })
     expect(res.statusCode).toBe(201)
     const body = res.json()
-    expect(body.notice).toMatch(/AI_STT_API_KEY/)
+    expect(body.notice).toMatch(/Local transcription is not configured/)
     expect(body.audio).toHaveLength(1)
     expect(body.transcripts).toEqual([])
     const file = await call(noKeys.app, 'GET', `/api/files/${body.audio[0].fileId}`, { cookie: doctor })
@@ -210,9 +208,10 @@ describe('drafting and review', () => {
     expect(bad.statusCode).toBe(400)
     const res = await upload(withAi, e.id, doctor, { name: 'rec.webm', type: 'audio/webm', data: Buffer.from('fake-webm-bytes') }, { source: 'browser_recording' })
     const ai = EncounterAi.parse(res.json())
-    expect(ai.transcripts[0]).toMatchObject({ source: 'browser_recording', segments: [{ id: 'S1', speaker: 'Doctor' }, { id: 'S2', speaker: 'Patient' }] })
+    // The speech service identifies no speakers: nobody is labelled until the doctor assigns them.
+    expect(ai.transcripts[0]).toMatchObject({ source: 'browser_recording', language: 'en', segments: [{ id: 'S1', speaker: null, text: 'What brings you in?', startMs: 0, endMs: 1800, speakerSource: 'none' }, { id: 'S2', speaker: null, startMs: 1800 }] })
     expect(ai.audio[0]!.transcriptId).toBe(ai.transcripts[0]!.id)
-    expect(ai.runs[0]).toMatchObject({ kind: 'stt', status: 'succeeded', provider: 'fake-stt' })
+    expect(ai.runs[0]).toMatchObject({ kind: 'stt', status: 'succeeded', provider: 'fake-speech', locality: 'local', runtime: 'fake-runtime 1' })
   })
 })
 
@@ -292,29 +291,6 @@ describe('Anthropic adapter (contract test against a local mock of the Messages 
       await expect(d.draft([{ id: 'S1', speaker: null, text: 'x' }])).rejects.toMatchObject({ code: 'refusal' })
       mode = 'auth'
       await expect(d.draft([{ id: 'S1', speaker: null, text: 'x' }])).rejects.toMatchObject({ code: 'auth_failed', retryable: false })
-    } finally {
-      await srv.close()
-    }
-  })
-})
-
-describe('Speech-to-text adapter (contract test against a local OpenAI-compatible mock)', () => {
-  it('posts multipart audio with the model and bearer token, and reads { text }', async () => {
-    let seen = { url: '', auth: '', body: '' }
-    const srv = await mockServer((req, body, res) => {
-      seen = { url: req.url ?? '', auth: String(req.headers.authorization), body: body.toString('latin1') }
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ text: 'Patient: Headache since morning.' }))
-    })
-    try {
-      const t = new OpenAiCompatibleTranscriber({ apiKey: 'stt-test-key', baseUrl: `${srv.url}/v1`, model: 'some-stt-model', providerName: 'mock' })
-      const out = await t.transcribe(Buffer.from('audio-bytes'), 'audio/webm', 'audio.webm')
-      expect(out.text).toBe('Patient: Headache since morning.')
-      expect(seen.url).toBe('/v1/audio/transcriptions')
-      expect(seen.auth).toBe('Bearer stt-test-key')
-      expect(seen.body).toContain('name="model"')
-      expect(seen.body).toContain('some-stt-model')
-      expect(seen.body).toContain('audio-bytes')
     } finally {
       await srv.close()
     }

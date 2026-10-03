@@ -39,13 +39,15 @@ describe('test isolation from real AI providers', () => {
   it('the test configuration never carries provider keys, whatever .env contains', async () => {
     const { testConfig, createTestApp } = await import('./helpers.ts')
     expect(testConfig.ai.anthropicApiKey).toBeUndefined()
-    expect(testConfig.ai.stt.apiKey).toBeUndefined()
+    expect(testConfig.ai.speech).toEqual({ provider: 'none', url: undefined, allowNonLoopback: false })
     const ctx = createTestApp()
     try {
       const { providersFromConfig } = await import('../src/ai/providers.ts')
       const { loadAppSettings } = await import('../src/settings/load.ts')
       const p = providersFromConfig(testConfig, loadAppSettings())
-      expect([p.drafter, p.extractor, p.recommender, p.describer, p.qa, p.transcriber]).toEqual([null, null, null, null, null, null])
+      expect([p.drafter, p.recommender, p.describer, p.qa, p.transcriber]).toEqual([null, null, null, null, null])
+      // The important-points extractor is a rule set that runs in this process: always there, never a provider call.
+      expect(p.extractor).toMatchObject({ provider: 'adaxai-rules', local: true })
     } finally {
       await ctx.close()
     }

@@ -19,6 +19,9 @@ async function shutdown(signal: string) {
 process.on('SIGINT', () => void shutdown('SIGINT'))
 process.on('SIGTERM', () => void shutdown('SIGTERM'))
 
+// Speech-to-text is local only. A key set for the old hosted option is not used, and the server says so (no value is printed).
+if (config.ai.hostedSttKeyIgnored) app.log.warn('AI_STT_API_KEY is set but is no longer used: speech-to-text runs only on this machine (SPEECH_PROVIDER=local). Remove the key from your environment.')
+
 try {
   await app.listen({ host: config.api.host, port: config.api.port })
 } catch (e) {

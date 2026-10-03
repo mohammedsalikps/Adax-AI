@@ -83,7 +83,7 @@ export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; pr
       .orderBy(desc(evaluationRuns.createdAt))
       .limit(10)
     return {
-      status: aiStatus(providers),
+      status: await aiStatus(providers),
       settingsSha256: jobs.settingsSha256,
       jobs: jobCounts,
       failures,

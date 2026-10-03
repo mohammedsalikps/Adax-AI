@@ -6,15 +6,59 @@ export const AiSection = z.enum(AI_SECTIONS)
 export type AiSection = z.infer<typeof AiSection>
 
 export const ProviderStatus = z.object({ available: z.boolean(), provider: z.string().nullable(), model: z.string().nullable(), reason: z.string().nullable() })
+/**
+ * The local speech service. `available` is true only when it answered a health check as ready just now; `state` says why not
+ * otherwise. It is always local: there is no hosted speech-to-text, and nothing falls back to one.
+ */
+export const SpeechStatus = ProviderStatus.extend({
+  state: z.enum(['ready', 'loading', 'unavailable', 'not_configured']),
+  local: z.literal(true),
+  runtime: z.string().nullable(),
+  weightsSha256: z.string().nullable(),
+})
+export type SpeechStatus = z.infer<typeof SpeechStatus>
+/** The "important points" extractor: fixed, versioned rules that run in this process. */
+export const ExtractionStatus = z.object({ available: z.boolean(), provider: z.string(), version: z.string(), local: z.boolean(), languages: z.array(z.string()), reason: z.string().nullable() })
+export type ExtractionStatus = z.infer<typeof ExtractionStatus>
 export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean() })
 /** `qa`: Mana AI summaries of the patient record. */
-export const AiStatus = z.object({ llm: ProviderStatus, stt: ProviderStatus, vision: ProviderStatus, qa: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number() })
+export const AiStatus = z.object({ llm: ProviderStatus, stt: SpeechStatus, extraction: ExtractionStatus, vision: ProviderStatus, qa: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number() })
 export type AiStatus = z.infer<typeof AiStatus>
 
 export const TranscriptSource = z.enum(['typed', 'pasted', 'audio_upload', 'browser_recording'])
-/** `id` is the citation label (S1, S2, ...). */
-export const TranscriptSegment = z.object({ id: z.string(), speaker: z.string().nullable(), text: z.string(), chunkIndex: z.number().nullable().optional() })
+/** Who the doctor may assign a line to. "Unknown" clears an assignment (the line is then shown as not assigned). */
+export const SPEAKER_LABELS = ['Doctor', 'Patient', 'Nurse', 'Relative', 'Attendant', 'Other'] as const
+export const SpeakerLabel = z.enum([...SPEAKER_LABELS, 'Unknown'])
+export type SpeakerLabel = z.infer<typeof SpeakerLabel>
+/** typed_label: a "Doctor:" prefix someone typed. provider: a diariser said so (none is installed). doctor_assigned: the doctor set it, reviewed metadata. */
+export const SpeakerSource = z.enum(['typed_label', 'provider', 'doctor_assigned', 'none'])
+export type SpeakerSource = z.infer<typeof SpeakerSource>
+
+/**
+ * `id` is the citation label (S1, S2, ...). A line spoken into the microphone has a start and end on the recording's own timeline
+ * (milliseconds of recorded audio, pauses excluded), a detected language and the model's own score; a typed line has none of those.
+ * `confidence` is the mean token probability the model gave its words: a model score, not a calibrated chance that the text is right.
+ */
+export const TranscriptSegment = z.object({
+  id: z.string(),
+  speaker: z.string().nullable(),
+  text: z.string(),
+  chunkIndex: z.number().nullable().optional(),
+  startMs: z.number().nullable().optional(),
+  endMs: z.number().nullable().optional(),
+  language: z.string().nullable().optional(),
+  confidence: z.number().nullable().optional(),
+  speakerSource: SpeakerSource.optional(),
+  speakerAssignedAt: z.string().nullable().optional(),
+  runId: z.string().nullable().optional(),
+})
 export type TranscriptSegment = z.infer<typeof TranscriptSegment>
+
+/** One recorded part of a live transcript (sent as its own audio file). */
+export const TranscriptChunk = z.object({ index: z.number(), offsetMs: z.number(), durationMs: z.number().nullable(), language: z.string().nullable(), status: z.enum(['received', 'transcribed', 'failed']) })
+export type TranscriptChunk = z.infer<typeof TranscriptChunk>
+export const TRANSCRIPT_END_REASONS = { doctor_stopped: 'Stopped by the doctor', consent_withdrawn: 'Stopped: consent was withdrawn', stale_replaced: 'Ended: a newer recording was started', error: 'Ended after an error' } as const
+export const TranscriptEndReason = z.enum(Object.keys(TRANSCRIPT_END_REASONS) as [keyof typeof TRANSCRIPT_END_REASONS, ...(keyof typeof TRANSCRIPT_END_REASONS)[]])
 
 export const Transcript = z.object({
   id: z.uuid(),
@@ -23,13 +67,39 @@ export const Transcript = z.object({
   status: z.enum(['final', 'live']),
   audioFileId: z.uuid().nullable(),
   segments: z.array(TranscriptSegment),
+  /** The language most lines were detected in (null when none was: typed text, or nothing heard yet). */
+  language: z.string().nullable(),
+  chunks: z.array(TranscriptChunk),
+  endedAt: z.string().nullable(),
+  endReason: TranscriptEndReason.nullable(),
   createdAt: z.string(),
   createdByName: z.string().nullable(),
 })
 export type Transcript = z.infer<typeof Transcript>
 
+/** Fields of one recorded part (multipart, before the file). `offsetMs` is where the part starts on the recording's timeline. */
+export const ChunkFields = z.object({
+  chunkIndex: z.coerce.number().int().min(0).max(1_000),
+  offsetMs: z.coerce.number().int().min(0).max(12 * 3600 * 1000),
+})
+export type ChunkFields = z.infer<typeof ChunkFields>
+
+/** The doctor assigns who spoke a line. Persisted as reviewed metadata; the words are never changed. */
+export const SpeakerAssignmentRequest = z.object({
+  assignments: z.array(z.object({ segmentId: z.string().regex(/^S\d{1,5}$/, 'Use a segment label such as S3'), speaker: SpeakerLabel })).min(1, 'Choose at least one line').max(200, 'At most 200 lines at once'),
+})
+export type SpeakerAssignmentRequest = z.infer<typeof SpeakerAssignmentRequest>
+
+export const EndTranscriptRequest = z.object({ reason: z.enum(['doctor_stopped', 'consent_withdrawn']).default('doctor_stopped') })
+export type EndTranscriptRequest = z.input<typeof EndTranscriptRequest>
+
 export const CreateTranscriptRequest = z.object({
-  text: z.string().trim().min(1, 'Enter the transcript').max(50_000, 'At most 50,000 characters'),
+  text: z
+    .string()
+    .trim()
+    .min(1, 'Enter the transcript')
+    .max(50_000, 'At most 50,000 characters')
+    .refine((t) => !t.includes('\u0000'), 'The text contains characters that cannot be stored'),
   source: z.enum(['typed', 'pasted']).default('pasted'),
 })
 export type CreateTranscriptRequest = z.input<typeof CreateTranscriptRequest>
@@ -56,6 +126,10 @@ export const AiRun = z.object({
   provider: z.string(),
   model: z.string(),
   promptVersion: z.string().nullable(),
+  /** local: ran on this machine; external: the text left it. Null for runs recorded before this was kept. */
+  locality: z.enum(['local', 'external']).nullable(),
+  runtime: z.string().nullable(),
+  weightsSha256: z.string().nullable(),
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
   latencyMs: z.number().nullable(),
@@ -120,6 +194,8 @@ export type AiJobKind = z.infer<typeof AiJobKind>
 export const FACT_CATEGORIES = {
   chief_complaint: 'Chief complaint',
   symptom: 'Symptom',
+  duration: 'Duration',
+  patient_concern: 'Patient concern',
   past_medical_history: 'Past medical history',
   medication_history: 'Medication history',
   allergy: 'Allergy',
@@ -130,6 +206,7 @@ export const FACT_CATEGORIES = {
   clinician_assessment: 'Clinician’s assessment',
   plan: 'Plan',
   medication_mention: 'Medicine mentioned in plan',
+  investigation_mention: 'Investigation mentioned',
   follow_up: 'Follow-up',
   red_flag: 'Red-flag statement',
 } as const
@@ -140,6 +217,8 @@ export const FactCategory = z.enum(Object.keys(FACT_CATEGORIES) as [FactCategory
 export const FACT_SECTION: Record<FactCategory, AiSection | null> = {
   chief_complaint: 'chiefComplaint',
   symptom: 'history',
+  duration: 'history',
+  patient_concern: 'history',
   past_medical_history: 'pastHistory',
   medication_history: 'pastHistory',
   allergy: 'pastHistory',
@@ -150,6 +229,7 @@ export const FACT_SECTION: Record<FactCategory, AiSection | null> = {
   clinician_assessment: 'assessment',
   plan: 'plan',
   medication_mention: 'plan',
+  investigation_mention: 'plan',
   follow_up: 'followUp',
   red_flag: null,
 }
@@ -181,6 +261,19 @@ export const CONFIRM_FLAGS: FactFlag[] = ['uncertain', 'no_source', 'conflicts_w
 export const ReviewStatus = z.enum(['pending', 'accepted', 'edited', 'rejected', 'deferred', 'superseded'])
 export type ReviewStatus = z.infer<typeof ReviewStatus>
 
+/**
+ * The three things a consultation screen must never blur: the RAW transcript (what the system heard), an EXTRACTED draft (what the system
+ * thinks may matter) and what the doctor CONFIRMED. A point is a draft until the doctor accepts or edits it; rejecting it keeps the record that it was seen.
+ */
+export const FACT_STATE_LABELS = { extracted: 'Extracted draft', confirmed: 'Doctor confirmed', rejected: 'Doctor rejected', superseded: 'Replaced by a newer run' } as const
+export type FactState = keyof typeof FACT_STATE_LABELS
+export function factState(status: ReviewStatus): FactState {
+  if (status === 'accepted' || status === 'edited') return 'confirmed'
+  if (status === 'rejected') return 'rejected'
+  if (status === 'superseded') return 'superseded'
+  return 'extracted'
+}
+
 export const Evidence = z.object({
   id: z.uuid(),
   relation: z.enum(['supports', 'conflicts']),
@@ -209,8 +302,28 @@ export const ClinicalFact = z.object({
   finalText: z.string().nullable(),
   decidedAt: z.string().nullable(),
   evidence: z.array(Evidence),
+  createdAt: z.string(),
+  /** The transcript lines (S1, S2, ...) this point rests on. */
+  sourceSegmentIds: z.array(z.string()),
+  /** What produced it: for an extraction by rules, `provider` is "adaxai-rules" and `version` the rule set. */
+  producedBy: z.object({ provider: z.string(), model: z.string(), version: z.string().nullable(), local: z.boolean().nullable() }),
+  /** True when a speaker label of one of its source lines was changed after it was extracted: its attribution may be out of date. */
+  speakerChanged: z.boolean(),
 })
 export type ClinicalFact = z.infer<typeof ClinicalFact>
+
+/** What the capture panel needs to decide whether recording may start, and to notice when it must stop. Polled; contains no patient content. */
+export const CaptureStatus = z.object({
+  consent: z.object({ granted: z.boolean(), scope: z.enum(['ongoing', 'encounter']).nullable(), recordedAt: z.string().nullable(), current: z.boolean() }),
+  speech: SpeechStatus,
+  live: z.object({ transcriptId: z.uuid().nullable(), startedAt: z.string().nullable(), lastChunkAt: z.string().nullable() }),
+  /** False when recording must not start (no consent, no local speech service, consultation closed), with the reason in words. */
+  canRecord: z.boolean(),
+  blockedReason: z.string().nullable(),
+  /** Set when this consultation can no longer take a recording at all (signed, discarded, not the author's, or the visit is no longer with the doctor): a recording in progress must stop. */
+  closedReason: z.string().nullable(),
+})
+export type CaptureStatus = z.infer<typeof CaptureStatus>
 
 export const RECOMMENDATION_KINDS = {
   red_flag: 'Red flag',

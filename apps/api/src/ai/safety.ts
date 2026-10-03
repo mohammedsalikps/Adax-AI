@@ -35,7 +35,8 @@ const NEGATION = /\b(no|not|never|without|denies|deny|denied|don'?t|doesn'?t|did
 export function findPhrase(text: string, phrase: string): boolean {
   const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(phrase).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'giu')
   for (const m of text.matchAll(re)) {
-    if (!NEGATION.test(text.slice(0, m.index))) return true
+    // The negation must be within the last few words before the phrase, so only the text just before it is looked at (linear in the length of the line).
+    if (!NEGATION.test(text.slice(Math.max(0, m.index - 120), m.index))) return true
   }
   return false
 }

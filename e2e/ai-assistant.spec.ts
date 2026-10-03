@@ -1,38 +1,34 @@
 import { expect, test } from '@playwright/test'
 import { expectNoAxeViolations, nurseHandsOverPatient, signIn } from './support.ts'
 
-// In this suite the API talks to a TEST-ONLY mock of the Anthropic Messages API
-// (e2e/mock-anthropic.mjs) through the real SDK; speech-to-text is unconfigured.
+// In this suite the API talks to a TEST-ONLY mock of the Anthropic Messages API (e2e/mock-anthropic.mjs) through the real SDK, and
+// to the TEST-ONLY stand-in for the local speech service (e2e/mock-speech.mjs). Recording itself is covered by capture.spec.ts.
 
-test('doctor records consent, saves a transcript, reviews AI suggestions and signs only reviewed text', async ({ page, baseURL, isMobile }) => {
+test('doctor records consent, saves a transcript, reviews AI suggestions and signs only reviewed text', async ({ page, baseURL }) => {
   const p = await nurseHandsOverPatient(baseURL!)
   await signIn(page, 'dr.meera')
   await page.getByRole('listitem').filter({ hasText: p.name }).getByRole('button', { name: 'Start consultation' }).click()
   await expect(page).toHaveURL(/\/doctor\/encounters\//)
 
+  const live = page.getByRole('region', { name: 'Live transcription' })
   const panel = page.getByRole('region', { name: 'AI consultation assistant' })
   await expect(panel).toContainText('AI drafting: available')
-  await expect(panel).toContainText('Speech-to-text: unavailable')
+  await expect(live.getByTestId('speech-status')).toContainText('Speech-to-text runs on this computer')
 
   // Nothing can be recorded or drafted before consent.
-  await expect(panel.getByRole('button', { name: 'Start recording' })).toHaveCount(0)
-  await panel.getByRole('button', { name: 'Patient agrees (verbal)' }).click()
-  await expect(panel).toContainText('Consent recorded for this consultation')
+  await expect(live.getByRole('button', { name: 'Start recording' })).toHaveCount(0)
+  await live.getByRole('button', { name: 'Patient agrees (verbal)' }).click()
+  await expect(live.getByTestId('recording-consent')).toContainText('Recording consent recorded for this consultation')
 
-  if (!isMobile) {
-    // Browser recording with Chromium's fake microphone: audio is stored; transcription is honestly unavailable.
-    await panel.getByRole('button', { name: 'Start recording' }).click()
-    await expect(panel.getByText(/Recording 0:0[1-9]/)).toBeVisible({ timeout: 10_000 })
-    await panel.getByRole('button', { name: 'Stop and save' }).click()
-    await expect(page.getByRole('alert').filter({ hasText: 'Speech-to-text is not configured' })).toBeVisible()
-    await expect(panel.getByRole('list', { name: 'Saved recordings' })).toContainText('not transcribed')
-  }
-
-  await panel.getByLabel('Or type / paste the transcript').fill(
+  await live.getByText('Other ways to add a transcript').click()
+  await live.getByLabel('Or type or paste a transcript').fill(
     ['Doctor: What brings you in today?', 'Patient: My throat hurts and I have had fever for two days.', 'Doctor: Your throat is red. Take warm saline gargles and plenty of fluids.'].join('\n'),
   )
-  await panel.getByRole('button', { name: 'Save transcript' }).click()
-  await expect(panel.getByRole('list', { name: 'Transcript segments' })).toContainText('S2 Patient: My throat hurts')
+  await live.getByRole('button', { name: 'Save typed transcript' }).click()
+  const lines = live.getByTestId('transcript-line')
+  await expect(lines).toHaveCount(3)
+  await expect(lines.nth(1)).toContainText('My throat hurts')
+  await expect(lines.nth(1)).toContainText('Patient')
 
   await panel.getByRole('button', { name: 'Generate draft' }).click()
   const suggestions = panel.getByRole('region', { name: 'Suggestions to review' })

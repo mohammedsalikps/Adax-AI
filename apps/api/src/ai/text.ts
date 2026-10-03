@@ -16,6 +16,24 @@ const SPEAKERS: Record<string, string> = {
 const SPEAKER_RE = /^(doctor|dr\.?|patient|pt\.?|nurse|attendant|relative|mother|father)\s*[:\-–]\s*(.+)$/iu
 const MAX_SEGMENTS = 2000
 
+const MAX_LINE_CHARS = 1000
+
+/** A line of speech is a sentence or two: an unbroken pasted block is cut at a sentence end or a space, never in the middle of a word. */
+function splitLong(line: string): string[] {
+  if (line.length <= MAX_LINE_CHARS) return [line]
+  const out: string[] = []
+  let rest = line
+  while (rest.length > MAX_LINE_CHARS) {
+    const window = rest.slice(0, MAX_LINE_CHARS)
+    const at = Math.max(window.lastIndexOf('. '), window.lastIndexOf('? '), window.lastIndexOf('! '))
+    const cut = at > MAX_LINE_CHARS / 2 ? at + 1 : window.lastIndexOf(' ') > 0 ? window.lastIndexOf(' ') : MAX_LINE_CHARS
+    out.push(rest.slice(0, cut).trim())
+    rest = rest.slice(cut).trim()
+  }
+  if (rest) out.push(rest)
+  return out.filter(Boolean)
+}
+
 /**
  * Splits a transcript into numbered segments (S1, S2, ...) so AI output can cite
  * its sources. One segment per line; a single unbroken block is split into
@@ -28,10 +46,15 @@ export function segmentTranscript(text: string): TranscriptSegment[] {
     .map((l) => l.trim())
     .filter(Boolean)
   const units = lines.length === 1 ? (lines[0]!.match(/[^.!?।]+[.!?।]+["”’)]*\s*|[^.!?।]+$/gu) ?? [lines[0]!]).map((s) => s.trim()).filter(Boolean) : lines
-  return units.slice(0, MAX_SEGMENTS).map((u, i) => {
-    const m = u.match(SPEAKER_RE)
-    return { id: `S${i + 1}`, speaker: m ? (SPEAKERS[m[1]!.toLowerCase()] ?? null) : null, text: m ? m[2]!.trim() : u }
-  })
+  return units
+    .flatMap((u) => {
+      // A label belongs to every piece of a long line.
+      const m = u.match(SPEAKER_RE)
+      const speaker = m ? (SPEAKERS[m[1]!.toLowerCase()] ?? null) : null
+      return splitLong(m ? m[2]!.trim() : u).map((text) => ({ speaker, text }))
+    })
+    .slice(0, MAX_SEGMENTS)
+    .map((u, i) => ({ id: `S${i + 1}`, speaker: u.speaker, text: u.text }))
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

@@ -1,6 +1,6 @@
 # ADR 0012: Local-first AI; hosted providers only by explicit choice
 
-- **Status:** accepted. **Implementation:** slice V2 of [DOCTOR_APP_PLAN.md](../DOCTOR_APP_PLAN.md); nothing in this ADR is implemented yet.
+- **Status:** accepted. **Implementation:** partly built in slice V2 ([ADR 0014](0014-local-speech-service-and-capture-pipeline.md)): **speech-to-text** is now a local service behind a provider boundary whose default is `none` (items 2 and 4 for speech, and item 5 for **every** run, which now records local or external, runtime and weights digest; the hosted speech adapter was removed rather than kept behind a setting), and **important-point extraction** defaults to local rules. **Not built yet, planned for V3:** the provider registry for language-model chat (items 1 and 3: `ai.provider` and "a key alone enables nothing" for the Anthropic-backed drafting, recommendations and image description, which still switch on when `ANTHROPIC_API_KEY` is set), the shared output schemas (item 6) and a local language model.
 - **Date:** 3 Oct 2026
 
 ## Context

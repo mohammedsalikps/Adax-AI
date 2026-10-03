@@ -41,3 +41,4 @@ samples/
 # Backups contain the database and uploaded files (sensitive)
 backups/
 storage.before-restore-*/
+data/eval/audio/

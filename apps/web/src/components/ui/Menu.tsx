@@ -21,9 +21,11 @@ export interface MenuItem {
  * is rendered at the end of the page for the same reason (or, when the button
  * is inside a modal dialog such as the profile sheet, inside that dialog:
  * everything outside a modal dialog is inert and drawn beneath it). For
- * commands that have no room of their own, not for navigation.
+ * commands that have no room of their own, not for navigation. By default
+ * the button is an ellipsis; `trigger` and `triggerClassName` make it a
+ * labelled control (the speaker of a transcript line, for example).
  */
-export function Menu({ label, items, align = 'end' }: { label: string; items: MenuItem[]; align?: 'start' | 'end' }) {
+export function Menu({ label, items, align = 'end', trigger, triggerClassName }: { label: string; items: MenuItem[]; align?: 'start' | 'end'; trigger?: ReactNode; triggerClassName?: string }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
   const [host, setHost] = useState<HTMLElement | null>(null)
@@ -125,9 +127,9 @@ export function Menu({ label, items, align = 'end' }: { label: string; items: Me
           else openMenu()
         }}
         onKeyDown={onButtonKey}
-        className="inline-flex size-control-sm items-center justify-center rounded-md border border-transparent text-ink-muted hover:bg-canvas hover:text-ink"
+        className={triggerClassName ?? 'inline-flex size-control-sm items-center justify-center rounded-md border border-transparent text-ink-muted hover:bg-canvas hover:text-ink'}
       >
-        <Ellipsis aria-hidden="true" className="size-5" />
+        {trigger ?? <Ellipsis aria-hidden="true" className="size-5" />}
       </button>
       {open &&
         host &&

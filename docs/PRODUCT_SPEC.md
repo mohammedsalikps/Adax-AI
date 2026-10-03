@@ -48,13 +48,26 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 | History | **patient_conditions**, **patient_medications**, **investigation_results** (typed in by staff, never deleted or edited, mistakes marked *entered in error* with a reason; database-enforced) and **patient_history_events** (append-only). Read as one model by `GET /api/patients/:id/history`; see [ADR 0013](adr/0013-patient-history-typed-by-staff-never-deleted.md) |
 | Flow | visits (daily tokens), **visit_status_events**, **appointments**, **appointment_status_events**, **notifications**, **notification_attempts**, observations (vitals; `source`, `validation_status`, device) |
 | Record | encounters (signed snapshot + versioned content hash, or discarded with who/when/why), **encounter_status_events**, diagnoses, prescription_items, encounter_amendments (numbered, hash-linked), **note_insertions** |
-| AI | ai_jobs, ai_runs, ai_prompt_versions, ai_settings_snapshots, ai_models, transcripts, transcript_segments, clinical_facts, ai_recommendations, ai_evidence, ai_review_actions, **mana_questions**, *(planned)* transcript_corrections |
+| AI | ai_jobs, ai_runs, ai_prompt_versions, ai_settings_snapshots, ai_models, transcripts, **transcript_chunks**, transcript_segments, **transcript_segment_speakers**, clinical_facts, ai_recommendations, ai_evidence, ai_review_actions, **mana_questions**, *(planned)* transcript_corrections (text corrections; speaker review is built) |
 | Imaging and devices | clinical_images, image_analyses, thermal_* tables, devices, device_assignments, auscultation_recordings, *(planned)* device_batches, alert_rules, alerts, alert_events |
 | ML | evaluation_runs, dataset_memberships, *(planned)* model cards and evaluation datasets for text and speech |
 
 ### Patient history (slice V1)
 
 A doctor consulting sees the patient's past history from the record, never from the screen's own data: the active allergies with severity and reaction, known conditions with their start, the medicine list (current first, stopped ones with the date and reason), the latest investigation results with the API's flag against their range, earlier **signed** consultations (never drafts, never discarded drafts) with what was prescribed in them, and the latest value of each vital sign with its time and source. Doctors and nurses read it; **only doctors write** (`history:write`); administrators are refused; another facility's patient is "not found" and the attempt is audited. Entries say who entered them and whether they are synthetic. A mistake is **marked as entered in error** with a reason (final, kept, hidden from the history); nothing is deleted and content never changes (a database trigger enforces it). The medicine list is not the prescriptions: earlier prescriptions are shown separately and labelled. There is no laboratory or pharmacy feed; everything is typed in.
+
+### Live consultation capture (slice V2)
+
+A consultation can be captured as it happens, and what is captured stays in three visibly separate states (raw transcript → extracted draft → doctor confirmed). Behaviour, as built:
+
+- **Consent first.** Recording is offered only when the patient's recording consent is on record (for this consultation, or ongoing). The consent is re-checked on every part that arrives, every audio upload and every retry. If it is withdrawn the recording is ended with the reason `consent_withdrawn`, the browser stops the microphone and discards the part in progress, and the server refuses everything further. Missing consent: nothing starts, the screen says what is needed.
+- **Local speech-to-text only.** Audio goes from the browser to the API and from the API to a speech model that runs on this computer ([ADR 0014](adr/0014-local-speech-service-and-capture-pipeline.md)). There is no hosted speech provider in the product. With no local service the screen says **Local transcription unavailable** and nothing is sent anywhere instead.
+- **Recording.** The doctor starts, pauses, resumes and stops; the browser's own microphone permission applies; the recorder reports a refused or missing microphone, an unsupported browser, a part that could not be sent, and the length recorded. Audio is stored with the consultation under the existing file, access and audit rules.
+- **Transcript.** Each segment has its id, start and end on the recording's timeline, text as heard (never translated), language (with how it was decided), a model score where the model gave one (labelled as a model score, not a probability of being right), and the model, runtime and run that produced it. Segments are append-only. A part that could not be transcribed is shown as that, with Retry, and is never filled with guessed text.
+- **Speakers.** The speech model identifies no speakers. The doctor assigns Doctor, Patient, Nurse, Relative, Attendant or Other line by line; each assignment is recorded as a review (who, when) and the latest is shown. Nothing is called "diarised".
+- **Important points.** Fixed rules on this computer propose points in these categories: chief complaint, symptoms, duration, relevant history (past, medication, family, social), medication mentions, allergy mentions, investigation mentions, patient concerns, doctor observations, assessment, plan and follow-up, with negation and hedging kept, in the speaker's own words, each tied to its source lines, with the rules version and time. English only; other-language lines are skipped and counted on screen.
+- **Confirmation.** Each point is *Extracted draft*, *Doctor confirmed* or *Doctor rejected*; only the doctor moves it. A point whose speaker was guessed (no one assigned the line), or that conflicts with the record, needs an explicit tick. Confirmed points are available to later steps (`listConfirmedPoints`); confirming does not write to the note: **Add to note** is a separate recorded insertion.
+- **Not built here:** the consultation summary, speaker identification, live word-by-word text, translation, non-English extraction, retention schedules, any clinical validation.
 
 ## 4. State machines
 
@@ -232,8 +245,9 @@ Acceptance criteria for the planned slices are written in [AUDIT.md](AUDIT.md) �
 ## 7. Languages
 
 - **Now:** the UI is English only.
-- **Transcripts:** stored as given. Segments can be cited whatever the language.
-- **Planned:** language metadata on transcripts and segments (English, Tamil, Hindi, code-mixed), and a WER harness on synthetic code-mixed reference text.
+- **Transcripts:** stored as given, never translated. Every segment carries the language the speech model detected (or the operator's hint) and how that was decided; the original text is always kept.
+- **Speech-to-text:** the installed model (`faster-whisper-small`) is multilingual in principle, but **the product supports English only**: English is the only language whose transcription and extraction were measured, on synthetic speech ([safety/AI_MODELS.md](safety/AI_MODELS.md)). Other languages are transcribed if spoken, labelled with the detected language, and the extractor skips them and says so. No accuracy is claimed for any language, English included, on real consultations.
+- **Planned:** Tamil, Hindi and code-mixed evaluation on audio, which needs a voice or recordings that do not exist in this repository; code-mixed extraction.
 - **Claims:** no accuracy claim is made for any language.
 
 ## 8. Architecture decisions

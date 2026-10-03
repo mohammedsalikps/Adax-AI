@@ -36,17 +36,26 @@ ai:
     model: claude-opus-5-5
     effort: medium
 
-  # Speech-to-text through an OpenAI-compatible /audio/transcriptions endpoint.
-  # Env AI_STT_BASE_URL / AI_STT_MODEL / AI_STT_PROVIDER_NAME override these.
-  # Key: AI_STT_API_KEY.
+  # Speech-to-text runs on this machine only: the local speech service in
+  # services/speech (faster-whisper). There is no hosted option and no fallback.
+  # `none` until it is configured on purpose: env SPEECH_PROVIDER=local (and
+  # SPEECH_URL, default below) override these. Audio goes to a loopback address
+  # only; see docs/adr/0014-local-speech-service-and-capture-pipeline.md.
   stt:
-    provider: openai-compatible
-    baseUrl: https://api.openai.com/v1
-    model: gpt-4o-transcribe
+    provider: none
+    url: http://127.0.0.1:8002
     # Live recording is sent in chunks of this length and each chunk is
-    # transcribed as it arrives (the configured provider has no streaming
-    # interim results).
+    # transcribed as it arrives (no interim, guessed words are ever shown).
     liveChunkSeconds: 20
+    # A language code (for example en) makes the model skip language detection.
+    # null: it detects the language of each part and the transcript says which.
+    languageHint: null
+
+  # How the "important points" of a consultation are found: `rules` is a fixed,
+  # versioned rule set that runs in this process (no data leaves it); `llm`
+  # uses the hosted language model above and sends pseudonymised text to it.
+  extraction:
+    provider: rules
 
   # How much of the patient's record the recommendation step may see.
   context:

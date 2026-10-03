@@ -23,9 +23,12 @@ export const AppSettings = z
           })
           .strict(),
         vision: z.object({ provider: z.literal('anthropic'), model: z.string().min(1), effort: z.enum(['low', 'medium', 'high']) }).strict(),
+        // Speech-to-text is local only: "none" until the speech service is configured on purpose (SPEECH_PROVIDER=local). There is no hosted provider.
         stt: z
-          .object({ provider: z.string().min(1), baseUrl: z.url(), model: z.string().min(1), liveChunkSeconds: z.number().int().min(5).max(120) })
+          .object({ provider: z.enum(['none', 'local']), url: z.url(), liveChunkSeconds: z.number().int().min(5).max(120), languageHint: z.string().regex(/^[a-z]{2,3}$/).nullable() })
           .strict(),
+        // The "important points" extractor: fixed rules in this process (default), or the hosted language model when someone chooses it.
+        extraction: z.object({ provider: z.enum(['rules', 'llm']) }).strict(),
         context: z.object({ priorEncounters: z.number().int().min(0).max(20), observationDays: z.number().int().min(1).max(365) }).strict(),
       })
       .strict(),

@@ -1,0 +1,16 @@
+[project]
+name = "adaxai-speech"
+version = "0.1.0"
+description = "ADAXAI local speech-to-text service (faster-whisper on this machine; no hosted provider)."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

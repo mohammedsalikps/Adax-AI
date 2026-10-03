@@ -176,6 +176,13 @@
       "when": 1791037393292,
       "tag": "0024_history_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791047188462,
+      "tag": "0025_capture_v2",
+      "breakpoints": true
     }
   ]
 }

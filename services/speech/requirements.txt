@@ -1,0 +1,14 @@
+# Runtime dependencies (pinned). The first group matches the thermal service. The speech
+# runtime is faster-whisper (MIT) on CTranslate2 (MIT); PyAV decodes the browser's WebM/Opus
+# in memory; onnxruntime runs faster-whisper's bundled voice-activity detector. Installed
+# 3 Oct 2026 (av is 16.0.1, not the newest 19.0.1: faster-whisper 1.2.1 passes `metadata_errors` to av.open, which 19 rejects); the second group is what pip resolved for them, pinned so a rebuild matches.
+fastapi==0.142.2
+uvicorn==0.54.0
+python-multipart==0.0.32
+numpy==2.5.3
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+av==16.0.1
+onnxruntime==1.30.0
+tokenizers==0.23.2
+huggingface_hub==1.33.0

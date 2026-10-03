@@ -57,9 +57,12 @@ Use two browser windows (or one normal and one private) to switch roles quickly.
 
 **With or without AI keys.** Without keys (the default), the AI steps show a clear “unavailable”
 state, and everything else works, including the rule-based safety checks and routing. With
-`ANTHROPIC_API_KEY` in `.env` (and optionally `AI_STT_API_KEY`), restart `npm run dev` to also
-show drafting, fact extraction, AI recommendations and photo description. Only do that with
-synthetic data and after checking your provider agreement.
+`ANTHROPIC_API_KEY` in `.env`, restart `npm run dev` to also show drafting, AI recommendations
+and photo description. Only do that with synthetic data and after checking your provider
+agreement. **Live transcription needs no key**: after the one-time `npm run speech:model`
+download, `npm run dev` starts a local speech service and the consultation's *Live transcription*
+card records with the microphone, on this computer only. Without the download it says "Local
+transcription unavailable" and typed transcripts still work.
 
 ## 0. The doctor's day and the patient's history (dr.meera)
 
@@ -131,13 +134,17 @@ Use the seeded **Ravi Demo-Synthetic-XXXX** for this part; he has history to com
 1. Queue → **Start consultation**. The workspace has three panels on wide screens: visit and
    timeline, the note, and Mana with the assistant. The left panel shows today's vitals and the timeline with the
    earlier signed consultation; the banner shows the penicillin allergy.
-2. AI assistant: consent is already recorded (current wording). Paste
-   [`demo/consultation-transcript.txt`](../demo/consultation-transcript.txt) → **Save transcript**
-   (segments S1…S13).
-3. **Generate draft** and **Extract facts**: without a key both say *unavailable* (no
-   placeholder text). With a key: facts tagged *Patient said / Clinician said*, linked to
-   transcript lines, with flags. “No, no allergies” is flagged **Conflicts with the existing
-   record** (penicillin) and cannot be accepted without ticking the confirmation.
+2. *Live transcription* (left column): consent is already recorded (current wording). Either
+   **Start recording** and speak (the transcript appears in 20-second steps with times; assign
+   **Doctor** / **Patient** to each line from its speaker chip), or open **Other ways to add a
+   transcript** and paste [`demo/consultation-transcript.txt`](../demo/consultation-transcript.txt)
+   → **Save typed transcript** (lines S1…S13, with their typed speakers).
+3. **Find important points** (it also runs when a recording stops): fixed rules on this
+   computer propose *Extracted drafts*, each tied to its source lines, in no state of the
+   record until you **Confirm** or **Reject** them. “No, no allergies” is flagged **Conflicts
+   with the existing record** (penicillin) and cannot be confirmed without ticking the
+   confirmation. **Add to note** is a separate step. In the assistant card, **Generate draft**
+   says *unavailable* without a key (no placeholder text).
 4. Prescription → **Add medicine** → *Amoxicillin*. Then **Get recommendations**:
    - rule-based (always): *Check Amoxicillin: recorded allergy to Penicillin* (configured,
      illustrative penicillin group), the *chest pain* red flag with its instruction (the negated

@@ -19,8 +19,9 @@ test('admin screens fit the screen and pass axe', async ({ page }) => {
 
 test('anonymous visitors are sent to sign-in; the page is accessible', async ({ page }) => {
   await page.goto('/admin/users')
-  await expect(page).toHaveURL(/\/login\?next=%2Fadmin%2Fusers$/)
-  await expect(page.getByRole('heading', { level: 1, name: 'Sign in to ADAXAI' })).toBeVisible()
+  // Each application's pages send a signed-out visitor to that application's own sign-in.
+  await expect(page).toHaveURL(/\/login\/admin\?next=%2Fadmin%2Fusers$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Admin Portal' })).toBeVisible()
   await expectNoAxeViolations(page)
 })
 
@@ -69,8 +70,12 @@ test('admin creates a doctor, who must replace the temporary password before usi
 test('a doctor cannot reach admin screens, and the API refuses admin data', async ({ page }) => {
   await signIn(page, 'dr.meera')
   await expect(page).toHaveURL(/\/doctor$/)
+  // The page says plainly that this account has no access (it does not silently move them), and the API refuses the data regardless.
   await page.goto('/admin/users')
-  await expect(page).toHaveURL(/\/doctor$/)
+  await expect(page).toHaveURL(/\/admin\/users$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'This account cannot access the Admin App' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Go to my workspace' })).toHaveAttribute('href', '/doctor')
+  await expect(page.getByRole('table')).toHaveCount(0)
   const res = await page.request.get('/api/admin/users')
   expect(res.status()).toBe(403)
 })

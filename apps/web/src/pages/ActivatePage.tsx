@@ -7,7 +7,7 @@ import { Button } from '../components/ui/Button.tsx'
 import { Alert } from '../components/ui/Feedback.tsx'
 import { CheckboxField, TextField } from '../components/ui/Form.tsx'
 import { api, errorMessage } from '../lib/api.ts'
-import { ME_KEY } from '../lib/auth.tsx'
+import { replaceSession } from '../lib/session.ts'
 import { useDocumentTitle } from '../lib/useDocumentTitle.ts'
 import { useForm } from '../lib/useForm.ts'
 
@@ -20,14 +20,13 @@ export function ActivatePage() {
   const activate = useMutation({
     mutationFn: (body: ActivatePatientAccountRequest) => api<Me>('/auth/activate', { method: 'POST', body }),
     onSuccess: (me) => {
-      qc.clear()
-      qc.setQueryData(ME_KEY, me)
+      replaceSession(qc, me)
       navigate('/patient', { replace: true })
     },
     onError: (e) => form.applyServerErrors(e),
   })
   return (
-    <PublicLayout title="Activate your account" subtitle="Use the MRN and activation code the clinic gave you.">
+    <PublicLayout title="Activate your account" subtitle="Use the MRN and activation code the clinic gave you." application="patient">
       <form
         noValidate
         className="space-y-4"
@@ -53,7 +52,7 @@ export function ActivatePage() {
       </form>
       <p className="mt-4 border-t border-line pt-4 text-center text-sm text-ink-muted">
         Already activated?{' '}
-        <Link to="/login" className="font-medium text-brand-strong underline underline-offset-2">
+        <Link to="/login/patient" className="font-medium text-brand-strong underline underline-offset-2">
           Sign in
         </Link>
       </p>

@@ -22,15 +22,22 @@ npm run demo:seed -- --fresh
 recorded (including *Mana AI record summaries*), a penicillin allergy, one signed earlier consultation (type 2 diabetes, metformin) and
 today's visit with vitals, ready for the doctor. Use `--fresh` for every clean run.
 
-Staff accounts. Sign in with the username, not an email address. Password: the exact value of
-`SEED_DEMO_PASSWORD` in your `.env` (see the README's Troubleshooting if sign-in fails):
+Open `http://localhost:5173`: the first page offers the **Doctor App**, **Patient App** and **Admin App**.
+Choose one to reach its own sign-in page. Staff accounts: sign in with the username, not an email
+address. Password: the exact value of `SEED_DEMO_PASSWORD` in your `.env` (see the README's
+Troubleshooting if sign-in fails):
 
-| Account | Role |
-| --- | --- |
-| `nurse.anil` | Nurse (General Medicine) |
-| `dr.meera` | Doctor (General Medicine) |
-| `dr.rahul` | Doctor (Paediatrics) |
-| `admin` | Administrator |
+| Account | Role | Sign in at |
+| --- | --- | --- |
+| `nurse.anil` | Nurse (General Medicine) | Doctor App |
+| `dr.meera` | Doctor (General Medicine) | Doctor App |
+| `dr.rahul` | Doctor (Paediatrics) | Doctor App |
+| `admin` | Administrator | Admin App |
+| a patient's MRN | Patient (after activation, §5) | Patient App |
+
+A correct password at the wrong door is refused (“This account cannot use the Admin App”) and no
+session is made; opening another application's address while signed in shows a plain “no access”
+page. Nothing in the front door grants access: the API decides.
 
 Use two browser windows (or one normal and one private) to switch roles quickly.
 
@@ -139,7 +146,8 @@ Accepted assistant items use **Add to …** the same way.
 3. **Records**: the signed consultation with its prescription; **Visits**, **Vital signs**,
    **Consents**, **My details**. Drafts, transcripts, AI output and photographs are not shown.
 4. Isolation: opening another patient's record address shows *Record not found*; staff pages
-   send the patient back to their home page; the API answers 403/404 (all audited).
+   show a plain "This account cannot access the Doctor App" page with a way back to their own
+   workspace; the API answers 403/404 (all audited).
 5. On a phone or with the browser's device mode, the portal is responsive and installable
    (browser menu → *Install app*). Only the app shell is cached, never records.
 6. **Consents** in the portal: the patient can **Withdraw…** a consent. The dialog says what

@@ -9,7 +9,139 @@ ADAXAI is an MVP. It is not production-ready, not a medical device, and not clin
 | 1. Mana AI patient-context Q&A; AI text in notes with provenance | `5cbefc1` |
 | 2. Consent and access control | `be5ca8b` |
 | 3. Record lifecycle and integrity | `26db008` |
-| 4. Appointments, check-in, schedules, notifications, and the design foundation | this commit (see below) |
+| 4. Appointments, check-in, schedules, notifications, and the design foundation | `4be6256` |
+| 4a. Authentication and application entry (a dedicated slice before the consultation workstation) | {{HASH4A}} |
+
+## Slice 4a: authentication and application entry
+
+**Why now:** the shared sign-in page failed with **"Request failed (502)"**, and there was one generic page for doctors, patients and administrators. This slice makes the front door clear and stable before the consultation workspace is redesigned. It adds no clinical, AI, device, booking, reminder or reporting function. Decisions are in [ADR 0011](adr/0011-application-entry-three-front-doors-one-authentication.md); the screens are in [DESIGN.md](DESIGN.md) §4a.
+
+### The 502: root cause
+
+**Where it came from:** the development proxy, not the API's authentication. The browser talks to the Vite server (port 5173), which forwards `/api` to the API (port 4000). **Nothing was listening on 4000.** Vite then answered with an empty 502, and the client, which found no error message in the body, printed "Request failed (502)". The Vite log held `ECONNREFUSED 127.0.0.1:4000` for these requests.
+
+**Evidence:** the dev stack I had started earlier in a time-limited background task was ended at that limit, which left an orphaned Vite process (started 8:11 am) and no API. The API's last "Server listening" line was at 9:24:28; a restart at 10:22:34 produced no listener; the first logged refusal was at 3:00 pm. With the current code the API starts and listens normally (checked), and the sign-in paths were exercised afterwards (below). The account, session creation, lockout and rate limits were not involved: the request never reached the API.
+
+**Not proven:** why the API process first ended. The logs show that it did and when it could not be restarted, not what ended it. The orphaned Vite was my own earlier launch; I did not find a defect in the API's startup.
+
+**Fixed in the product, not only by restarting:**
+- The API client treats a gateway answer with no usable body (502, 503, 504) as "service unavailable".
+- The Vite proxy answers a refused connection with `503` and a JSON message that names the problem. It logs one line with the error code and target; Vite's own log line (which includes the URL and so any query string) is suppressed, in dev and in `vite preview` (smoke-tested in both on a spare port with the API absent: 503 JSON, a marker placed in the query string appeared nowhere in the server output).
+- The sign-in pages say "Sign-in is temporarily unavailable" with **Try again**; the front door asks the public `GET /api/ready` and says so before anyone types.
+- Operationally: the dev stack was restarted detached (API 4000, web 5173, thermal; log `.data/dev-stack.log`, git-ignored). The README's Troubleshooting covers an orphaned Vite holding the port.
+
+### Implemented
+
+**Front door** (`/login`): "ADAXAI / Connected Healthcare Intelligence Platform" with three application cards, each with who it is for, what it really offers (only features the product has), and its button: **Continue as Doctor / Patient / Admin**. The cards are guidance, not permissions.
+
+**Three sign-in pages over one authentication:**
+
+| Page | Heading | Field | Signs in |
+| --- | --- | --- | --- |
+| `/login/doctor` | Doctor Portal: "Secure access to your clinical workspace." | Doctor username | doctors and nurses (each lands in `/doctor` or `/nurse`) |
+| `/login/patient` | Patient Portal: "Secure access to your health information." | MRN (the existing patient sign-in; first visit: `/activate`) | patients |
+| `/login/admin` | Admin Portal: "Secure facility administration." | Admin username | administrators |
+
+No page links to another application's sign-in. There is no "Forgot password" link, because the product has no self-service reset; each page says who can reset it.
+
+**API:** `LoginRequest.application` (optional). A correct password at the wrong door is **403 `wrong_application` with no session and no cookie**; it is audited once, with the account and the application asked for. Unknown, inactive, wrongly-passworded and withdrawn-consent accounts still get the one uniform 401 whichever door is named. Everything else in sign-in is unchanged.
+
+**Web:** role-aware landing (the role the API reports decides; the chosen application never overrides it); a "you are signed in as …" notice instead of a silent move; a plain "no access" page instead of a silent redirect (this changed an existing behaviour: a patient opening a staff address used to be sent home; `patient-portal.spec.ts` and DEMO.md were updated); `next` honoured only for the signed-in role's own pages; a session that ends in the middle of use shows "Your session ended"; sign-out clears everything cached, including a finished mutation's variables (a password among them); a failed sign-out says the person is still signed in; every tab or window re-checks who is signed in when looked at again, and a different person's sign-in rebuilds the page.
+
+**Errors** (`describeSignInError`): invalid credentials, locked, rate limited, wrong application, forbidden, service unavailable (with Try again), network failure, server error, unexpected. No status code, no trace, nothing that tells accounts apart.
+
+**Components:** `ApplicationCard`, `ApplicationBadge`, `AuthShell` (with `AuthHeader`, `BackToApplications`), `LoginForm`, `PasswordField`, `ErrorBanner`, `ServiceStatus`, `SignedInNotice`, `NoAccessPage`.
+
+**Migrations:** none. No database change.
+
+### Tests
+
+New or extended:
+
+| Layer | What |
+| --- | --- |
+| API (`auth-entry`, 6 tests, plus `auth`) | Each role at each door; the wrong door refuses with no session or cookie and one attributed audit row; failures at the wrong door still lock; a locked account stays locked at any door; a withdrawn portal is invalid credentials at any door; an unknown application is a validation error; omitting the field works as before |
+| Web unit (`entry`, `session`, `focus`: 18 tests) | Every failure has plain words and a retry only for service problems; one answer for wrong password, unknown user and switched-off account; `next` accepted and refused cases (encoded dots and slashes, `/print` for non-clinical roles); the role-to-application map equals the API's; a gateway answering for a missing API is never "Request failed (502)"; who is signed in: a different person drops the last one's cache, a failed or unreadable answer changes nothing, **a check overtaken by a sign-in, sign-out or password change is dropped** (each race test fails if its guard is removed, checked by hand); a replaced session clears every mutation; the extra focus events re-check the session only |
+| End-to-end (`entry.spec.ts`, 25 tests on each of desktop and phone; 2 skipped by design on the phone project) | The selector and each door; the four screen sizes (one test per size) with axe, overflow, touch targets and card layout; each role signs in and lands in the right place; wrong password, unknown user, switched-off and locked accounts; service down or failing (502, 503 with the proxy's words, lost connection, 429, 500) with retry; the front door's own status; the busy state and a single request; wrong-door refusals with no cookie and no session; signed in at another door; cross-role direct URLs with the API's 403s; doctor and nurse at each other's pages; `next` safety; session reload, sign-out, expiry in the middle of use and after a reload; another tab signing out or a different person signing in (different role, and the same role: the page is rebuilt, typed text gone); a re-check that cannot be answered keeps the person's page; edits waiting to be saved are not sent as a different person (fails if the guard is removed, checked by hand); failed sign-out on every page that signs out; a forged wrong-role answer; every notice and error state at 1280 and 390; keyboard use; activation and the withdrawn-portal notice |
+
+### Verified test results (slice 4a, 3 Oct 2026)
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm run lint` | exit 0 |
+| `npm run test:api` | 30 files, **315 passed**, 0 failed (before this slice: 29 files, 309) |
+| `npm run test:web` | **23 passed** (before: 5) |
+| `npm run test:thermal` | **32 passed** |
+| `npx playwright test` | **115 passed, 0 failed, 0 timed out, 5 skipped** in the final full run (6.8 min). The five skips are by design: the desktop-only keyboard tests on the phone project (`auth`, `entry`), the notice-and-error layout test on the phone project (it sets its own sizes), the drawer test on desktop and the table-width test on the phone project (`doctor-home`). Earlier full runs on this slice: 101 passed + 2 failed (the `patient-portal` expectation above), then 108 passed + 1 failed (the layout test above); each failure was fixed at its cause and the suite re-run in full. **The slowest test in the final run took 59.0 s of the 60 s default** (`consent.spec`, a long multi-role journey: 33 s alone, 30 s, 57 s and 59 s in three full runs on six workers); it now has an explicit 90 s budget, as `devices.spec` already had, and was re-run alone afterwards (passed on both projects). That change was made after the final full run and is timeout-only. |
+| `vite build` | succeeds |
+
+### Verified by hand on the development stack
+
+One sign-in attempt per role, with the password read from `.env` by the script and never printed (no repeated attempts): `dr.meera` signed in at the Doctor App and landed in `/doctor`; `admin` at the Admin App landed in `/admin`; each session survived a reload; sign-out ended the session at the server (`/api/auth/me` returned 401 afterwards). **The patient flow was verified only in the end-to-end suite**, with a fixture patient activated through the API; no patient account in the development database was used.
+
+### Failures found during this slice, and what was done
+
+| Failure | Classification | Action |
+| --- | --- | --- |
+| The 502 | Environment (API absent) plus a **product defect**: the app could not say so | See above |
+| After sign-out the page still showed "you are signed in" and `/doctor` redirected to the doctor sign-in | **Product defect** (clearing the query cache detached the page that was showing it) | The `me` entry is updated in place and every other query is removed; sign-out goes to the front door; tested |
+| The "exit hint" that sends a signed-out person to the right page was consumed on first read and React's double render lost it | Product defect | The hint is read without consuming and goes stale after five seconds |
+| `auth.test.ts` hit the sign-in limit (30 a minute per account) after more tests were added | Test setup | New tests moved to `auth-entry.test.ts`; no limit changed |
+| Several e2e failures: labels with a required marker, `toHaveURL(/\/doctor$/)` also matching `/login/doctor`, a session-expiry test that triggered no request, lock tests sharing the demo accounts | Test defects | Matching anchored to the whole path, a request triggered, throwaway accounts; no assertion weakened |
+| `patient-portal.spec.ts` (both projects) expected a patient at `/doctor/queue` to be sent to `/patient` | **Deliberate behaviour change** of this slice (a plain no-access page instead of a silent redirect) | The test now asserts the no-access page, no staff shell, and the unchanged API refusals; DEMO.md updated |
+| The four-size layout test was one test and reached the 60 s budget in a fully parallel run (once; 38 s alone) | Test size, not a product fault | Split into one test per size; no timeout changed |
+| A wrong-application refusal wrote a second, unattributed "access denied" audit row | **Product defect** found in review | The refusal marks itself audited; tested |
+
+### Pre-commit adversarial review (slice 4a)
+
+**Method:** read-only reviewers, as in slice 4: one on the API change and one on the web change (round 1), then one on the fixes (round 2), then one on those fixes (round 3). Each was asked to try to break role confusion, privilege escalation, direct URLs, session leakage, redirects, cross-door sign-in, account enumeration, credential exposure, sensitive logging, rate-limit bypass and facility isolation, and to refute its own findings; I checked each finding against the code while fixing it. The counts are the reviewers' reports; no separate skeptic agents were run. The last round found no defect in the epoch and session-switch core; its findings were fixed and **were not re-reviewed by a fourth round**.
+
+**Round 1, found and fixed (with a regression test each):**
+- The wrong-door refusal was audited twice, once unattributed (API).
+- Sign-out showed the signed-out page even if the request had failed while the cookie stayed valid: only a confirmed sign-out (or "no session") counts.
+- A patient who withdrew portal access was signed out in a way that left the page showing them.
+- `next` accepted `/print/…` for any role and percent-encoded dots and slashes.
+- The doctor-to-nurse no-access page said "cannot access the Doctor App".
+- The proxy claimed "the API is not running" for any proxy error, and Vite's own log line included the request URL; the dev and preview servers sent no frame protection (now `X-Frame-Options: DENY` and `frame-ancestors 'none'`).
+- A session for the wrong role, if one ever came back, was ended in the form, not where it was received (now in the sign-in mutation).
+- Auth queries paused silently when the browser believed it was offline.
+
+**Round 2, found and fixed:**
+- A tab kept the previous person's data and typed text when a *different person of the same role* signed in from another tab (the guard now keys the page by the person, so it is rebuilt).
+- A check of the session that was already on its way could overwrite a newer sign-in, sign-out or password change (an epoch counter now drops such an answer).
+- The re-check fired only on `visibilitychange`, so switching between two visible windows did not trigger it (window focus and a restored page now do).
+- `vite preview` still logged the URL-bearing proxy line; the sign-in mutation kept the typed password in memory for five minutes after a failure; a status region wrapped an alert; several test gaps (failed re-check, failed sign-out on other pages, `safeNext` shapes).
+
+**Round 3, found and fixed:**
+- Rebuilding the page for a different person ran cleanups that sent requests under the *new* person's session: the consultation's last autosave, the recorder's last audio chunk and the assistant's recorded upload. Each now checks that the person is unchanged (tested for the autosave; the other two are checked by reading and typecheck only).
+- Widening the focus handling to every query would have multiplied requests and audited reads on every window focus: the extra events now re-check the session only.
+- Other mutations (activation, password change, a temporary password) also kept passwords for five minutes: no mutation is kept once nothing shows it.
+- An unreadable 200 or a 204 from `/auth/me` was read as "nobody is signed in": it is now a failure that changes nothing.
+- The preview-server log hook disabled Vite's own "no dist folder" check: it is now one `configResolved` hook.
+- Keyboard focus was lost when the page was rebuilt for a different person: it now moves to the main region. Test gaps (a "not shown" check passing before the page rendered; an optional assertion).
+
+**Accepted and documented:**
+- A request the *first* person had already sent when another person took over can finish afterwards and write its result into the cache (a mutation's `onSuccess`); the data belongs to the first person and the next read by the new person refetches, but this was not shown for every query.
+- A toast naming a patient can outlive a person switch by up to four seconds.
+- Existing before this slice: the failed-attempt counter for unknown usernames is in memory with a 10,000-entry limit, so enough attempts to evict entries could show, by when a lock stops, that a name did not exist; a person who knows a username can lock that account for 15 minutes with five wrong passwords.
+
+### Remaining limitations
+
+- **Not a second security layer.** The doors are a courtesy; the API decides on every request. Calling the API directly skips them and gets the same refusals.
+- **No self-service password reset, no multi-factor authentication, no single sign-on, no TLS** (local single-machine product), no concurrent-session limits.
+- **Nurses sign in at the Doctor App.** There is no nurse door; this is a decision to confirm.
+- **The `application` field is optional**, so scripts and older clients keep working; only the web app always sends it.
+- **No framing protection in a production host:** only the dev and preview servers send it, and this repository has no production web host.
+- **The cause of the API's first exit (the 502 trigger) was not established.**
+- **A disabled account is told "invalid", by design** (account enumeration), with a pointer to an administrator.
+- **Not checked:** Firefox, Safari, real devices, a screen reader by hand, high-contrast mode, zoom beyond the default.
+
+### Browser verification
+
+**Automated:** Playwright drove real Chromium at **1440 × 900, 1280 × 800, 1024 × 768 and 390 × 844** on the selector and the three sign-in pages: card layout (one row from 768 px up, stacked below), no horizontal overflow, 44 px targets for every way in and every Sign in button, and axe (WCAG 2.2 A and AA) with no violations. Every notice and error state was checked the same way at 1280 and 390. Keyboard order (skip link, way back, fields, password toggle, Sign in), visible focus, Enter to submit and the show/hide toggle were driven by key presses.
+
+**Looked at by eye:** screenshots of the selector at 1280 × 800 and 1024 × 768, the Doctor sign-in at 1280 and the Patient sign-in at 1024, taken from the development web server (no sign-in attempted); earlier in the slice, the selector and a sign-in page at 1440 and 390. The Admin sign-in, the activation page, the no-access page and the notice and error states were checked only by the automated layout and accessibility tests, not by eye.
 
 ## Slice 4: appointments, check-in, schedules and notifications, and the design foundation
 

@@ -7,7 +7,8 @@ import { Button } from '../../components/ui/Button.tsx'
 import { Dialog } from '../../components/ui/Dialog.tsx'
 import { TextField } from '../../components/ui/Form.tsx'
 import { useToast } from '../../components/ui/Toast.tsx'
-import { ME_KEY } from '../../lib/auth.tsx'
+import { markPortalWithdrawn } from '../../lib/sessionEnd.ts'
+import { replaceSession } from '../../lib/session.ts'
 import { Alert, Badge, EmptyState, Spinner } from '../../components/ui/Feedback.tsx'
 import { Card, DescriptionList, PageHeader } from '../../components/ui/Layout.tsx'
 import { api, errorMessage } from '../../lib/api.ts'
@@ -343,9 +344,9 @@ function WithdrawConsentDialog({ c, onClose }: { c: PortalConsent; onClose: () =
     onSuccess: (r) => {
       if (r.signedOut) {
         // Portal access ended: drop everything cached from this session and leave the portal.
-        qc.clear()
-        qc.setQueryData(ME_KEY, null)
-        navigate('/login?notice=portal_withdrawn', { replace: true })
+        markPortalWithdrawn()
+        replaceSession(qc, null)
+        navigate('/login/patient?notice=portal_withdrawn', { replace: true })
         return
       }
       void qc.invalidateQueries({ queryKey: ['portal'] })

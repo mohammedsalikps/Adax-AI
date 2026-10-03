@@ -7,7 +7,9 @@ import { Alert } from '../components/ui/Feedback.tsx'
 import { TextField } from '../components/ui/Form.tsx'
 import { useToast } from '../components/ui/Toast.tsx'
 import { api, errorMessage } from '../lib/api.ts'
-import { HOME_BY_ROLE, ME_KEY, useLogout, useMe } from '../lib/auth.tsx'
+import { HOME_BY_ROLE, useLogout, useMe } from '../lib/auth.tsx'
+import { updateMe } from '../lib/session.ts'
+import { signOutProblem } from '../lib/signInErrors.ts'
 import { useDocumentTitle } from '../lib/useDocumentTitle.ts'
 import { useForm } from '../lib/useForm.ts'
 
@@ -22,7 +24,7 @@ export function ChangePasswordPage() {
   const change = useMutation({
     mutationFn: (body: ChangePasswordRequest) => api<Me>('/auth/change-password', { method: 'POST', body }),
     onSuccess: (updated) => {
-      qc.setQueryData(ME_KEY, updated)
+      updateMe(qc, updated)
       toast('success', 'Password changed. Other sessions were signed out.')
       navigate(HOME_BY_ROLE[updated.role], { replace: true })
     },
@@ -50,7 +52,7 @@ export function ChangePasswordPage() {
               Back
             </button>
           )}
-          <button type="button" className="ml-auto font-medium text-ink-muted hover:underline" onClick={() => logout.mutate(undefined, { onSettled: () => navigate('/login', { replace: true }) })}>
+          <button type="button" className="ml-auto font-medium text-ink-muted hover:underline" onClick={() => logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }), onError: (e) => toast('error', signOutProblem(e)) })}>
             Sign out
           </button>
         </div>

@@ -29,6 +29,8 @@ async function nursePage(browser: Browser, baseURL: string, isMobile: boolean) {
 }
 
 test('consent is granted, withdrawn and renewed across the patient portal and the staff app, with immediate effects', async ({ page, browser, baseURL, isMobile }) => {
+  // A long multi-role journey: 33 s alone, but 57 s, 59 s and 30 s in three full runs on six workers, against the 60 s default (as devices.spec.ts, same reason).
+  test.setTimeout(90_000)
   const nurseApi = await staffApi(baseURL!, 'nurse.anil')
   const given = `Consent${uniq()}`
   const patient = await (await nurseApi.post('/api/patients', { data: { givenName: given, familyName: 'Synthetic', dateOfBirth: '1988-03-02', sex: 'female', phone: `5${String(Date.now()).slice(-9)}` } })).json()
@@ -92,7 +94,7 @@ test('consent is granted, withdrawn and renewed across the patient portal and th
   const own = page.getByRole('dialog', { name: /Withdraw: Patient portal/ })
   await expect(own).toContainText('signed out')
   await own.getByRole('button', { name: 'Withdraw consent' }).click()
-  await expect(page).toHaveURL(/\/login\?notice=portal_withdrawn/)
+  await expect(page).toHaveURL(/\/login\/patient\?notice=portal_withdrawn/)
   await expect(page.getByText('Online access switched off')).toBeVisible()
   await expectNoAxeViolations(page)
   await nurse.ctx.close()

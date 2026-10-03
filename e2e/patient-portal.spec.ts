@@ -70,11 +70,13 @@ test('patient activates, sees only their own signed records on a phone-sized ins
     await expectNoHorizontalOverflow(page)
   }
 
-  // Another patient's record is not found; staff pages send the patient back home.
+  // Another patient's record is not found; a staff page shows a plain "no access" page (no silent redirect, none of the staff shell) and the API refuses the data.
   await page.goto(`/patient/records/${b.recordId}`)
   await expect(page.getByRole('alert')).toContainText('Record not found')
   await page.goto('/doctor/queue')
-  await expect(page).toHaveURL(/\/patient$/)
+  await expect(page).toHaveURL((u) => u.pathname === '/doctor/queue')
+  await expect(page.getByRole('heading', { level: 1, name: /^This account cannot access the Doctor App$/ })).toBeVisible()
+  await expect(page.getByTestId('signed-in-user')).toHaveCount(0)
   expect((await page.request.get(`/api/encounters/${b.recordId}`)).status()).toBe(403)
   expect((await page.request.get(`/api/portal/records/${b.recordId}`)).status()).toBe(404)
 

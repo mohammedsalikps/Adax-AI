@@ -1,6 +1,6 @@
 import type { PatientDetail, Role } from '@adaxai/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router'
 import { PortalLayout } from './components/PortalLayout.tsx'
 import { AiAssistantPanel } from './components/clinical/AiAssistantPanel.tsx'
@@ -8,6 +8,7 @@ import { ConsultAction, ConsultationLink } from './components/clinical/ConsultAc
 import { Timeline } from './components/clinical/Timeline.tsx'
 import { RequireAuth, RoleRedirect } from './components/RequireAuth.tsx'
 import { ToastProvider } from './components/ui/Toast.tsx'
+import { watchSessionOnFocus } from './lib/focus.ts'
 import { createQueryClient } from './lib/queryClient.ts'
 import { AdminAuditPage } from './pages/admin/AdminAuditPage.tsx'
 import { AppointmentsPage } from './pages/clinical/AppointmentsPage.tsx'
@@ -29,6 +30,7 @@ import { RegisterPatientPage } from './pages/clinical/RegisterPatientPage.tsx'
 import { PatientThermalCard, ThermalDetailPage, ThermalListPage } from './pages/clinical/ThermalPages.tsx'
 import { ConsultationPage } from './pages/doctor/ConsultationPage.tsx'
 import { PrescriptionPrintPage } from './pages/doctor/PrescriptionPrintPage.tsx'
+import { ApplicationSelectorPage } from './pages/ApplicationSelectorPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { AdminDevicesPage, StaffDevicesPage } from './pages/DevicesPages.tsx'
@@ -64,7 +66,10 @@ const router = createBrowserRouter([
     ),
   },
   { path: '/', element: <RoleRedirect /> },
-  { path: '/login', element: <LoginPage /> },
+  { path: '/login', element: <ApplicationSelectorPage /> },
+  { path: '/login/doctor', element: <LoginPage application="doctor" /> },
+  { path: '/login/patient', element: <LoginPage application="patient" /> },
+  { path: '/login/admin', element: <LoginPage application="admin" /> },
   { path: '/activate', element: <ActivatePage /> },
   {
     path: '/change-password',
@@ -153,6 +158,8 @@ const router = createBrowserRouter([
 
 export function App() {
   const [queryClient] = useState(createQueryClient)
+  // A window looked at again re-checks who is signed in (another tab may have changed it).
+  useEffect(() => watchSessionOnFocus(queryClient), [queryClient])
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>

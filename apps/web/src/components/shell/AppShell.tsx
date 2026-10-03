@@ -3,6 +3,8 @@ import { Info } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
 import { useLogout, useMe } from '../../lib/auth.tsx'
+import { signOutProblem } from '../../lib/signInErrors.ts'
+import { useToast } from '../ui/Toast.tsx'
 import { Sidebar } from './Sidebar.tsx'
 import { TopBar } from './TopBar.tsx'
 
@@ -23,6 +25,7 @@ const DESKTOP = '(min-width: 64rem)'
 export function AppShell({ role }: { role: Role }) {
   const { data: me } = useMe()
   const logout = useLogout()
+  const toast = useToast()
   const navigate = useNavigate()
   const location = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -73,7 +76,8 @@ export function AppShell({ role }: { role: Role }) {
     }
   }, [menuOpen, closeMenu])
 
-  const signOut = () => logout.mutate(undefined, { onSettled: () => navigate('/login', { replace: true }) })
+  // To the front door once the server has ended the session; if it could not be reached the person stays, signed in, and is told.
+  const signOut = () => logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }), onError: (e) => toast('error', signOutProblem(e)) })
   const base = `/${role}`
 
   return (

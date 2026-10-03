@@ -4,6 +4,7 @@ import { Check, FileAudio, ListChecks, Mic, Pencil, ShieldAlert, Sparkles, Squar
 import { useEffect, useId, useRef, useState } from 'react'
 import { type AiResponse, aiKey, newIdempotencyKey, useAiMutation } from '../../lib/ai.ts'
 import { api, ApiError, errorMessage } from '../../lib/api.ts'
+import { useStillSamePerson } from '../../lib/auth.tsx'
 import { fmtDateTime } from '../../lib/format.ts'
 import type { NoteInserter } from '../../lib/insert.ts'
 import { ActivityView } from '../ai/ActivityView.tsx'
@@ -206,6 +207,7 @@ export function AiAssistantPanel({ encounter, inserter }: { encounter: Encounter
   const qc = useQueryClient()
   const id = encounter.id
   const tabsId = useId()
+  const samePerson = useStillSamePerson()
   const q = useQuery({ queryKey: aiKey(id), queryFn: () => api<EncounterAi>(`/encounters/${id}/ai`) })
   const [text, setText] = useState('')
   const [tab, setTab] = useState<Tab>('draft')
@@ -315,7 +317,7 @@ export function AiAssistantPanel({ encounter, inserter }: { encounter: Encounter
               <div className="space-y-3">
                 <p className="text-sm font-medium">Record or upload audio</p>
                 {ai.status.stt.available && ai.status.features.liveTranscription && <LiveRecorder encounterId={id} chunkSeconds={ai.status.liveChunkSeconds} onUpdate={onLiveUpdate} disabled={uploadAudio.isPending} />}
-                <Recorder disabled={uploadAudio.isPending} onRecorded={(blob) => uploadAudio.mutate({ blob, name: `recording.${blob.type.includes('ogg') ? 'ogg' : 'webm'}`, source: 'browser_recording' })} />
+                <Recorder disabled={uploadAudio.isPending} onRecorded={(blob) => samePerson() && uploadAudio.mutate({ blob, name: `recording.${blob.type.includes('ogg') ? 'ogg' : 'webm'}`, source: 'browser_recording' })} />
                 <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-brand-strong underline underline-offset-2">
                   <FileAudio aria-hidden="true" className="size-4" />
                   Upload an audio file

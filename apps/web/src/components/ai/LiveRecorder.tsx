@@ -2,6 +2,7 @@ import { Radio, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, errorMessage } from '../../lib/api.ts'
 import type { AiResponse } from '../../lib/ai.ts'
+import { useStillSamePerson } from '../../lib/auth.tsx'
 import { Button } from '../ui/Button.tsx'
 
 const MAX_S = 30 * 60
@@ -28,15 +29,17 @@ export function LiveRecorder({ encounterId, chunkSeconds, onUpdate, disabled }: 
   /** Set when the server refuses a chunk for lack of consent: nothing more leaves the browser. */
   const blocked = useRef(false)
   const timers = useRef<ReturnType<typeof setInterval>[]>([])
+  const samePerson = useStillSamePerson()
   const supported = typeof window !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== 'undefined'
 
   const upload = (blob: Blob, i: number) => {
-    if (blocked.current) return
+    // The last chunk, cut when the page is closed for a different person, is not sent under that person's session.
+    if (blocked.current || !samePerson()) return
     setPending((n) => n + 1)
     // Chunks are sent one at a time, in order.
     queue.current = queue.current.then(async () => {
       try {
-        if (blocked.current) return
+        if (blocked.current || !samePerson()) return
         const fd = new FormData()
         fd.append('chunkIndex', String(i))
         fd.append('file', blob, `chunk-${i}.webm`)

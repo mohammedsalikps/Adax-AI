@@ -20,6 +20,16 @@ The doctor works with **Mana AI**, a companion for the patient's record and the 
 
 ## 2. Users and applications
 
+Everyone enters through one front door (`/login`) that offers three applications. The choice only
+selects a sign-in page; sign-in, sessions, roles, facility scope and consent are the one existing
+system, enforced by the API ([ADR 0011](adr/0011-application-entry-three-front-doors-one-authentication.md)).
+
+| Application | Door | Admits |
+| --- | --- | --- |
+| Doctor App | `/login/doctor` | doctors and nurses (clinical staff), each landing in their own workspace |
+| Patient App | `/login/patient` | patients, by MRN and password (first time: activation at `/activate`) |
+| Admin App | `/login/admin` | administrators |
+
 | User | Application | Core jobs |
 | --- | --- | --- |
 | Patient | PWA (`/patient`) | Activate and sign in; **see their appointments and the in-app messages about them** (booking by the patient is not built); read signed records, prescriptions, vitals, released reports and follow-ups; manage consents. |

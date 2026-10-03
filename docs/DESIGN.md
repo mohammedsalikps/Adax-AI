@@ -105,6 +105,28 @@ about and a message that failed.
 | Quick actions | Four links | Only to pages that exist |
 | Consultation workspace (transcription, live device readings, notes, AI summary) | **Not part of this slice** | The consultation page keeps its current layout, with the new tokens. Its redesign (clear connected / stale / simulated states for devices, AI content visibly draft-only) is the recommended next slice |
 
+## 4a. The front door and sign-in pages
+
+The first thing anyone sees (`/login`) and the three sign-in pages share one frame and the same
+tokens; they set the look future applications inherit.
+
+| Component | Where | Role |
+| --- | --- | --- |
+| `AuthShell`, `AuthHeader`, `BackToApplications` | `components/auth/AuthShell` | The frame of every signed-out page (also activation and the password change): skip link, product mark, development notice; the heading with the application badge and one line; the way back |
+| `ApplicationCard` | `components/auth/ApplicationCard` | One application on the selector: who it is for, what it really offers (only features that exist), one button-styled link. The description is guidance, never a permission |
+| `ApplicationBadge`, `appStyle` | `components/auth/` | Names the application ("Doctor App") on its pages: an icon, a tint and an accent line from the tokens (blue for clinical work, green for the patient's space, ink for administration) |
+| `LoginForm` | `components/auth/LoginForm` | The sign-in form of one application: labelled fields, a loading state, retry, forgotten-password help (who can reset it; there is no self-service reset) |
+| `PasswordField` | `components/auth/PasswordField` | Password with a show/hide toggle (a button with a pressed state) |
+| `ErrorBanner` | `components/auth/ErrorBanner` | A sign-in problem announced at once: a title, a sentence that helps, and **Try again** when the problem is the service |
+| `ServiceStatus` | `components/auth/ServiceStatus` | "Sign-in service available", or unavailable with a retry, from the public `/api/ready` |
+| `SignedInNotice`, `NoAccessPage` | `components/auth/`, `pages/NoAccessPage` | Someone signed in as another role at a sign-in page, or opening another application's address: said plainly, with their own workspace and sign-out, never a silent move |
+
+Behaviour rules for these pages: errors never show a code or a trace and never say which usernames
+exist; a banner for a service problem offers a retry and a refusal does not; the selector stacks to
+one column below 768px, and every control is at least 44px; keyboard order is skip link, way back,
+fields, password toggle, Sign in. Verified in Chromium at 1440 × 900, 1280 × 800, 1024 × 768 and
+390 × 844 (see [STATUS.md](STATUS.md)).
+
 ## 5. Rules the screens follow
 
 - **No fake controls.** A control appears only if the product can do it.

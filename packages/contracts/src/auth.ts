@@ -8,6 +8,30 @@ export type StaffRole = z.infer<typeof StaffRole>
 
 export const ROLE_LABELS: Record<Role, string> = { admin: 'Admin', doctor: 'Doctor', nurse: 'Nurse', patient: 'Patient' }
 
+/**
+ * The three applications a person can enter ADAXAI through. This is the
+ * product's front door, not its security boundary: every API route still
+ * enforces role, facility and consent on every request. The roles each
+ * application admits are listed here so that the API (which refuses a sign-in
+ * through the wrong door before any session exists) and the web app (which
+ * routes by the signed-in role) agree.
+ */
+export const APPLICATIONS = ['doctor', 'patient', 'admin'] as const
+export const Application = z.enum(APPLICATIONS)
+export type Application = z.infer<typeof Application>
+
+/** Doctors and nurses are both clinical staff and use the clinical application ("Doctor App"); each lands in their own workspace. */
+export const APPLICATION_ROLES: Record<Application, readonly Role[]> = {
+  doctor: ['doctor', 'nurse'],
+  patient: ['patient'],
+  admin: ['admin'],
+}
+
+export const APPLICATION_LABELS: Record<Application, string> = { doctor: 'Doctor App', patient: 'Patient App', admin: 'Admin App' }
+
+/** The application a role belongs to. */
+export const applicationOf = (role: Role): Application => (role === 'admin' ? 'admin' : role === 'patient' ? 'patient' : 'doctor')
+
 /** Password policy (NIST 800-63B style: length over composition rules). */
 export const Password = z.string().min(10, 'At least 10 characters').max(128, 'At most 128 characters')
 
@@ -21,6 +45,8 @@ export const Username = z
 export const LoginRequest = z.object({
   username: z.string().trim().min(1, 'Required').max(64),
   password: z.string().min(1, 'Required').max(128),
+  /** The application the person is signing in to. When given, an account of another role is refused (403) before any session exists. */
+  application: Application.optional(),
 })
 export type LoginRequest = z.infer<typeof LoginRequest>
 

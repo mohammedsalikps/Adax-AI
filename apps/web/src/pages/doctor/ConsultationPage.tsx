@@ -26,7 +26,7 @@ import { CheckboxField, SelectField, TextAreaField, TextField } from '../../comp
 import { Card } from '../../components/ui/Layout.tsx'
 import { useToast } from '../../components/ui/Toast.tsx'
 import { ApiError, api, errorMessage } from '../../lib/api.ts'
-import { useMe } from '../../lib/auth.tsx'
+import { useMe, useStillSamePerson } from '../../lib/auth.tsx'
 import { usePortalBase } from '../../lib/clinical.ts'
 import { encounterKey, useEncounter, useStartConsultation } from '../../lib/encounters.ts'
 import { fmtDate, fmtDateTime, fmtTime } from '../../lib/format.ts'
@@ -266,10 +266,17 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     setSaveState('dirty')
   }
 
+  const samePerson = useStillSamePerson()
+
   /** Saves serially; resolves once nothing is pending. */
   const flush = useCallback((): Promise<void> => {
     chainRef.current = chainRef.current.then(async () => {
       if (!dirtyRef.current || stateRef.current === 'conflict' || stateRef.current === 'blocked') return
+      // Another person has taken over this browser (this page is being closed for them): the last edits are not theirs to send.
+      if (!samePerson()) {
+        dirtyRef.current = false
+        return
+      }
       dirtyRef.current = false
       setSaveState('saving')
       try {
@@ -289,7 +296,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
       }
     })
     return chainRef.current
-  }, [initial.id, qc])
+  }, [initial.id, qc, samePerson])
 
   // Debounced autosave; retry after errors.
   useEffect(() => {

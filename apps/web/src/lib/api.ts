@@ -5,6 +5,9 @@ export interface FieldIssue {
   message: string
 }
 
+const GATEWAY_STATUSES = [502, 503, 504]
+const UNAVAILABLE_MESSAGE = 'The service is temporarily unavailable. Please try again in a moment.'
+
 /** A failed API call. `code` is the API's machine-readable error, `issues` per-field validation messages. */
 export class ApiError extends Error {
   constructor(
@@ -54,7 +57,9 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   if (!res.ok) {
     const parsed = ApiErrorBody.safeParse(data)
     if (parsed.success) throw new ApiError(res.status, parsed.data.error, parsed.data.message ?? `Request failed (${res.status})`, parsed.data.issues, data)
-    throw new ApiError(res.status, 'http_error', `Request failed (${res.status})`, [], data)
+    // No usable body: a proxy or gateway answered instead of the API (the API is not running, or is restarting).
+    if (GATEWAY_STATUSES.includes(res.status)) throw new ApiError(res.status, 'service_unavailable', UNAVAILABLE_MESSAGE, [], data)
+    throw new ApiError(res.status, 'http_error', res.status >= 500 ? 'The server reported a problem. Please try again.' : `Request failed (${res.status})`, [], data)
   }
   return data as T
 }
@@ -63,6 +68,11 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
 export function issuesToErrors(e: unknown): Record<string, string> {
   if (!(e instanceof ApiError)) return {}
   return Object.fromEntries(e.issues.map((i) => [i.path, i.message]))
+}
+
+/** The server could not be reached or is not running (a network failure, a gateway answering for it, or the dev proxy saying so). */
+export function isServiceUnavailable(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 0 || GATEWAY_STATUSES.includes(e.status) || e.code === 'api_unavailable' || e.code === 'service_unavailable' || e.code === 'network_error')
 }
 
 export function errorMessage(e: unknown): string {

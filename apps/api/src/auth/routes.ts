@@ -1,4 +1,4 @@
-import { ChangePasswordRequest, LoginRequest, type Me } from '@adaxai/contracts'
+import { APPLICATION_LABELS, APPLICATION_ROLES, ChangePasswordRequest, LoginRequest, type Me } from '@adaxai/contracts'
 import { and, eq, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../audit/audit.ts'
@@ -97,9 +97,9 @@ export function registerAuthRoutes(app: FastifyInstance, deps: { db: Db; cookieS
     await enforceLimit(db, limits.limiter, req, reply, 'login-ip', req.ip, limits.rules.loginPerIp)
     await enforceLimit(db, limits.limiter, req, reply, 'login-account', `${req.ip}|${username}`, limits.rules.loginPerAccount)
     const user = await db.query.users.findFirst({ where: eq(users.username, body.username) })
-    const failAudit = (reason: string) =>
+    const failAudit = (reason: string, extra: Record<string, string> = {}) =>
       // An unknown "username" is often a mistyped password, so it is never stored.
-      audit(db, req, { action: 'auth.login', outcome: 'failure', actorUserId: user?.id ?? null, actorRole: user?.role ?? null, facilityId: user?.facilityId ?? null, details: { ...(user && { username: user.username }), reason } })
+      audit(db, req, { action: 'auth.login', outcome: 'failure', actorUserId: user?.id ?? null, actorRole: user?.role ?? null, facilityId: user?.facilityId ?? null, details: { ...(user && { username: user.username }), reason, ...extra } })
 
     // The same rules for every username, existing (active or not) or unknown.
     const slot = user ? await reserveAttempt(user.id) : !unknown.locked(username)
@@ -117,6 +117,17 @@ export function registerAuthRoutes(app: FastifyInstance, deps: { db: Db; cookieS
       else unknown.fail(username)
       await failAudit(!user ? 'unknown_user' : !user.isActive ? 'inactive' : portalBlocked ? 'portal_consent_withdrawn' : 'bad_password')
       throw new HttpError(401, 'invalid_credentials', 'Invalid username or password')
+    }
+
+    // The right password for an account that belongs to another application: no session is made. The person is who they say
+    // they are (their failed-attempt count is cleared like a sign-in), and may now be told which door is theirs. This answer
+    // is only reachable with a correct password, so it tells nobody which usernames exist.
+    if (body.application && !APPLICATION_ROLES[body.application].includes(user.role)) {
+      await db.update(users).set({ failedLoginCount: 0, lockedUntil: null }).where(eq(users.id, user.id))
+      await failAudit('wrong_application', { application: body.application })
+      // Already audited, with the account and the application: the global handler must not add a second, unattributed denial row.
+      req.denialAudited = true
+      throw new HttpError(403, 'wrong_application', `This account cannot sign in to the ${APPLICATION_LABELS[body.application]}. Go back and choose the application for your role.`)
     }
 
     // The reserved slot was one of the allowed guesses: a correct password signs in and clears the count.

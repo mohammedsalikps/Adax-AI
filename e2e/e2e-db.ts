@@ -40,3 +40,11 @@ export async function moveAppointmentToToday(appointmentId: string, time: string
     if (r.rowCount !== 1) throw new Error('appointment not found')
   })
 }
+
+/** Ends a user's sessions as time would (their expiry passes), so a test can see what the app does with a session that is gone. */
+export async function expireSessionsOf(username: string): Promise<number> {
+  return withE2eDb(async (c) => {
+    const r = await c.query("UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE user_id = (SELECT id FROM users WHERE username = $1)", [username])
+    return r.rowCount ?? 0
+  })
+}

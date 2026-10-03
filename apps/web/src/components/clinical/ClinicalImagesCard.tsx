@@ -188,7 +188,7 @@ export function ClinicalImagesCard({ patientId, encounter, inserter }: { patient
                 <a href={`/api/files/${img.previewFileId}`} target="_blank" rel="noreferrer" className="shrink-0">
                   <img src={`/api/files/${img.previewFileId}`} alt={`${IMAGE_TYPES[img.imageType]}${img.bodySite ? `, ${img.bodySite}` : ''}, taken ${fmtDateTime(img.createdAt)}`} className="h-28 w-36 rounded-md bg-canvas object-contain" loading="lazy" />
                 </a>
-                <div className="min-w-0 flex-1 space-y-1 text-sm">
+                <div className="min-w-0 flex-1 basis-40 space-y-1 text-sm">
                   <p className="font-medium">
                     {IMAGE_TYPES[img.imageType]}
                     {img.bodySite ? ` · ${img.bodySite}` : ''}

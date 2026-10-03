@@ -26,6 +26,7 @@ import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
 import { PatientProfilePage } from './pages/clinical/PatientProfilePage.tsx'
 import { PatientsPage } from './pages/clinical/PatientsPage.tsx'
 import { QueuePage } from './pages/clinical/QueuePage.tsx'
+import { TodaysPatientsPage } from './pages/doctor/TodaysPatientsPage.tsx'
 import { RegisterPatientPage } from './pages/clinical/RegisterPatientPage.tsx'
 import { PatientThermalCard, ThermalDetailPage, ThermalListPage } from './pages/clinical/ThermalPages.tsx'
 import { ConsultationPage } from './pages/doctor/ConsultationPage.tsx'
@@ -98,7 +99,7 @@ const router = createBrowserRouter([
     element: portal('doctor'),
     children: [
       { index: true, element: <DoctorHomePage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
-      { path: 'queue', element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
+      { path: 'queue', element: <TodaysPatientsPage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
       { path: 'consultations', element: <MyConsultationsPage /> },
       { path: 'appointments', element: <AppointmentsPage /> },
       { path: 'patients', element: <PatientsPage /> },
@@ -107,12 +108,16 @@ const router = createBrowserRouter([
         path: 'encounters/:encounterId',
         element: (
           <ConsultationPage
+            leftPanel={(e, inserter) => (
+              <>
+                <AuscultationCard patientId={e.patient.id} encounterId={e.id} />
+                <ClinicalImagesCard patientId={e.patient.id} encounter={e} inserter={inserter} />
+              </>
+            )}
             sidePanel={(e, inserter) => (
               <>
                 <ManaPanel patientId={e.patient.id} encounterId={e.id} inserter={inserter} />
                 <AiAssistantPanel encounter={e} inserter={inserter} />
-                <ClinicalImagesCard patientId={e.patient.id} encounter={e} inserter={inserter} />
-                <AuscultationCard patientId={e.patient.id} encounterId={e.id} />
               </>
             )}
           />

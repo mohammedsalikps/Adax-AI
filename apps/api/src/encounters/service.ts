@@ -78,7 +78,7 @@ export async function loadEncounter(db: DbOrTx, me: SessionUser, e: EncounterRow
       .from(observations)
       .leftJoin(recorder, eq(recorder.id, observations.recordedBy))
       .where(and(eq(observations.visitId, v.id), eq(observations.enteredInError, false)))
-      .orderBy(desc(observations.measuredAt)),
+      .orderBy(desc(observations.measuredAt), desc(observations.createdAt)),
     db
       .select({ a: encounterAmendments, by: author.fullName })
       .from(encounterAmendments)

@@ -21,6 +21,8 @@ export const PERMISSIONS = {
   'patients:read': ['doctor', 'nurse'],
   'patients:write': ['doctor', 'nurse'],
   'consents:write': ['doctor', 'nurse'],
+  /** Conditions, medicines and results on a patient's history. Doctors and nurses read it (patients:read); doctors write. */
+  'history:write': ['doctor'],
   'queue:read': ['doctor', 'nurse'],
   'queue:manage': ['doctor', 'nurse'],
   /** The schedule. Administrators see it without patient identity or free text. */

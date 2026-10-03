@@ -3,6 +3,8 @@ import { ArrowDown, ArrowUp, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { errorMessage } from '../../lib/api.ts'
 import { useVisitMutation } from '../../lib/clinical.ts'
+import { fmtTime } from '../../lib/format.ts'
+import { latestPerKind } from '../../lib/vitals.ts'
 import { Button } from '../ui/Button.tsx'
 import { Dialog } from '../ui/Dialog.tsx'
 import { Alert } from '../ui/Feedback.tsx'
@@ -36,6 +38,60 @@ export function VitalsInline({ vitals }: { vitals: Observation[] }) {
         <li key={o.id} className={o.flag && o.flag !== 'normal' ? 'font-medium' : ''}>
           <span className="text-ink-muted">{VITALS[o.kind].short}</span> {fmtValue(o)}
           <span className="text-xs text-ink-muted"> {o.unit}</span> <FlagLabel flag={o.flag} />
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+const worst = (a: VitalFlag | null, b: VitalFlag | null): VitalFlag | null => {
+  const rank = (f: VitalFlag | null) => (f === null ? -1 : f === 'normal' ? 0 : f.startsWith('critical') ? 2 : 1)
+  return rank(a) >= rank(b) ? a : b
+}
+
+/** Where a reading came from and when, so a typed value and a device value are never mistaken for each other. */
+export function readingSource(o: Pick<Observation, 'source' | 'validationStatus' | 'measuredAt'>): string {
+  return `${fmtTime(o.measuredAt)} · ${o.source === 'device' ? 'device, unverified' : 'entered by staff'}`
+}
+
+/**
+ * The latest vital signs as tiles. Each says when it was recorded and by whom or what (typed by staff, or from a device that is not
+ * validated in this deployment); blood pressure is the two values together. There is no live feed: a reading is as old as its time says.
+ */
+export function VitalsTiles({ vitals }: { vitals: Observation[] }) {
+  if (!vitals.length) return <p className="rounded-lg bg-canvas px-3 py-2 text-sm text-ink-muted">No vital signs have been recorded for this visit.</p>
+  const latest = latestPerKind(vitals)
+  const by = (k: VitalKind) => latest.find((o) => o.kind === k)
+  const sbp = by('systolic_bp')
+  const dbp = by('diastolic_bp')
+  const tiles: { key: string; label: string; value: string; unit: string; flag: VitalFlag | null; source: string }[] = []
+  for (const k of ['heart_rate', 'spo2'] as const) {
+    const o = by(k)
+    if (o) tiles.push({ key: k, label: VITALS[k].label, value: fmtValue(o), unit: o.unit, flag: o.flag, source: readingSource(o) })
+  }
+  if (sbp || dbp) {
+    const o = (sbp ?? dbp)!
+    // The two numbers are the latest of each kind; if they were not taken together, the tile says when each was.
+    const source = sbp && dbp && sbp.measuredAt !== dbp.measuredAt ? `Systolic ${readingSource(sbp)}; diastolic ${readingSource(dbp)}` : readingSource(o)
+    tiles.push({ key: 'bp', label: 'Blood pressure', value: `${sbp ? fmtValue(sbp) : '—'}/${dbp ? fmtValue(dbp) : '—'}`, unit: 'mmHg', flag: worst(sbp?.flag ?? null, dbp?.flag ?? null), source })
+  }
+  for (const k of ['temperature', 'respiratory_rate', 'blood_glucose', 'pain_score', 'weight', 'height'] as const) {
+    const o = by(k)
+    if (o) tiles.push({ key: k, label: VITALS[k].label, value: fmtValue(o), unit: o.unit, flag: o.flag, source: readingSource(o) })
+  }
+  return (
+    <ul className="grid grid-cols-2 gap-2" aria-label="Latest vital signs" data-testid="vitals-tiles">
+      {tiles.map((t) => (
+        <li key={t.key} className="rounded-lg border border-line bg-surface p-2.5">
+          <p className="text-xs text-ink-muted">{t.label}</p>
+          <p className="flex flex-wrap items-baseline gap-x-1 text-lg leading-tight font-semibold tabular-nums">
+            {t.value}
+            <span className="text-xs font-normal text-ink-muted">{t.unit}</span>
+          </p>
+          <p className="min-h-4">
+            <FlagLabel flag={t.flag} />
+          </p>
+          <p className="text-[0.6875rem] leading-snug text-ink-muted">{t.source}</p>
         </li>
       ))}
     </ul>

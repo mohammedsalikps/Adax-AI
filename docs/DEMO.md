@@ -22,6 +22,20 @@ npm run demo:seed -- --fresh
 recorded (including *Mana AI record summaries*), a penicillin allergy, one signed earlier consultation (type 2 diabetes, metformin) and
 today's visit with vitals, ready for the doctor. Use `--fresh` for every clean run.
 
+**The synthetic hospital dataset (recommended for the Doctor App).** After `npm run db:seed` and
+`npm run db:migrate`, `npm run demo:hospital` adds twelve fictional patients with allergies, known
+conditions, medicines, investigation results and earlier signed consultations, two more staff
+(`dr.arjun`, an orthopaedics doctor, and `nurse.divya`, a paediatrics nurse), and **today's
+activity**: appointments (some already seen, one who did not come, some still to come) and a queue
+in every state, with times set around the current time. It is idempotent and resumable (a patient
+is recognised by name and date of birth and never made twice; a run that stopped half way is
+completed by the next; today's activity is added once per day) and refuses to run in production,
+unless `DATA_ORIGIN` is `synthetic` and the facility is named "(synthetic)", or beside any patient
+marked clinical. Everything it makes is marked synthetic; see
+[docs/safety/DATASETS.md](safety/DATASETS.md). Sign in as `dr.meera` (General Medicine):
+**Mohammed Ali** is with the doctor (an unsigned draft), **Asha Patel** is ready, **Ravi Kumar** is
+waiting, and **Priya Singh** did not attend.
+
 Open `http://localhost:5173`: the first page offers the **Doctor App**, **Patient App** and **Admin App**.
 Choose one to reach its own sign-in page. Staff accounts: sign in with the username, not an email
 address. Password: the exact value of `SEED_DEMO_PASSWORD` in your `.env` (see the README's
@@ -46,6 +60,31 @@ state, and everything else works, including the rule-based safety checks and rou
 `ANTHROPIC_API_KEY` in `.env` (and optionally `AI_STT_API_KEY`), restart `npm run dev` to also
 show drafting, fact extraction, AI recommendations and photo description. Only do that with
 synthetic data and after checking your provider agreement.
+
+## 0. The doctor's day and the patient's history (dr.meera)
+
+1. **Home** greets the doctor and shows how today stands from the queue and the schedule, then
+   *Today's schedule*: who is still to be seen, in time order, each with its real state and the
+   action that applies (*Start* or *Continue consultation*, *Check in* for a booked appointment).
+2. **Today's patients** (sidebar): tabs with counts, a day picker, *My patients / Whole clinic*, and a
+   row per visit with the allergies always shown. Quieter actions are in the row's **⋯** menu
+   (keyboard: Enter, arrows, Escape).
+3. Start the consultation of **Mohammed Ali**. The header says **Draft · in progress** and for how long.
+   The banner shows his **penicillin allergy (Severe)** and his conditions. *This visit* shows each
+   vital sign with when it was recorded and "entered by staff" (the glucose is flagged as outside the
+   adult range, in words).
+4. **Past history**: *Summary*, *Consultations* (open one: what was prescribed, "not a record of what
+   the patient takes", and the link to the signed record), *Medications* (Glimepiride is stopped, with
+   the reason), *Allergies*, *Investigations* (HbA1c with its range and a *High* flag). Use the arrow
+   keys, Home and End to move between the tabs.
+5. As a doctor, **Add condition**, **Add medicine**, **Add result**; use a row's **⋯** to stop a medicine
+   or **mark an entry as entered in error** (a reason is required; the entry stays in the record and
+   leaves the history). Nothing is deleted.
+6. **View profile** opens a side sheet: an overview with a **summary of the record, labelled "not
+   AI-generated"** and what it is based on, the full history, and documents. Escape closes it.
+7. What is not built says so: the **digital writing pad** reads "Not available yet", and the
+   stethoscope card says no stethoscope is connected. The AI panels say whether a provider is
+   configured; see [AI_STATUS.md](AI_STATUS.md) for what each AI feature really is.
 
 ## 1. Nurse intake (nurse.anil)
 

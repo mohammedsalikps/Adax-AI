@@ -11,6 +11,7 @@
     "seed": "tsx src/db/seed.ts",
     "retention": "tsx src/retention-cli.ts",
     "demo:seed": "tsx src/db/demo-seed.ts",
+    "demo:hospital": "tsx src/db/hospital-seed.ts",
     "user:reset-password": "tsx src/reset-password-cli.ts",
     "audit:verify": "tsx src/audit/verify-cli.ts",
     "generate": "drizzle-kit generate",

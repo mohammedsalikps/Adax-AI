@@ -21,8 +21,8 @@ export const ageSex = (p: { dateOfBirth: string; sex: Sex; dateOfBirthEstimated?
 export function AllergySummary({ noKnownAllergies, activeAllergies }: { noKnownAllergies: boolean; activeAllergies: string[] }) {
   if (activeAllergies.length) {
     return (
-      <span className="inline-flex flex-wrap items-center gap-1 text-sm font-medium text-down">
-        <TriangleAlert aria-hidden="true" className="size-4" />
+      <span className="inline-flex items-start gap-1 text-sm font-medium text-down">
+        <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
         <span>Allergies: {activeAllergies.join(', ')}</span>
       </span>
     )

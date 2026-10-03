@@ -162,6 +162,20 @@
       "when": 1790994959962,
       "tag": "0022_appointments_and_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791031789299,
+      "tag": "0023_patient_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791037393292,
+      "tag": "0024_history_guards",
+      "breakpoints": true
     }
   ]
 }

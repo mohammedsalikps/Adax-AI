@@ -85,6 +85,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid environment configuration:\n${issues}`)
   }
   const e = parsed.data
+  // The default is `synthetic` (this product is a prototype), so a production deployment must say what its data is: an unset
+  // variable would otherwise label real records as synthetic.
+  if (e.NODE_ENV === 'production' && !env.DATA_ORIGIN) throw new Error('Invalid environment configuration:\n  DATA_ORIGIN: must be set explicitly in production ("synthetic" or "clinical")')
   return {
     env: e.NODE_ENV,
     version: pkg.version,

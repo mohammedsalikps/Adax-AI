@@ -24,6 +24,7 @@ import { encounterIdsForVisits } from './encounters/service.ts'
 import { registerEncounterRoutes } from './encounters/routes.ts'
 import { registerInsertionRoutes } from './encounters/insertions.ts'
 import { registerManaRoutes } from './mana/routes.ts'
+import { registerHistoryRoutes } from './history/routes.ts'
 import { registerPatientRoutes } from './patients/routes.ts'
 import { registerVisitRoutes } from './visits/routes.ts'
 import { registerAuth } from './auth/plugin.ts'
@@ -84,7 +85,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerAuthRoutes(app, { db, cookieSecure: deps.config.cookieSecure, limits: { limiter, rules: limits } })
   registerActivationRoutes(app, { db, cookieSecure: deps.config.cookieSecure, limiter, perIp: limits.activationPerIp })
   registerAdminRoutes(app, { db })
-  registerPatientRoutes(app, { db })
+  registerPatientRoutes(app, { db, dataOrigin: deps.config.dataOrigin })
+  registerHistoryRoutes(app, { db, dataOrigin: deps.config.dataOrigin })
   registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
   registerAppointmentRoutes(app, { db, channel: deps.notificationChannel })
   registerEncounterRoutes(app, { db })

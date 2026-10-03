@@ -43,7 +43,7 @@ const BADGE: Record<BadgeTone, string> = {
  */
 export function Badge({ tone = 'neutral', children, icon, wrap = false, dot = false }: { tone?: BadgeTone; children: ReactNode; icon?: ReactNode; wrap?: boolean; dot?: boolean }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 border px-2.5 py-0.5 text-xs font-medium ${wrap ? 'rounded-md' : 'rounded-full whitespace-nowrap'} ${BADGE[tone]}`}>
+    <span className={`inline-flex items-center gap-1.5 border px-2.5 py-0.5 text-xs font-medium ${wrap ? 'rounded-md text-left [overflow-wrap:anywhere]' : 'rounded-full whitespace-nowrap'} ${BADGE[tone]}`}>
       {dot && <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />}
       {icon}
       {children}

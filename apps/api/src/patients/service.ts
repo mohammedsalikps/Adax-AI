@@ -38,6 +38,7 @@ export function toSummary(p: PatientRow, lastVisitDate: string | null = null): P
     dateOfBirthEstimated: p.dateOfBirthEstimated,
     phone: p.phone,
     lastVisitDate,
+    dataOrigin: p.dataOrigin as PatientSummary['dataOrigin'],
   }
 }
 

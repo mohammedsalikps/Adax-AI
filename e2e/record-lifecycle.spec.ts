@@ -84,6 +84,8 @@ test('a signed record is listed, checked against its fingerprints, and shows its
   const signed = page.getByRole('list', { name: 'Signed consultations' }).getByRole('listitem').filter({ hasText: p.name })
   await signed.getByRole('link', { name: 'Open record' }).click()
   await expect(page).toHaveURL(new RegExp(`/doctor/encounters/${p.encounterId}$`))
+  // The address changes before the record's page has replaced the list (which has a "Signed …" line per record): wait for the record itself.
+  await expect(page.getByRole('heading', { level: 1, name: /^Consultation/ })).toBeVisible()
   await expect(page.getByText(/^Signed /)).toBeVisible()
 
   // Nothing is claimed until the check has run.

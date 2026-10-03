@@ -66,7 +66,7 @@ test('doctor records consent, saves a transcript, reviews AI suggestions and sig
   await page.getByRole('button', { name: 'Add diagnosis' }).click()
   await page.getByLabel('Diagnosis 1', { exact: true }).fill('Acute pharyngitis')
   await expect(page.getByTestId('save-state')).toContainText('Saved', { timeout: 10_000 })
-  await page.getByRole('button', { name: 'Review and sign' }).click()
+  await page.getByRole('button', { name: 'Complete consultation' }).click()
   const review = page.getByRole('dialog', { name: 'Review and sign' })
   await expect(review).toContainText('Warm saline gargles; oral fluids.')
   await expect(review).not.toContainText('Unsourced test suggestion.')

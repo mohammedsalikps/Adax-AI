@@ -66,13 +66,16 @@ page for no gain). Components exist only where a screen uses them.
 | PatientAvatar | `ui/PatientAvatar` | Initials only: the product holds no photographs. Hidden from assistive technology (a name is always beside it) |
 | StatusBadge | `ui/Feedback` `Badge` (with `dot`), `AppointmentStatusBadge`, `VisitStatusBadge` | The existing `StatusBadge` is the service-health pill on the admin overview |
 | AppointmentTable | `components/clinical/AppointmentTable` | See below |
-| PatientProfilePanel | **not built** | A side panel would repeat the patient banner and the appointment's details dialog. Revisit with the consultation workspace |
+| PatientProfilePanel | `components/clinical/PatientProfileDrawer` | Built with the workstation (§4b): a side sheet over the consultation |
 | SectionCard | `ui/Layout` `Card` | Its title names the region for assistive technology |
 | EmptyState, LoadingState, ErrorState | `ui/Feedback` | `ErrorState` offers **Try again**, except for a refusal (403), which says so and offers nothing to retry |
 | ConfirmationDialog | `ui/ConfirmationDialog` | Says what will happen, offers “keep it” first, can ask for a reason, shows failures inside the dialog, cannot be dismissed while the request is in flight |
 | FormField | `ui/Form` `Field`, `TextField`, `SelectField`, `TextAreaField` | Label, hint, error and `aria-describedby` wired once |
 | Primary / SecondaryButton | `ui/Button` variants `primary`, `secondary`, `danger`, `ghost` | One component, four variants, two sizes |
 | (new) SegmentedControl | `ui/SegmentedControl` | A short row of exclusive choices; each is a toggle button with a pressed state |
+| (new) Tabs, TabPanel | `ui/Tabs` | Real tabs: arrow keys, Home and End, one tab stop, each tab names its panel. `underline` inside a card, `pill` (with counts) above a list. Inactive panels stay in the page, hidden, so their state is kept |
+| (new) Menu | `ui/Menu` | An overflow ("more") menu: opens with Enter, Space or Down, arrows move, Escape returns to the button; placed against the viewport so a table cannot clip it. For commands without room of their own |
+| (new) Side sheet | `ui/Dialog` with `placement="right"` | The same native dialog (focus trapped and restored, Escape closes, page behind inert), at the right edge |
 
 **AppointmentTable.** A list of rows styled as a table (a grid with a decorative header) from the
 `xl` breakpoint (1280px, where the content is about 960px wide) and as stacked cards below it, so
@@ -97,13 +100,15 @@ about and a message that failed.
 | Reports | not built | There is no reporting feature; a link would be a fake control |
 | Mana AI | not a page | Mana answers about one patient's record, so it lives on the patient record and in the consultation. A stand-alone page would have no patient to ask about |
 | Settings | not built | There are no user settings. **Change password** is at the bottom of the sidebar |
-| (existing) | **OPD queue**, **Thermal**, **AI review** | Kept |
+| (existing) | **Today's patients** (the doctor's view of the OPD queue; nurses keep **OPD queue**), **Thermal**, **AI review** | Kept |
 | Top bar: patient search | Yes, for doctors and nurses | Submitting opens the Patients page with the term in the router state: not in the address, a shared link, the referrer or a server log; the page takes it once and clears it from the history entry, so a reload or Back does not repeat the (audited) search. Nothing is searched until it is submitted. Two characters at least |
 | Notifications | not built | Staff have no notifications; the outbox is for patients |
 | Doctor, role, facility | Yes | Name, role, department and clinic (from `/api/auth/me`) |
-| Dashboard: Total in queue / Ongoing / Completed / Upcoming | **In the queue**, **With a doctor**, **Completed today**, **Appointments to come** | Counted from today's queue and schedule, for the doctor's own patients |
-| Quick actions | Four links | Only to pages that exist |
-| Consultation workspace (transcription, live device readings, notes, AI summary) | **Not part of this slice** | The consultation page keeps its current layout, with the new tokens. Its redesign (clear connected / stale / simulated states for devices, AI content visibly draft-only) is the recommended next slice |
+| Dashboard: Total in queue / Ongoing / Completed / Upcoming | **In the queue**, **With a doctor**, **Completed today**, **Appointments to come**, under a time-of-day greeting | Counted from today's queue and schedule, for the doctor's own patients |
+| Today's Schedule list with *Start* | **Today's schedule** on Home: who is still to be seen, in time order (appointments and walk-ins together), with the action that applies | Patients ready or in the room are always listed (however many), and the next three others stay in view; *Start*/*Continue consultation* only when the visit allows it; *Check in* for a booked appointment; otherwise the state in words |
+| Quick actions | **New appointment**, **Register patient**, **Find a patient**, **My consultations** | Only to places that exist (the reference's *View reports* and *Mana AI* have nothing behind them) |
+| Today's Patients (tabs, date, table, row menu) | **Today's patients** (`/doctor/queue`) | See §4b |
+| Consultation workspace | **Built in part** (§4b): header, banner, past history, patient summary, profile sheet. **Transcription lines with timestamps and speakers, key points, a live stethoscope, a writing pad and the AI summary are not built** | Each shows its real state or says "not available yet" |
 
 ## 4a. The front door and sign-in pages
 
@@ -126,6 +131,30 @@ exist; a banner for a service problem offers a retry and a refusal does not; the
 one column below 768px, and every control is at least 44px; keyboard order is skip link, way back,
 fields, password toggle, Sign in. Verified in Chromium at 1440 × 900, 1280 × 800, 1024 × 768 and
 390 × 844 (see [STATUS.md](STATUS.md)).
+
+## 4b. The Doctor workstation (slice V1)
+
+The reference is a clinical workstation: dense, calm, one patient in focus. These are the parts of it that are built, each from real data.
+
+**Today's patients** (`pages/doctor/TodaysPatientsPage`): filter tabs with counts (all, waiting, in the room, completed, cancelled or no-show), a day picker, *My patients / Whole clinic*, and a row per visit in the same table-look grid the schedule uses (a table from 1280px, cards below): token, time (the appointment's, or the check-in's), the patient with age, sex, MRN and **allergies always shown**, the reason and clinician, the status, and the action that moves the patient on; vitals, routing, editing and cancelling are in the row's menu. Another day shows that day's record and says it is not live. Nurses keep their own `OPD queue` page.
+
+**Consultation** (`pages/doctor/ConsultationPage`):
+
+| Part | Component | Behaviour |
+| --- | --- | --- |
+| Header | `ConsultationHeader` | Back to today's patients, "Consultation", **"Draft · in progress"** and the elapsed time (for the eye; screen readers hear the start time once), the save state, **Save**, **Complete consultation** (which opens the review and sign step) and a **More** menu holding *Discard draft…*. Sticky from 1024px; below that the actions are a bar fixed to the bottom of the screen, so the save state and *Complete consultation* are never scrolled away. Once the banner has scrolled out of view, the patient's **name, MRN and allergies** stay with the bar (under it from 1024px, above the actions below that) |
+| Banner | `ConsultationBanner` | Avatar, name, age, sex, MRN, blood group, a *Synthetic* tag from the data, **allergies with severity** (red for severe, amber for moderate **and for "severity not recorded"**: not recorded is not mild; neutral only for mild), known conditions, the token, department and day, whether the **latest reading of each kind** this visit is within the **adult reference range** (a display aid; says what it rests on, and that no range is applied to children or to kinds without one) and **View profile**. The allergy list is re-read every minute and when the window regains focus. While the record loads, or if it cannot be read, the allergy names from the consultation itself are shown too, and a failed refresh adds **"Allergy list may be out of date"**: an allergy is never hidden, and an old list is never presented as current, by a failed request. The same chips are shown **where medicines are chosen** (the Prescription card) and **in the review-and-sign step** |
+| This visit | `Card` + `VitalsTiles` | The reason, and each latest vital sign as a tile with its **time and source** ("entered by staff", or "device, unverified"). Blood pressure is the two values together. There is no live feed: a reading is as old as its time says |
+| Past history | `PastHistoryPanel` | Tabs *Summary, Consultations, Medications, Allergies, Investigations*, all from `GET /api/patients/:id/history`. Earlier consultations show what was prescribed, labelled "not a record of what the patient takes". Doctors add, stop and correct entries (dialogs); **every entry shows who entered it and when**, and the stop and entered-in-error dialogs **repeat the entry as it reads** (what, since when, status, who entered it) because two entries can share a name; nothing is deleted. A result is typed as it reads with its unit and range; a plain number is compared with the range by the server. Loading, empty, error-with-retry and refused states. Collapsible |
+| Patient summary | `RecordSummary` | Conditions, allergies, current medicines, results outside their range and the last consultation, **composed by fixed rules from the record and labelled "not AI-generated"**, with what it is based on |
+| Patient profile | `PatientProfileDrawer` | A side sheet: *Overview* (demographics and the summary), *Full history* (the same panel) and *Documents* (photographs, stethoscope recordings, thermal studies). Escape closes it and focus returns to *View profile* |
+| Capture | existing cards | The stethoscope card (upload and playback only, and it says so), clinical photographs |
+| Digital writing pad | `WritingPadCard` | **"Not available yet"**, with what it needs. No control |
+| AI | existing panels | Mana and the AI assistant, unchanged, each saying plainly when its provider is not configured |
+
+**Layout.** Three columns from 1400px (this visit and capture, past history and the note, the patient summary and the AI panels); two from 1280px (the first column joins the third); one below. At 1440px the middle column is about 420px wide, so the diagnosis and prescription editors lay their fields out **by the width of their own column** (container queries), not of the screen: two fields per row at that width, four on a tablet, one on a phone. An end-to-end test measures every field at nine screen widths (1920 down to 390) and fails if one is narrower than 110px or leaves its card.
+
+**Not built, on purpose:** live transcription lines with timestamps, speakers and a waveform, key points, a live stethoscope, a heart-sound waveform, vital-sign sparklines (no series is fetched, and nothing is drawn that is not data), the writing pad and the AI consultation summary. They need the slices in [DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md).
 
 ## 5. Rules the screens follow
 

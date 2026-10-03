@@ -114,6 +114,8 @@ export const PatientSummary = z.object({
   dateOfBirthEstimated: z.boolean(),
   phone: z.string(),
   lastVisitDate: z.string().nullable(),
+  /** synthetic, clinical, or unspecified for records made before the origin was kept. */
+  dataOrigin: z.enum(['synthetic', 'clinical', 'unspecified']),
 })
 export type PatientSummary = z.infer<typeof PatientSummary>
 

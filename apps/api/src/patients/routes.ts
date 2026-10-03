@@ -38,7 +38,7 @@ function newActivationCode(): string {
 
 const escapeLike = (s: string) => s.replace(/[%_\\]/g, '\\$&')
 
-export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) {
+export function registerPatientRoutes(app: FastifyInstance, { db, dataOrigin }: { db: Db; dataOrigin: 'synthetic' | 'clinical' }) {
   // ---- Search / list ----
   app.get('/api/patients', { config: { permission: 'patients:read' } }, async (req) => {
     const me = currentUser(req)
@@ -88,7 +88,7 @@ export function registerPatientRoutes(app: FastifyInstance, { db }: { db: Db }) 
     const created = await db.transaction(async (tx) => {
       const [p] = await tx
         .insert(patients)
-        .values({ ...data, facilityId: me.facilityId, createdBy: me.id })
+        .values({ ...data, facilityId: me.facilityId, createdBy: me.id, dataOrigin })
         .returning()
       await audit(tx, req, { action: 'patient.create', entityType: 'patient', entityId: p!.id, patientId: p!.id, details: { mrn: p!.mrn, duplicateWarningOverridden: !!confirmNotDuplicate } })
       return p!

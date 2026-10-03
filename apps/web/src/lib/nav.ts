@@ -41,7 +41,7 @@ export const NAV: Record<Role, NavItem[]> = {
   ],
   doctor: [
     { to: '/doctor', label: 'Home', icon: LayoutDashboard, end: true },
-    { to: '/doctor/queue', label: 'OPD queue', icon: Stethoscope },
+    { to: '/doctor/queue', label: 'Today’s patients', icon: Stethoscope },
     { to: '/doctor/appointments', label: 'Appointments', icon: CalendarDays },
     { to: '/doctor/consultations', label: 'My consultations', icon: FileSignature },
     { to: '/doctor/patients', label: 'Patients', icon: Users },

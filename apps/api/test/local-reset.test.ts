@@ -71,7 +71,8 @@ describe('local staff password reset (command line)', () => {
         cwd: API_ROOT,
         encoding: 'utf8',
       })
-    const protectedEnvs: Record<string, string>[] = [{ NODE_ENV: 'production' }, { DATA_ORIGIN: 'clinical' }]
+    // A production installation states its data origin (the configuration refuses to load without it), so "production" is tried with each value.
+    const protectedEnvs: Record<string, string>[] = [{ NODE_ENV: 'production', DATA_ORIGIN: 'synthetic' }, { NODE_ENV: 'production', DATA_ORIGIN: 'clinical' }, { DATA_ORIGIN: 'clinical' }]
     for (const env of protectedEnvs) {
       const seed = run(['admin', '--seed-password'], env)
       expect([seed.status, seed.stderr]).toEqual([2, expect.stringContaining('only for local demo installations')])
@@ -81,7 +82,7 @@ describe('local staff password reset (command line)', () => {
       expect(noReason.status).toBe(2)
     }
     // With --break-glass and a reason it gets past the guard and fails only at the (closed) database.
-    const glass = run(['admin', '--break-glass', '--reason', 'locked out'], { NODE_ENV: 'production' })
+    const glass = run(['admin', '--break-glass', '--reason', 'locked out'], { NODE_ENV: 'production', DATA_ORIGIN: 'clinical' })
     expect(glass.status).toBe(1)
     expect(glass.stderr).toMatch(/\[reset\] ERROR/)
   })

@@ -24,7 +24,7 @@ test('the doctor’s Home shows how the day stands from real data, and its short
 
   await signIn(page, 'dr.meera')
   await expect(page).toHaveURL(/\/doctor$/)
-  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: /^Good (morning|afternoon|evening), Dr\. Meera$/ })).toBeVisible()
   await expect(page.getByTestId('signed-in-user')).toContainText('Meera')
 
   // Four numbers, each a real count (not a placeholder), under their labels.
@@ -34,13 +34,13 @@ test('the doctor’s Home shows how the day stands from real data, and its short
   }
   await expect(glance).not.toContainText('Not loaded yet')
 
-  // Today's schedule has the booked appointment, with check-in; the patient who was handed over is ready for the doctor.
+  // Today's schedule has the booked appointment, with check-in; the patient who was handed over is ready for the doctor, in the same list.
   const schedule = page.getByRole('region', { name: 'Today’s schedule' })
   const row = schedule.getByTestId(`appointment-${appt.id}`)
   await expect(row).toContainText(booked.name)
   await expect(row).toContainText(clockText(time))
   await expect(row.getByRole('button', { name: 'Check in' })).toBeVisible()
-  const readyRow = page.getByRole('region', { name: 'Ready for you' }).getByRole('listitem').filter({ hasText: ready.name })
+  const readyRow = schedule.getByRole('listitem').filter({ hasText: ready.name })
   await expect(readyRow).toContainText('Ready for doctor')
   // Whoever is one click from a consultation is identified as precisely as in the queue: MRN, age and sex, allergy status.
   await expect(readyRow).toContainText(ready.mrn)
@@ -51,15 +51,19 @@ test('the doctor’s Home shows how the day stands from real data, and its short
   await expectNoHorizontalOverflow(page)
 
   // The shortcuts are links to pages that exist.
-  await page.getByRole('link', { name: 'Find a patient' }).click()
+  const quick = page.getByRole('region', { name: 'Quick actions' })
+  await quick.getByRole('link', { name: 'Find a patient' }).click()
   await expect(page).toHaveURL(/\/doctor\/patients$/)
   await page.goto('/doctor')
-  await page.getByRole('link', { name: 'All appointments' }).click()
-  await expect(page).toHaveURL(/\/doctor\/appointments$/)
+  await quick.getByRole('link', { name: 'Register patient' }).click()
+  await expect(page).toHaveURL(/\/doctor\/register$/)
   await page.goto('/doctor')
-  await page.getByRole('region', { name: 'Ready for you' }).getByRole('link', { name: 'OPD queue' }).click()
+  await quick.getByRole('link', { name: 'My consultations' }).click()
+  await expect(page).toHaveURL(/\/doctor\/consultations$/)
+  await page.goto('/doctor')
+  await schedule.getByRole('link', { name: 'View all' }).click()
   await expect(page).toHaveURL(/\/doctor\/queue$/)
-  await expect(page.getByRole('heading', { name: 'OPD queue' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Today’s patients' })).toBeVisible()
   await nurse.dispose()
 })
 

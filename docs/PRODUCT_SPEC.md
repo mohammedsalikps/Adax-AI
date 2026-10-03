@@ -44,12 +44,17 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 | Area | Entities |
 | --- | --- |
 | Identity | facilities, departments, users (roles: admin, doctor, nurse, patient), sessions, audit_events (append-only, SHA-256 hash chain since migration 0019) |
-| Patient | patients (MRN sequence), allergies, consents (typed, versioned, withdrawable), patient_activation_codes |
+| Patient | patients (MRN sequence; `data_origin`), allergies, consents (typed, versioned, withdrawable), patient_activation_codes |
+| History | **patient_conditions**, **patient_medications**, **investigation_results** (typed in by staff, never deleted or edited, mistakes marked *entered in error* with a reason; database-enforced) and **patient_history_events** (append-only). Read as one model by `GET /api/patients/:id/history`; see [ADR 0013](adr/0013-patient-history-typed-by-staff-never-deleted.md) |
 | Flow | visits (daily tokens), **visit_status_events**, **appointments**, **appointment_status_events**, **notifications**, **notification_attempts**, observations (vitals; `source`, `validation_status`, device) |
 | Record | encounters (signed snapshot + versioned content hash, or discarded with who/when/why), **encounter_status_events**, diagnoses, prescription_items, encounter_amendments (numbered, hash-linked), **note_insertions** |
 | AI | ai_jobs, ai_runs, ai_prompt_versions, ai_settings_snapshots, ai_models, transcripts, transcript_segments, clinical_facts, ai_recommendations, ai_evidence, ai_review_actions, **mana_questions**, *(planned)* transcript_corrections |
 | Imaging and devices | clinical_images, image_analyses, thermal_* tables, devices, device_assignments, auscultation_recordings, *(planned)* device_batches, alert_rules, alerts, alert_events |
 | ML | evaluation_runs, dataset_memberships, *(planned)* model cards and evaluation datasets for text and speech |
+
+### Patient history (slice V1)
+
+A doctor consulting sees the patient's past history from the record, never from the screen's own data: the active allergies with severity and reaction, known conditions with their start, the medicine list (current first, stopped ones with the date and reason), the latest investigation results with the API's flag against their range, earlier **signed** consultations (never drafts, never discarded drafts) with what was prescribed in them, and the latest value of each vital sign with its time and source. Doctors and nurses read it; **only doctors write** (`history:write`); administrators are refused; another facility's patient is "not found" and the attempt is audited. Entries say who entered them and whether they are synthetic. A mistake is **marked as entered in error** with a reason (final, kept, hidden from the history); nothing is deleted and content never changes (a database trigger enforces it). The medicine list is not the prescriptions: earlier prescriptions are shown separately and labelled. There is no laboratory or pharmacy feed; everything is typed in.
 
 ## 4. State machines
 

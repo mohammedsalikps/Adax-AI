@@ -13,6 +13,96 @@ What the Doctor App actually does today, and the plan for its first complete con
 | 3. Record lifecycle and integrity | `26db008` |
 | 4. Appointments, check-in, schedules, notifications, and the design foundation | `4be6256` |
 | 4a. Authentication and application entry (a dedicated slice before the consultation workstation) | `5f0505d` |
+| 4A / V1. Know the patient: patient history, today's patients, the consultation workstation, a synthetic hospital dataset | the commit titled "Doctor App slice 4A" (see `git log`) |
+
+## Slice 4A (plan item V1): know the patient — history, today's patients and the consultation workstation
+
+**Naming:** the owner's "Slice 4A" is plan item **V1** in [DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md). The earlier "slice 4a" in this file (authentication and application entry) is a different, already committed slice. **Basis:** [DOCTOR_APP_AUDIT.md](DOCTOR_APP_AUDIT.md) found that a doctor consulting saw names only: no conditions, no medicine list, no results, no earlier consultations. This slice adds them end to end (database, API, authorization, audit, screens), a synthetic hospital dataset that goes through the real API, and the consultation workstation described in [DESIGN.md](DESIGN.md) §4b. Decisions: [ADR 0013](adr/0013-patient-history-typed-by-staff-never-deleted.md). What is real in the AI features, with evidence: [AI_STATUS.md](AI_STATUS.md). Hazards: [safety/RISK_REGISTER.md](safety/RISK_REGISTER.md); datasets: [safety/DATASETS.md](safety/DATASETS.md).
+
+**It adds no AI, device, thermal or booking function, and changes none.** Nothing here is clinically validated, a medical device, or production-ready; all data is synthetic.
+
+### Implemented
+
+**Database (two additive migrations)**
+
+| Migration | What it changes |
+| --- | --- |
+| `0023_patient_history` | `patients.data_origin` (`unspecified` / `synthetic` / `clinical`; records in a facility named "(synthetic)" backfilled as synthetic); tables `patient_conditions`, `patient_medications`, `investigation_results` (who entered, when, `source`, `data_origin`, status, reason) and `patient_history_events` (append-only change log); triggers that make an entry's **content immutable and undeletable** (only status, its reason and a medicine's stop date may change; "entered in error" is final; error code `AX008` → HTTP 409 `history_entry_locked`); partial unique indexes against duplicate open conditions, current medicines and final results; `meta.append_only_tables` registration of the change log |
+| `0024_history_guards` | Written after review, so 0023 (already applied to the development database) was not edited: a medicine marked as entered in error keeps the stop date it had; `TRUNCATE` of the three entry tables is refused by trigger for everyone including the superuser |
+
+**API:** `GET /api/patients/:id/history` (one read model: active allergies, conditions, medicines current-first, results — the 30 most recent plus the newest of every test — signed consultations, latest value of each vital sign with time and source; counts of what is not returned); `POST /api/patients/:id/conditions | medications | investigations` and `…/:entryId/status`. `history:write` is a doctor's permission; doctors and nurses read; administrators are refused; another facility's patient, or an entry that is not this patient's, is "not found" and the attempt is audited with its reason. The API computes a result's flag (a number that disagrees with the result as it reads is refused), takes an entry's origin from its patient, and writes the change-log row in the same transaction. A production deployment must state `DATA_ORIGIN`. The audit log holds ids and statuses, never the clinical text.
+
+**Synthetic hospital dataset** (`npm run demo:hospital`): 12 fictional patients, 2 extra staff, histories and today's queue and schedule in every state, all made through the real API in-process; idempotent, resumable, and it refuses to run in production, outside a synthetic deployment or facility, or beside a patient marked clinical ([DATASETS.md](safety/DATASETS.md)).
+
+**Doctor App screens:** *Today's patients* (tabs with counts, day picker, row menu, allergies on every row); the doctor's Home with real counts and the day in time order; the **consultation workstation** (header with "Draft · in progress" and elapsed time, patient banner with allergies and severity, vital-sign tiles with time and source, **Past history** with five tabs, a rule-composed patient summary labelled "not AI-generated", the profile side sheet, and the existing AI and capture panels); doctors add, stop and correct history entries. Accessible tabs and menu components. See DESIGN.md §4b for each part.
+
+### Tests
+
+New or extended: API `history` (26 tests: permissions, facility isolation and audit, validation, duplicates, status changes, the result flag and number rule, newest-per-test, read model, database triggers incl. TRUNCATE and the medicine stop date), `hospital-seed` (10: dataset consistent, today's queue in every state, history read back, signed records verify, idempotent, **resumes a half-done run**, recognised by name and birth date, class-aware allergy check, refuses production / non-synthetic / clinical beside it / unmarked facility), `config` (production requires `DATA_ORIGIN`); web unit `vitals` (4: the latest reading of each kind, status, the facility's clock); end-to-end `history.spec.ts` (see the table below).
+
+### Verified test results (slice 4A, 3 Oct 2026)
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm run lint` | exit 0 |
+| `npm run test:api` | 32 files, **352 passed**, 0 failed (before this slice: 30 files, 315). An earlier full run on the same tree had two files time out while the machine was loaded (the migrator suite's clean-up hook at 60 s and the reset-command test at 30 s; both passed alone in 27 s, and the full suite then passed in 408 s). The reset-command test also had to be told to state `DATA_ORIGIN` for a "production" install, which is now required |
+| `npm run test:web` | **27 passed** (before: 23) |
+| `npm run test:thermal` | **32 passed** |
+| `vite build` | succeeds (the usual chunk-size notice) |
+| `npx playwright test --workers=4` | **150 passed, 0 failed, 0 flaky, 14 skipped** on the final tree (7.1 min; slowest test 40.7 s of the 60 s default). Run with four workers, not the default six, see below. The skips are by design: the nine screen-width layout tests on the phone project (they set their own sizes), the desktop-only keyboard test in `auth` and two in `entry` on the phone project, and the drawer test on desktop and the table-width test on the phone project in `doctor-home`. Desktop and phone profiles both run everything else, with axe (WCAG 2.2 A and AA) on every screen the specs visit |
+
+**About the end-to-end suite and load.** The suite (164 tests over two projects, one API process and one database) is load-sensitive on this machine. Three full runs at the default six workers during this slice each had two to four failures. Some were real and are fixed (the Home row cap and the shared-database clean-up, below); the rest were **timing failures, a different set each time**, in tests that passed alone (for example `doctor-workflow` 25 s alone, 86 s under load; an `entry` sign-out test 35 s alone; the `consent` journey; a sign-in focus check). I did not raise any timeout to hide them, except: two of this slice's own tests that wait for the data layer's retry back-off (1 s and 2 s) got an explicit 120 s budget, as `consent` and `devices` did before. Reducing the load (four workers) gave a clean full run; the cause is one single-threaded API process that every test, and every password check, goes through. **Treat the default six workers as unreliable on this machine, and a failure in a long test as a reason to re-run it alone before suspecting the product.** Real defects the runs did expose are in the table below.
+
+### Dev-environment actions (what I did to the development stack, and what was protected)
+
+- The development database `adaxai` was **not reset**. Before migration 0023 it was copied inside the server to `adaxai_backup_20261003_pre0023` (`CREATE DATABASE … TEMPLATE adaxai`; row counts matched: 5 patients, 4 users, 7 visits, 6 encounters of which 3 signed, 832 audit events, 23 migrations). It is kept. The last cold file backup is `backups/adaxai-2026-10-03T02-41-04` (before migration 0022); backups are not in Git.
+- Migrations 0023 and 0024 were applied to `adaxai`, `adaxai_test` and `adaxai_e2e` by the migrator, which checks each database's recorded identity first. The test database was once rolled back by an identity-guarded script to apply a corrected 0023 before it reached the development database.
+- `npm run demo:hospital` was run on the development database once (12 patients, 2 staff) and again after the seed was hardened (it changed nothing). The shared PostgreSQL server was never stopped. The development API and web server of this checkout were restarted once (the API had briefly run new code before the database was migrated); the second working copy `ADAXAI-MVP-secondary` (nurse, patient and admin apps, its own databases and ports) was not touched. Expect merge work with it in `apps/web/src/lib/nav.ts`, this file and the migration numbering.
+- The seed's patients created on the development database before the phone range was changed keep their original numbers (`9000100001`…); new databases get numbers from a range no operator issues.
+
+### Failures found during this slice, and what was done
+
+| Failure | Classification | Action |
+| --- | --- | --- |
+| A CHECK constraint would have turned "stopped → entered in error" into a server error | **Product defect** (found by a database test) | Relaxed in 0023 before it reached the development database |
+| Home hid ready patients behind a row cap; completed visits cluttered it | Product defect | Ready and in-room patients are always listed; completed and closed are in the counts and under Today's patients |
+| An actions menu closed on a late scroll event, and could be clipped by its card | **Product defect** | Portal, `preventScroll`, follows its button |
+| A row menu opened from the profile sheet was inert (everything outside a modal dialog is) | **Product defect** found in review, reproduced by a new test that fails without the fix | The list is drawn inside the dialog that holds its button, with the sheet's transform measured |
+| Enter pressed twice saved twice | **Product defect** found in review | A synchronous single-flight latch; test fails without it |
+| The e2e suite shares one database: tests that left patients "ready" pushed other specs' rows off Home; extra sign-ins hit the per-account rate limit; two assertions passed only because other tests had left someone in the room; two waits were shorter than the data layer's own retries | **Test defects** (not weakened: each test now cleans up, shares one API session per account, asserts on the patient rather than the list, and waits for the retry window it is about) | See the spec |
+| Playwright's service worker hid `page.route` | Test infrastructure | Contexts with the service worker blocked |
+| Home hid a booked appointment when eight or more patients were ready (it always lists those, then fills to eight rows) | **Product design gap** found by the end-to-end run | The next three other rows now always stay in view, however many are waiting; DESIGN.md updated |
+| `record-lifecycle` asserted on the record's page while the list was still on screen (the address changes first; 34 "Signed …" lines matched, and a strict-mode match failure is not retried) | **Test defect** (a race in a slice 3 test, exposed by load) | Waits for the record's own heading first |
+| A pg deprecation warning ("query while another is running") during the seed test, from existing verification code that runs queries concurrently on one transaction client | **Existing defect**, not from this slice | Flagged as a separate task; not changed here |
+
+### Pre-commit adversarial review (slice 4A)
+
+**Method:** read-only reviewers as in earlier slices: round 1 one on the API and database, one on the web screens (both asked to break authorization, isolation, audit, immutability, clinical safety of what a doctor sees, accessibility, responsive layout and test quality); round 2 one on the fixes. Their reports are theirs; I checked each finding against the code before acting. Round 2's fixes were **not re-reviewed by a further round**.
+
+**Round 1, found and fixed:** a result's flag could disagree with the value shown (a "number" field separate from the text); the newest result of a test could fall off the list behind a long run of another; `DATA_ORIGIN` defaulted to synthetic in production and the seed's guard was weak (guards added, entries now take the patient's origin); a NUL character, a year-0000 date and reactivating a resolved condition beside an open one were server errors, now messages; an entry that was not the patient's was refused without being audited; `TRUNCATE` and a medicine stop date slipped past the triggers (0024); the seed was not transactional or resumable and recognised patients by phone; the banner could show a stale or failed allergy list as current; the three-column layout squeezed the editors at 1400–1535px (now container queries, measured at nine widths); entered-in-error dialogs did not say which entry; the UI claimed each entry names who entered it but did not show it; long names overflowed the banner; the vitals badge counted superseded readings; the allergies and the save state left the screen when scrolling (patient strip; bottom action bar below 1024px; allergies at prescribing and signing); walk-in times used the browser's clock; "Completed today" used the AI colour; duplicate element ids, dangling `aria-controls`, an ambiguous "Hide" button.
+
+**Round 2, found and fixed:** a result the system could not compare looked the same as a normal one (now "Not compared with a range", and the summary says so); row menus inert inside the profile sheet; the bottom bar's room was a guess (now measured; capped at 45% of the screen); a NUL in a status reason; a blood-pressure tile pairing two times under one; equal-time vital signs ordered differently by the API and the screen; an offline refresh not flagged as stale; the summary listing superseded abnormal results; the audit detail carried a clinical classification (the flag); the seed's two-step entries (a status change, a stop) were not completed on a re-run and its facility guard did not cover the accounts it acts as.
+
+**Accepted and documented:**
+- A background refresh of the history (every two minutes while a consultation is open, and on window focus) is audited like any read, so those reads cannot be told from deliberate ones in the audit log.
+- A seed run that fails *inside* an earlier consultation, between its visit and its signature, leaves an unsigned draft the next run does not clean up (discard it in the app first). Stated in the seed's header.
+- `TodaysPatientsPage` keeps "today" until the data refreshes (stale across midnight), and the dialogs' default dates are the browser's, not the facility's.
+- The tab-count assertion in the end-to-end suite is a lower bound (counts change under parallel tests).
+
+### Remaining limitations
+
+- **Everything in the history is typed in by staff.** No laboratory or pharmacy feed, no coded terminology, no verification against a source document, no reconciliation step, no interaction checking. Only doctors write.
+- **A result is compared with a range only if it is a plain number with limits** (or has a reading); anything else says it was not compared.
+- **No allergy-versus-prescription check** in the prescription editor (the allergies are shown beside it; the screen says no checking is performed).
+- **Allergies are not under the same immutability rules** (existing behaviour).
+- **Not built, on purpose** (each shows "not available yet" or is absent): live transcription lines, key points, waveform, live stethoscope, vital-sign sparklines, the writing pad, the AI consultation summary.
+- **Not evaluated:** the screens have not been tried by clinicians; Firefox, Safari, real devices, a screen reader by hand, high-contrast mode and zoom beyond the automated checks were not covered.
+- This development machine's `.env` has both hosted AI keys set (see AI_STATUS.md): a decision for the owner.
+
+### Browser verification
+
+Automated (Playwright, real Chromium, desktop and a 412 × 915 phone profile): the workstation at **1920, 1536, 1440, 1400, 1399, 1280, 1024, 768 and 390 px** — column count, no horizontal overflow, every diagnosis and prescription field at least 110 px wide and inside its card, axe (WCAG 2.2 A and AA) with no violations; the header and row menus (inside the screen, against their buttons, in the profile sheet), the patient strip and bottom bar, keyboard use of tabs and menus, and the error and stale states with forced failures. Looked at by eye: screenshots from the development web server at 1440 × 900, 1280 × 800 and 390 × 844 (home, today's patients, consultation top and scrolled, profile sheet).
 
 ## Slice 4a: authentication and application entry
 
@@ -919,8 +1009,8 @@ The demo password was read from `.env` inside the script and never printed.
 
 The Doctor App is the hero product; work is organised as vertical slices through every layer ([DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md)):
 
-1. **V1: know the patient.** Dashboard and *Today's patients* as in the reference direction; the consultation workstation shell; a longitudinal history model (conditions, medicines, investigations) with the *Past History* panel and a profile slide-over; a synthetic hospital dataset.
-2. **V2: capture the consultation.** Local-first AI provider registry ([ADR 0012](adr/0012-local-first-ai-hosted-providers-opt-in.md)); timestamped, language-tagged transcript with doctor-assigned speakers; waveform; extended extraction; *Key Points (AI)*; evaluation harness.
+1. ~~**V1: know the patient.**~~ Done (slice 4A above): dashboard and *Today's patients*, the consultation workstation, a longitudinal history model with the *Past History* panel and a profile sheet, a synthetic hospital dataset.
+2. **V2: capture the consultation (recommended next, not started).** Local-first AI provider registry ([ADR 0012](adr/0012-local-first-ai-hosted-providers-opt-in.md)); timestamped, language-tagged transcript with doctor-assigned speakers; waveform; extended extraction; *Key Points (AI)*; evaluation harness.
 3. **V3: summarise, review, approve.** A sourced consultation summary, the review panel, signing and the patient's view.
 4. Then: Mana workstation, devices (reading states, labelled simulators, stethoscope boundary), thermal in the consultation, prescription and documents, the consultation audit trail, handwriting.
 

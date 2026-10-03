@@ -21,4 +21,5 @@ export const LIFECYCLE_REFUSALS: Record<string, { code: string; message: string 
   AX005: { code: 'visit_in_consultation', message: 'The patient is with the doctor; the doctor and department cannot change now.' },
   AX006: { code: 'invalid_appointment_change', message: 'This appointment change is not allowed. Refresh and try again.' },
   AX007: { code: 'appointment_closed', message: 'This appointment is closed and cannot be changed.' },
+  AX008: { code: 'history_entry_locked', message: 'This history entry cannot be changed. Mark it as entered in error and enter a new one if it is wrong.' },
 }

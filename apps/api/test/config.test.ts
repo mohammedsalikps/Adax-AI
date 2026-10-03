@@ -13,6 +13,14 @@ describe('loadConfig', () => {
     expect(c.thermalUrl).toBe('http://127.0.0.1:8001')
   })
 
+  it('says what the data is: synthetic by default in development, and stated explicitly in production', () => {
+    expect(loadConfig({ DB_APP_PASSWORD: 'x' }).dataOrigin).toBe('synthetic')
+    // An unset variable must not label real records as synthetic.
+    expect(() => loadConfig({ DB_APP_PASSWORD: 'x', NODE_ENV: 'production' })).toThrow(/DATA_ORIGIN/)
+    expect(loadConfig({ DB_APP_PASSWORD: 'x', NODE_ENV: 'production', DATA_ORIGIN: 'clinical' }).dataOrigin).toBe('clinical')
+    expect(loadConfig({ DB_APP_PASSWORD: 'x', NODE_ENV: 'production', DATA_ORIGIN: 'synthetic' }).dataOrigin).toBe('synthetic')
+  })
+
   it('rejects invalid values and never echoes secrets', () => {
     const secret = 'super-secret-value-123'
     let message = ''

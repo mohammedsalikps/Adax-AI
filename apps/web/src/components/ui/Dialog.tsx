@@ -5,7 +5,28 @@ import { type ReactNode, useEffect, useId, useRef } from 'react'
  * Modal dialog on the native <dialog> element: focus is trapped and restored
  * by the browser, Escape closes it, and the page behind is inert.
  */
-export function Dialog({ open, onClose, title, children, footer, wide, dismissible = true }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; dismissible?: boolean }) {
+export function Dialog({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  wide,
+  dismissible = true,
+  placement = 'center',
+  testId,
+}: {
+  open: boolean
+  onClose: () => void
+  title: ReactNode
+  children: ReactNode
+  footer?: ReactNode
+  wide?: boolean
+  dismissible?: boolean
+  /** `right`: a panel from the right edge (a side sheet) that keeps the page visible behind it; everything else is the same dialog. */
+  placement?: 'center' | 'right'
+  testId?: string
+}) {
   const ref = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   // `dismissible: false` (a request is in flight) keeps the dialog open: Escape and the close button do nothing, and if the
@@ -35,11 +56,16 @@ export function Dialog({ open, onClose, title, children, footer, wide, dismissib
         e.preventDefault()
         if (latest.current.dismissible) onClose()
       }}
-      className={`m-auto max-h-[90dvh] w-[calc(100%-2rem)] overflow-hidden ${wide ? 'max-w-3xl' : 'max-w-lg'} rounded-2xl border border-line bg-surface p-0 text-ink shadow-pop backdrop:bg-ink/40`}
+      data-testid={testId}
+      className={
+        placement === 'right'
+          ? 'animate-slide-in-right m-0 mr-0 ml-auto h-dvh max-h-dvh w-[min(100%,32rem)] max-w-none overflow-hidden rounded-none rounded-l-2xl border-l border-line bg-surface p-0 text-ink shadow-pop backdrop:bg-ink/40'
+          : `m-auto max-h-[90dvh] w-[calc(100%-2rem)] overflow-hidden ${wide ? 'max-w-3xl' : 'max-w-lg'} rounded-2xl border border-line bg-surface p-0 text-ink shadow-pop backdrop:bg-ink/40`
+      }
     >
       {open && (
         // Header and footer stay fixed; only the body scrolls (min-h-0 lets it shrink).
-        <div className="flex max-h-[90dvh] flex-col">
+        <div className={placement === 'right' ? 'flex h-dvh max-h-dvh flex-col' : 'flex max-h-[90dvh] flex-col'}>
           <div className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-3.5">
             <h2 id={titleId} className="text-lg font-semibold">
               {title}

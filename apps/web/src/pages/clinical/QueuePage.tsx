@@ -43,7 +43,7 @@ function StatusChangeButton({ visit, to, label, icon, variant = 'secondary' }: {
   )
 }
 
-function CancelDialog({ visit, onClose }: { visit: Visit; onClose: () => void }) {
+export function CancelDialog({ visit, onClose }: { visit: Visit; onClose: () => void }) {
   const toast = useToast()
   const [reason, setReason] = useState('')
   const change = useVisitMutation<{ status: VisitStatus; from: VisitStatus; reason: string }>(visit.id, '/status')
@@ -77,7 +77,7 @@ function CancelDialog({ visit, onClose }: { visit: Visit; onClose: () => void })
   )
 }
 
-function EditVisitDialog({ visit, onClose }: { visit: Visit; onClose: () => void }) {
+export function EditVisitDialog({ visit, onClose }: { visit: Visit; onClose: () => void }) {
   const toast = useToast()
   const depts = useDepartments()
   const doctors = useDoctors()

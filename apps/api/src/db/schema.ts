@@ -186,10 +186,13 @@ export const patients = pgTable(
     emergencyContactName: text('emergency_contact_name'),
     emergencyContactPhone: text('emergency_contact_phone'),
     noKnownAllergies: boolean('no_known_allergies').notNull().default(false),
+    /** synthetic or clinical, from DATA_ORIGIN when the patient was registered; 'unspecified' for records that predate it. */
+    dataOrigin: text('data_origin').notNull().default('unspecified'),
     createdBy: uuid('created_by').references(() => users.id),
     ...timestamps,
   },
   (t) => [
+    check('patients_data_origin_check', sql`data_origin in ('unspecified', 'synthetic', 'clinical')`),
     index('patients_search_name_trgm').using('gin', sql`${t.searchName} gin_trgm_ops`),
     index('patients_phone_idx').on(t.phone),
     index('patients_dob_idx').on(t.dateOfBirth),
@@ -1453,4 +1456,166 @@ export const notificationAttempts = pgTable(
     attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('notification_attempts_uq').on(t.notificationId, t.attemptNo), check('notification_attempts_outcome_check', sql`outcome in ('delivered', 'undeliverable', 'failed')`)],
+)
+
+// ---------------------------------------------------------------------------
+// Longitudinal patient history (slice V1): conditions, medicines, results.
+// Typed in by staff (no laboratory or pharmacy feed). Never deleted; a mistake
+// is marked "entered in error" with a reason. Content cannot change after it is
+// entered (a trigger enforces it, migration 0023); only status can. Every
+// change is written to patient_history_events (append-only) and audited.
+// ---------------------------------------------------------------------------
+
+export const conditionStatus = pgEnum('condition_status', ['active', 'controlled', 'resolved', 'entered_in_error'])
+
+export const patientConditions = pgTable(
+  'patient_conditions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    name: text('name').notNull(),
+    /** ICD-10 as typed; format-checked only. */
+    code: text('code'),
+    sinceYear: integer('since_year').notNull(),
+    sinceMonth: integer('since_month'),
+    status: conditionStatus('status').notNull().default('active'),
+    note: text('note'),
+    /** Why the entry was marked as an error. */
+    statusReason: text('status_reason'),
+    source: text('source').notNull().default('clinician_entered'),
+    dataOrigin: text('data_origin').notNull(),
+    enteredBy: uuid('entered_by')
+      .notNull()
+      .references(() => users.id),
+    enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('patient_conditions_patient_idx').on(t.patientId, t.status),
+    // The same condition is not on the list twice at once (a double click, or two people entering it).
+    uniqueIndex('patient_conditions_open_name_uq')
+      .on(t.patientId, sql`lower(${t.name})`)
+      .where(sql`status in ('active', 'controlled')`),
+    check('patient_conditions_since_check', sql`since_year between 1900 and 2200 and (since_month is null or since_month between 1 and 12)`),
+    check('patient_conditions_text_check', sql`length(btrim(name)) between 1 and 120 and length(coalesce(note, '')) <= 300 and length(coalesce(status_reason, '')) <= 200`),
+    check('patient_conditions_code_check', sql`code is null or code ~ '^[A-Z][0-9][0-9A-Z]([.][0-9A-Z]{1,4})?$'`),
+    check('patient_conditions_error_reason_check', sql`status <> 'entered_in_error' or length(btrim(coalesce(status_reason, ''))) >= 3`),
+    check('patient_conditions_source_check', sql`source in ('clinician_entered') and data_origin in ('synthetic', 'clinical')`),
+  ],
+)
+
+export const medicationStatus = pgEnum('medication_status', ['current', 'stopped', 'entered_in_error'])
+
+export const patientMedications = pgTable(
+  'patient_medications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    drugName: text('drug_name').notNull(),
+    strength: text('strength'),
+    form: text('form'),
+    dose: text('dose').notNull(),
+    route: text('route'),
+    frequency: text('frequency').notNull(),
+    startedOn: date('started_on'),
+    stoppedOn: date('stopped_on'),
+    status: medicationStatus('status').notNull().default('current'),
+    /** What it is for. */
+    reason: text('reason'),
+    /** Why it was stopped, or why the entry was marked as an error. */
+    statusReason: text('status_reason'),
+    source: text('source').notNull().default('clinician_entered'),
+    dataOrigin: text('data_origin').notNull(),
+    enteredBy: uuid('entered_by')
+      .notNull()
+      .references(() => users.id),
+    enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('patient_medications_patient_idx').on(t.patientId, t.status),
+    uniqueIndex('patient_medications_current_uq')
+      .on(t.patientId, sql`lower(${t.drugName})`, sql`lower(coalesce(${t.strength}, ''))`, sql`lower(${t.dose})`, sql`lower(${t.frequency})`)
+      .where(sql`status = 'current'`),
+    check('patient_medications_text_check', sql`length(btrim(drug_name)) between 1 and 120 and length(btrim(dose)) between 1 and 60 and length(btrim(frequency)) between 1 and 60 and length(coalesce(reason, '')) <= 200 and length(coalesce(status_reason, '')) <= 200`),
+    check('patient_medications_dates_check', sql`stopped_on is null or started_on is null or stopped_on >= started_on`),
+    check('patient_medications_stop_check', sql`status <> 'stopped' or length(btrim(coalesce(status_reason, ''))) >= 3`),
+    // A stop date belongs to a medicine that was stopped (it stays if that entry is later marked as an error).
+    check('patient_medications_stopped_on_check', sql`stopped_on is null or status in ('stopped', 'entered_in_error')`),
+    check('patient_medications_error_reason_check', sql`status <> 'entered_in_error' or length(btrim(coalesce(status_reason, ''))) >= 3`),
+    check('patient_medications_source_check', sql`source in ('clinician_entered') and data_origin in ('synthetic', 'clinical')`),
+  ],
+)
+
+export const investigationStatus = pgEnum('investigation_status', ['final', 'entered_in_error'])
+
+export const investigationResults = pgTable(
+  'investigation_results',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    testName: text('test_name').notNull(),
+    valueText: text('value_text').notNull(),
+    valueNumber: numeric('value_number', { mode: 'number' }),
+    unit: text('unit'),
+    refLow: numeric('ref_low', { mode: 'number' }),
+    refHigh: numeric('ref_high', { mode: 'number' }),
+    refText: text('ref_text'),
+    /** normal, low, high, abnormal or unknown: set by the API from the numbers, or from the clinician's reading. */
+    flag: text('flag').notNull().default('unknown'),
+    collectedOn: date('collected_on').notNull(),
+    resultedOn: date('resulted_on'),
+    status: investigationStatus('status').notNull().default('final'),
+    note: text('note'),
+    statusReason: text('status_reason'),
+    source: text('source').notNull().default('clinician_entered'),
+    dataOrigin: text('data_origin').notNull(),
+    enteredBy: uuid('entered_by')
+      .notNull()
+      .references(() => users.id),
+    enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('investigation_results_patient_idx').on(t.patientId, t.collectedOn),
+    uniqueIndex('investigation_results_dedup_uq')
+      .on(t.patientId, sql`lower(${t.testName})`, t.collectedOn, sql`lower(${t.valueText})`)
+      .where(sql`status = 'final'`),
+    check('investigation_results_text_check', sql`length(btrim(test_name)) between 1 and 120 and length(btrim(value_text)) between 1 and 60 and length(coalesce(unit, '')) <= 20 and length(coalesce(ref_text, '')) <= 60 and length(coalesce(note, '')) <= 300 and length(coalesce(status_reason, '')) <= 200`),
+    check('investigation_results_flag_check', sql`flag in ('normal', 'low', 'high', 'abnormal', 'unknown')`),
+    check('investigation_results_range_check', sql`ref_low is null or ref_high is null or ref_low <= ref_high`),
+    check('investigation_results_dates_check', sql`resulted_on is null or resulted_on >= collected_on`),
+    check('investigation_results_error_reason_check', sql`status <> 'entered_in_error' or length(btrim(coalesce(status_reason, ''))) >= 3`),
+    check('investigation_results_source_check', sql`source in ('clinician_entered') and data_origin in ('synthetic', 'clinical')`),
+  ],
+)
+
+/** One row per creation or status change of a history entry: who, when, why. Append-only. */
+export const patientHistoryEvents = pgTable(
+  'patient_history_events',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    entityType: text('entity_type').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    action: text('action').notNull(),
+    fromStatus: text('from_status'),
+    toStatus: text('to_status'),
+    reason: text('reason'),
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('patient_history_events_patient_idx').on(t.patientId, t.id),
+    index('patient_history_events_entity_idx').on(t.entityType, t.entityId),
+    check('patient_history_events_entity_check', sql`entity_type in ('condition', 'medication', 'investigation') and action in ('created', 'status_changed')`),
+  ],
 )

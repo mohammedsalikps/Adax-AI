@@ -39,8 +39,8 @@ test('doctor consults, writes the note, prescribes, signs, prints and amends; nu
   await expect(page.getByLabel('Assessment')).toHaveValue('Acute pharyngitis, likely viral.')
   await expect(page.getByLabel('Medicine', { exact: true })).toHaveValue('Paracetamol')
 
-  // Review and sign requires the attestation.
-  await page.getByRole('button', { name: 'Review and sign' }).click()
+  // Completing the consultation opens the review, which requires the attestation.
+  await page.getByRole('button', { name: 'Complete consultation' }).click()
   const review = page.getByRole('dialog', { name: 'Review and sign' })
   await expect(review).toContainText('Acute pharyngitis (J02.9)')
   await expect(review.getByRole('button', { name: 'Sign and complete' })).toBeDisabled()
@@ -69,9 +69,15 @@ test('doctor consults, writes the note, prescribes, signs, prints and amends; nu
   await amend.getByRole('button', { name: 'Add amendment' }).click()
   await expect(page.getByRole('region', { name: 'Amendments' })).toContainText('Clarify fever threshold')
 
-  // The visit left the doctor's open queue.
+  // The visit left the open part of the doctor's list (waiting, in the room) and is under Completed.
   await page.goto('/doctor/queue')
-  await expect(page.getByRole('listitem').filter({ hasText: p.name })).toHaveCount(0)
+  const tabs = page.getByRole('tablist', { name: 'Which patients' })
+  for (const open of [/^Waiting/, /^In the room/]) {
+    await tabs.getByRole('tab', { name: open }).click()
+    await expect(page.getByRole('listitem').filter({ hasText: p.name })).toHaveCount(0)
+  }
+  await tabs.getByRole('tab', { name: /^Completed/ }).click()
+  await expect(page.getByRole('listitem').filter({ hasText: p.name })).toHaveCount(1)
 
   // The nurse sees the saved record in the timeline and can read (not edit) it.
   const nurseCtx = await browser.newContext(isMobile ? { viewport: page.viewportSize()!, isMobile: true, hasTouch: true } : {})

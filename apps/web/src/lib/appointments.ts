@@ -27,6 +27,12 @@ export function fmtClock(hhmm: string): string {
   return new Intl.DateTimeFormat('en-IN', { timeStyle: 'short' }).format(new Date(2000, 0, 1, h, m))
 }
 
+/** The time of day of an instant on the facility's clock as HH:MM (24 hours), so walk-ins and appointments are on one clock and sort together. */
+export function clockHHMM(iso: string, timezone?: string): string {
+  const parts = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timezone && { timeZone: timezone }) }).formatToParts(new Date(iso))
+  return `${parts.find((x) => x.type === 'hour')!.value}:${parts.find((x) => x.type === 'minute')!.value}`
+}
+
 export const fmtWhen = (localDate: string, localTime: string) => `${fmtDate(localDate)}, ${fmtClock(localTime)}`
 
 /** An instant shown on a named timezone (messages and the portal carry the clinic's timezone). */

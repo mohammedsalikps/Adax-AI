@@ -132,7 +132,7 @@ test('each application signs in its own people and sends them to the right works
   const patient = await patientWithAccount(baseURL!)
   await signIn(page, 'dr.meera')
   await expect(page).toHaveURL(at('/doctor'))
-  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /^Good (morning|afternoon|evening), Dr\. Meera$/ })).toBeVisible()
   await signOut(page)
   // Nurses are clinical staff: the same front door, their own workspace.
   await signIn(page, 'nurse.anil', DEMO_PASSWORD, { app: 'doctor' })

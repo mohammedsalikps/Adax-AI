@@ -15,10 +15,18 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, CircleCheck, CloudUpload, FilePlus2, LoaderCircle, Plus, Printer, Sparkles, Stethoscope, Trash2 } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { AllergyItems } from '../../components/clinical/AllergyItems.tsx'
+import { ConsultationBanner, PatientStrip } from '../../components/clinical/ConsultationBanner.tsx'
+import { ConsultationHeader, useOnScreen } from '../../components/clinical/ConsultationHeader.tsx'
+import { PastHistoryPanel } from '../../components/clinical/PastHistory.tsx'
 import { PatientBanner } from '../../components/clinical/PatientBanner.tsx'
+import { PatientProfileDrawer } from '../../components/clinical/PatientProfileDrawer.tsx'
+import { RecordSummary } from '../../components/clinical/RecordSummary.tsx'
 import { DiscardDraftDialog, RecordVerificationCard, StatusHistoryCard } from '../../components/clinical/RecordLifecycle.tsx'
 import { Timeline } from '../../components/clinical/Timeline.tsx'
-import { RecordVitalsDialog, VitalsInline } from '../../components/clinical/Vitals.tsx'
+import { RecordVitalsDialog, VitalsInline, VitalsTiles } from '../../components/clinical/Vitals.tsx'
+import { WritingPadCard } from '../../components/clinical/WorkstationCards.tsx'
+import { Menu } from '../../components/ui/Menu.tsx'
 import { Button } from '../../components/ui/Button.tsx'
 import { Dialog } from '../../components/ui/Dialog.tsx'
 import { Alert, Badge, Spinner } from '../../components/ui/Feedback.tsx'
@@ -39,7 +47,7 @@ export interface Draft {
   prescription: PrescriptionItemInput[]
 }
 
-/** Lets other panels (Mana, the AI assistant) insert reviewed AI text into the note, recorded on the server. */
+/** Lets other panels (Mana, the AI assistant, the photographs) insert reviewed AI text into the note, recorded on the server. */
 export type SidePanel = (e: Encounter, inserter: NoteInserter) => ReactNode
 
 /** Where AI-produced text in the note came from (shown while editing, before signing and on the signed record). */
@@ -92,15 +100,17 @@ function DiagnosesEditor({ items, onChange }: { items: DiagnosisInput[]; onChang
       {!items.length && <p className="text-sm text-ink-muted">No diagnosis yet. At least one is needed to sign (provisional is fine).</p>}
       <ul className="space-y-3">
         {items.map((d, i) => (
-          <li key={i} className="grid grid-cols-1 gap-3 rounded-lg border border-line p-3 sm:grid-cols-[1fr_8rem_9rem_auto] sm:items-end">
-            <TextField label={`Diagnosis ${i + 1}`} value={d.description ?? ''} onChange={(e) => set(i, { description: e.target.value })} />
+          <li key={i} className="grid grid-cols-1 gap-3 rounded-lg border border-line p-3 @sm:grid-cols-2 @2xl:grid-cols-[minmax(10rem,1fr)_8rem_9rem_auto] @2xl:items-end">
+            <TextField label={`Diagnosis ${i + 1}`} value={d.description ?? ''} onChange={(e) => set(i, { description: e.target.value })} className="@sm:col-span-2 @2xl:col-span-1" />
             <TextField label="ICD-10 (optional)" value={d.code ?? ''} onChange={(e) => set(i, { code: e.target.value })} spellCheck={false} />
             <SelectField label="Type" value={d.kind ?? 'primary'} onChange={(e) => set(i, { kind: e.target.value as DiagnosisInput['kind'] })}>
               <option value="provisional">Provisional</option>
               <option value="primary">Primary</option>
               <option value="secondary">Secondary</option>
             </SelectField>
-            <Button variant="ghost" aria-label={`Remove diagnosis ${i + 1}`} icon={<Trash2 aria-hidden="true" className="size-4" />} onClick={() => onChange(items.filter((_, j) => j !== i))} />
+            <div className="flex justify-end @sm:col-span-2 @2xl:col-span-1">
+              <Button variant="ghost" aria-label={`Remove diagnosis ${i + 1}`} icon={<Trash2 aria-hidden="true" className="size-4" />} onClick={() => onChange(items.filter((_, j) => j !== i))} />
+            </div>
           </li>
         ))}
       </ul>
@@ -109,10 +119,16 @@ function DiagnosesEditor({ items, onChange }: { items: DiagnosisInput[]; onChang
   )
 }
 
-function PrescriptionEditor({ items, onChange }: { items: PrescriptionItemInput[]; onChange: (next: PrescriptionItemInput[]) => void }) {
+function PrescriptionEditor({ encounter, items, onChange }: { encounter: Encounter; items: PrescriptionItemInput[]; onChange: (next: PrescriptionItemInput[]) => void }) {
   const set = (i: number, patch: Partial<PrescriptionItemInput>) => onChange(items.map((d, j) => (j === i ? { ...d, ...patch } : d)))
   return (
     <Card title="Prescription" actions={<Button size="sm" variant="secondary" icon={<Plus aria-hidden="true" className="size-4" />} onClick={() => onChange([...items, emptyRx()])}>Add medicine</Button>}>
+      <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5" data-testid="prescription-allergies">
+        <p className="text-sm font-medium">Allergies on record</p>
+        <ul className="flex flex-wrap items-center gap-1.5" aria-label="Allergies on record">
+          <AllergyItems encounter={encounter} />
+        </ul>
+      </div>
       {!items.length && <p className="text-sm text-ink-muted">No medicines prescribed.</p>}
       <datalist id="frequency-presets">
         {FREQUENCY_PRESETS.map((f) => (
@@ -128,20 +144,20 @@ function PrescriptionEditor({ items, onChange }: { items: PrescriptionItemInput[
                 Remove
               </Button>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <TextField label="Medicine" value={p.drugName ?? ''} onChange={(e) => set(i, { drugName: e.target.value })} className="sm:col-span-2" />
+            <div className="grid grid-cols-1 gap-3 @sm:grid-cols-2 @2xl:grid-cols-4">
+              <TextField label="Medicine" value={p.drugName ?? ''} onChange={(e) => set(i, { drugName: e.target.value })} className="@sm:col-span-2" />
               <TextField label="Strength" placeholder="500 mg" value={p.strength ?? ''} onChange={(e) => set(i, { strength: e.target.value })} />
               <TextField label="Form" placeholder="Tablet" value={p.form ?? ''} onChange={(e) => set(i, { form: e.target.value })} />
               <TextField label="Dose" placeholder="1 tablet" value={p.dose ?? ''} onChange={(e) => set(i, { dose: e.target.value })} />
               <TextField label="Route" value={p.route ?? ''} onChange={(e) => set(i, { route: e.target.value })} />
               <TextField label="Frequency" list="frequency-presets" value={p.frequency ?? ''} onChange={(e) => set(i, { frequency: e.target.value })} />
               <TextField label="Duration" placeholder="5 days" value={p.duration ?? ''} onChange={(e) => set(i, { duration: e.target.value })} />
-              <TextField label="Instructions" placeholder="After food" value={p.instructions ?? ''} onChange={(e) => set(i, { instructions: e.target.value })} className="sm:col-span-2 lg:col-span-4" />
+              <TextField label="Instructions" placeholder="After food" value={p.instructions ?? ''} onChange={(e) => set(i, { instructions: e.target.value })} className="@sm:col-span-2 @2xl:col-span-4" />
             </div>
           </li>
         ))}
       </ol>
-      <p className="mt-3 text-xs text-ink-muted">No drug-interaction, allergy or dose checking is performed by this system. Check the patient’s allergies above.</p>
+      <p className="mt-3 text-xs text-ink-muted">No drug-interaction, allergy or dose checking is performed by this system. Check the medicines against the allergies listed here.</p>
     </Card>
   )
 }
@@ -180,6 +196,12 @@ function ReviewAndSignDialog({ draft, encounter, insertions, onClose, onSign, si
         <p>
           <strong>{encounter.patient.fullName}</strong> ({encounter.patient.mrn}) · {fmtDate(encounter.visit.visitDate)} · token {encounter.visit.tokenNumber}
         </p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-testid="review-allergies">
+          <p className="font-medium">Allergies on record</p>
+          <ul className="flex flex-wrap items-center gap-1.5" aria-label="Allergies on record">
+            <AllergyItems encounter={encounter} />
+          </ul>
+        </div>
         <dl className="space-y-2">
           {NOTE_SECTIONS.filter((s) => draft.note[s.key].trim()).map((s) => (
             <div key={s.key}>
@@ -227,9 +249,14 @@ function ReviewAndSignDialog({ draft, encounter, insertions, onClose, onSign, si
   )
 }
 
-function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePanel?: SidePanel | undefined }) {
+function ConsultationEditor({ initial, sidePanel, leftPanel }: { initial: Encounter; sidePanel?: SidePanel | undefined; leftPanel?: SidePanel | undefined }) {
   const qc = useQueryClient()
   const toast = useToast()
+  const base = usePortalBase()
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(true)
+  const bannerRef = useRef<HTMLDivElement>(null)
+  const bannerOnScreen = useOnScreen(bannerRef)
   const [draft, setDraft] = useState<Draft>({ note: initial.note, diagnoses: initial.diagnoses, prescription: initial.prescription })
   const [state, setState] = useState<SaveState>('saved')
   const [savedAt, setSavedAt] = useState<Date | null>(null)
@@ -399,10 +426,32 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     inserted: (type, id) => insertions.some((i) => i.subjectType === type && i.subjectId === id),
   }
 
+  const locked = state === 'conflict' || state === 'blocked'
   return (
     <>
-      <PatientBanner patient={{ ...initial.patient }} />
-      <h1 className="sr-only">Consultation for {initial.patient.fullName}</h1>
+      <ConsultationHeader
+        patientName={initial.patient.fullName}
+        startedAt={initial.startedAt}
+        backTo={`${base}/queue`}
+        backLabel="Back to today’s patients"
+        patient={bannerOnScreen ? null : <PatientStrip encounter={initial} />}
+        actions={
+          <>
+            <SaveIndicator state={state} savedAt={savedAt} />
+            <Button variant="secondary" onClick={() => void flush()} disabled={state === 'saved' || locked}>
+              Save
+            </Button>
+            <Button onClick={() => setReviewing(true)} disabled={locked}>
+              Complete consultation
+            </Button>
+            {/* Closing a draft without signing is deliberate, so it is kept away from the save and complete buttons. */}
+            <Menu label="More consultation actions" items={[{ label: 'Discard draft…', tone: 'danger', icon: <Trash2 aria-hidden="true" className="size-4" />, disabled: locked, onSelect: () => void flush().then(() => setDiscarding(true)) }]} />
+          </>
+        }
+      />
+      <div ref={bannerRef}>
+        <ConsultationBanner encounter={initial} onOpenProfile={() => setProfileOpen(true)} />
+      </div>
       {state === 'blocked' && (
         <Alert tone="error" title="Your latest changes cannot be saved" className="mb-4">
           {blocked}{' '}
@@ -421,30 +470,39 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
           .
         </Alert>
       )}
-      {/* Three panels: patient context | note | Mana and the assistant (stacked on smaller screens). */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem] xl:grid-rows-[auto_1fr] 2xl:grid-cols-[17rem_minmax(0,1fr)_28rem] 2xl:grid-rows-none">
-        <aside className="space-y-6 xl:col-start-2 xl:row-start-1 2xl:col-start-1" aria-label="Visit information">
+      {/* Three columns from 1400px: this visit and capture | past history and the note | Mana and the assistant. From 1280px two (the first column joins the third); below that one. */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_26rem] xl:grid-rows-[auto_1fr] wide:grid-cols-[16.5rem_minmax(0,1fr)_24rem] wide:grid-rows-none">
+        <aside className="space-y-6 xl:col-start-2 xl:row-start-1 wide:col-start-1" aria-label="Visit information">
           <Card title="This visit">
-            <p className="text-sm">
-              Token <strong>{initial.visit.tokenNumber}</strong> · {initial.visit.departmentName} · {fmtDate(initial.visit.visitDate)}
-            </p>
-            {initial.visit.reasonForVisit && <p className="mt-1 text-sm">Reason: “{initial.visit.reasonForVisit}”</p>}
+            {initial.visit.reasonForVisit && <p className="mb-3 text-sm">Reason: “{initial.visit.reasonForVisit}”</p>}
+            <VitalsTiles vitals={initial.vitals} />
             <div className="mt-3">
-              <VitalsInline vitals={initial.vitals} />
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" onClick={() => setVitalsOpen(true)}>
                 Record vitals
               </Button>
-              {/* Kept away from the save and sign buttons: closing a draft without signing is deliberate. */}
-              <Button size="sm" variant="ghost" icon={<Trash2 aria-hidden="true" className="size-4" />} onClick={() => void flush().then(() => setDiscarding(true))} disabled={state === 'conflict' || state === 'blocked'}>
-                Discard draft…
-              </Button>
             </div>
           </Card>
-          <Timeline patientId={initial.patient.id} />
+          {leftPanel?.(initial, inserter)}
+          <WritingPadCard />
         </aside>
-        <div className="space-y-6 xl:col-start-1 xl:row-span-2 xl:row-start-1 2xl:col-start-2 2xl:row-span-1">
+        {/* The editors inside lay themselves out by the width of this column (container queries), which is narrow at 1400px and wide on a tablet. */}
+        <div className="@container min-w-0 space-y-6 xl:col-start-1 xl:row-span-2 xl:row-start-1 wide:col-start-2 wide:row-span-1">
+          <Card
+            title="Past history"
+            bodyClassName="p-4"
+            actions={
+              <Button size="sm" variant="ghost" aria-expanded={historyOpen} aria-controls="past-history-body" onClick={() => setHistoryOpen((o) => !o)}>
+                {historyOpen ? 'Hide' : 'Show'}
+                <span className="sr-only"> past history</span>
+              </Button>
+            }
+          >
+            <div id="past-history-body" hidden={!historyOpen}>
+              <div className="xl:max-h-[30rem] xl:overflow-y-auto" role="region" aria-label="Past history details" tabIndex={0}>
+                <PastHistoryPanel patientId={initial.patient.id} bare />
+              </div>
+            </div>
+          </Card>
           <Card title="Consultation note" actions={inserting ? <Badge tone="ai">Inserting AI text…</Badge> : undefined}>
             <div className="space-y-4">
               {NOTE_SECTIONS.map((s) => (
@@ -463,21 +521,18 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
             </div>
           </Card>
           <DiagnosesEditor items={draft.diagnoses} onChange={(diagnoses) => update((d) => ({ ...d, diagnoses }))} />
-          <PrescriptionEditor items={draft.prescription} onChange={(prescription) => update((d) => ({ ...d, prescription }))} />
+          <PrescriptionEditor encounter={initial} items={draft.prescription} onChange={(prescription) => update((d) => ({ ...d, prescription }))} />
         </div>
-        {sidePanel && <div className="min-w-0 space-y-6 xl:col-start-2 xl:row-start-2 2xl:col-start-3 2xl:row-start-1">{sidePanel(initial, inserter)}</div>}
-      </div>
-      <div className="sticky bottom-0 z-20 -mx-4 mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
-        <SaveIndicator state={state} savedAt={savedAt} />
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => void flush()} disabled={state === 'saved' || state === 'conflict' || state === 'blocked'}>
-            Save now
-          </Button>
-          <Button onClick={() => setReviewing(true)} disabled={state === 'conflict' || state === 'blocked'}>
-            Review and sign
-          </Button>
+        <div className="min-w-0 space-y-6 xl:col-start-2 xl:row-start-2 wide:col-start-3 wide:row-start-1">
+          <Card title="Patient summary">
+            <RecordSummary patientId={initial.patient.id} testId="patient-summary" />
+          </Card>
+          {sidePanel?.(initial, inserter)}
         </div>
       </div>
+      {/* Room for the actions that stay at the bottom of the screen below 1024px: as tall as that bar actually is. */}
+      <div aria-hidden="true" className="lg:hidden" style={{ height: 'calc(var(--action-bar-h, 7rem) + 1rem)' }} />
+      <PatientProfileDrawer patientId={initial.patient.id} open={profileOpen} onClose={() => setProfileOpen(false)} />
       {discarding && (
         <DiscardDraftDialog
           draft={{ id: initial.id, version: versionRef.current, patientName: initial.patient.fullName, visitStatus: initial.visit.status }}
@@ -689,7 +744,7 @@ export function EncounterReadView({ e }: { e: Encounter }) {
   )
 }
 
-export function ConsultationPage({ sidePanel }: { sidePanel?: SidePanel }) {
+export function ConsultationPage({ sidePanel, leftPanel }: { sidePanel?: SidePanel; leftPanel?: SidePanel }) {
   const { encounterId } = useParams()
   const q = useEncounter(encounterId)
   const navigate = useNavigate()
@@ -706,5 +761,5 @@ export function ConsultationPage({ sidePanel }: { sidePanel?: SidePanel }) {
     )
   // The editor starts from the server's current version, never from a cached copy (another tab or an earlier visit may have saved since).
   if (q.data.canEdit && !q.isFetchedAfterMount) return <Spinner label="Opening the latest version…" />
-  return q.data.canEdit ? <ConsultationEditor key={q.data.id} initial={q.data} sidePanel={sidePanel} /> : <EncounterReadView key={q.data.id} e={q.data} />
+  return q.data.canEdit ? <ConsultationEditor key={q.data.id} initial={q.data} sidePanel={sidePanel} leftPanel={leftPanel} /> : <EncounterReadView key={q.data.id} e={q.data} />
 }

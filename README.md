@@ -6,7 +6,9 @@ PostgreSQL; and a Python service for thermal imaging, image validation and datas
 
 Product specification: [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) · design system: [docs/DESIGN.md](docs/DESIGN.md) · audit of the current state:
 [docs/AUDIT.md](docs/AUDIT.md) · progress and test results: [docs/STATUS.md](docs/STATUS.md) ·
-decisions: [docs/adr/](docs/adr/).
+decisions: [docs/adr/](docs/adr/) · what the Doctor App actually does today:
+[docs/DOCTOR_APP_AUDIT.md](docs/DOCTOR_APP_AUDIT.md) and the plan for its first complete consultation workflow:
+[docs/DOCTOR_APP_PLAN.md](docs/DOCTOR_APP_PLAN.md) · safety records (prototype): [docs/safety/](docs/safety/).
 
 > **Status: MVP in development.** Use synthetic data only. This software is not a medical
 > device, is not clinically validated and is **not production-ready** (see

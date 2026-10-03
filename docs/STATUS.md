@@ -4,13 +4,15 @@
 
 ADAXAI is an MVP. It is not production-ready, not a medical device, and not clinically validated. All data is synthetic. Nothing here claims legal or regulatory compliance.
 
+What the Doctor App actually does today, and the plan for its first complete consultation workflow, are in [DOCTOR_APP_AUDIT.md](DOCTOR_APP_AUDIT.md) and [DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md); safety records are in [safety/](safety/).
+
 | Slice | Commit |
 | --- | --- |
 | 1. Mana AI patient-context Q&A; AI text in notes with provenance | `5cbefc1` |
 | 2. Consent and access control | `be5ca8b` |
 | 3. Record lifecycle and integrity | `26db008` |
 | 4. Appointments, check-in, schedules, notifications, and the design foundation | `4be6256` |
-| 4a. Authentication and application entry (a dedicated slice before the consultation workstation) | {{HASH4A}} |
+| 4a. Authentication and application entry (a dedicated slice before the consultation workstation) | `5f0505d` |
 
 ## Slice 4a: authentication and application entry
 
@@ -804,7 +806,7 @@ The earlier browser-only "Add to …" path is gone.
 
 ### Not implemented or not validated in this slice
 
-- **AI summary:** no real provider has been called. It is tested only with a test double and the local test-only mock of the Anthropic API. Answer quality with a real model is unknown.
+- **AI summary:** no *successful* real-provider response has been obtained or evaluated (two real speech-to-text attempts from the dev app were both rate-limited, see the test-isolation note below). It is tested only with a test double and the local test-only mock of the Anthropic API. Answer quality with a real model is unknown.
 - **Record rules:** cover the listed intents only. Other questions fall back to a word search with no paraphrase. The question classifier is pattern-based.
 - **Thresholds:** the "possibly outdated" threshold (180 days) and the allergy groups are display aids, not clinical guidance.
 - **Languages:** English UI. No Tamil, Hindi or code-mixed evaluation.
@@ -915,17 +917,12 @@ The demo password was read from `.env` inside the script and never printed.
 
 ## Next planned work
 
-1. **Slice 4: appointments:**
-   - booking by staff and patient;
-   - status history (the slice 3 history tables are the pattern);
-   - check-in linked to the visit;
-   - doctor dashboards with today's appointments and the drafts worklist;
-   - notifications with delivery status.
-2. Devices and alerts.
-3. Consultation capture.
-4. Admin and operations: audit export, config viewers, failed-job list.
-5. Evaluation harness.
-6. The full 14-step demo.
+The Doctor App is the hero product; work is organised as vertical slices through every layer ([DOCTOR_APP_PLAN.md](DOCTOR_APP_PLAN.md)):
+
+1. **V1: know the patient.** Dashboard and *Today's patients* as in the reference direction; the consultation workstation shell; a longitudinal history model (conditions, medicines, investigations) with the *Past History* panel and a profile slide-over; a synthetic hospital dataset.
+2. **V2: capture the consultation.** Local-first AI provider registry ([ADR 0012](adr/0012-local-first-ai-hosted-providers-opt-in.md)); timestamped, language-tagged transcript with doctor-assigned speakers; waveform; extended extraction; *Key Points (AI)*; evaluation harness.
+3. **V3: summarise, review, approve.** A sourced consultation summary, the review panel, signing and the patient's view.
+4. Then: Mana workstation, devices (reading states, labelled simulators, stethoscope boundary), thermal in the consultation, prescription and documents, the consultation audit trail, handwriting.
 
 ## External needs (not blocking the MVP build)
 

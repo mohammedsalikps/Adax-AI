@@ -1,0 +1,27 @@
+# ADR 0012: Local-first AI; hosted providers only by explicit choice
+
+- **Status:** accepted. **Implementation:** slice V2 of [DOCTOR_APP_PLAN.md](../DOCTOR_APP_PLAN.md); nothing in this ADR is implemented yet.
+- **Date:** 3 Oct 2026
+
+## Context
+
+Today every language-model step goes through the Anthropic SDK and needs `ANTHROPIC_API_KEY`, and speech-to-text defaults to a hosted OpenAI endpoint once `AI_STT_API_KEY` is set ([audit](../DOCTOR_APP_AUDIT.md) §2). Setting a key is therefore enough to send consultation audio and pseudonymised text to a third party, and on the development machine both keys are set. Audio cannot be pseudonymised; text scrubbing is best-effort. The product owner's direction is that the core AI must not depend on an external hosted API and that patient data must not go to third-party AI services by default. Consent gates exist, but consent is not a substitute for a safe default.
+
+## Decision
+
+1. **A provider registry** replaces the hard-wired Anthropic construction. Language, speech and (later) vision providers are selected by `ai.provider`, with the values `none` (the default), `local` and `hosted`.
+2. **`local`** means an OpenAI-compatible HTTP server on this machine or the local network (for example Ollama or llama.cpp for chat, a Whisper-class server for transcription): chat completions with a JSON-schema response format, and `audio/transcriptions` with segment timestamps and language. The base URL must be loopback or an address the operator has explicitly allowed; a public hostname is refused.
+3. **`hosted`** keeps the Anthropic and OpenAI-compatible adapters, **only when selected on purpose**. Selecting it requires a setting, not just a key; the screens and the consent wording state that text or audio leaves the machine, and each run records that it was external.
+4. **Setting a key alone enables nothing.** With `none`, AI steps are *unavailable* and say so; the typed-transcript path and every non-AI function keep working.
+5. **Every AI run records** provider, model identifier, **local or external**, runtime, and (where the runtime reports one) a weights digest, next to the existing prompt version, settings snapshot and input/output hashes.
+6. **One set of output schemas** (note draft, extraction, recommendation, summary) shared by all providers, moved out of the Anthropic adapter, so a provider cannot change what the product accepts.
+7. **We do not train a foundation language model.** ADAXAI's own layer is the prompts, schemas, patient-context assembly, authorization-aware retrieval, source attribution, safety rules, evaluation sets, regression tests and version tracking. ADAXAI-owned models are limited to narrow tasks with documented provenance, patient-level splits and metrics.
+8. **Quality is measured, not assumed.** A synthetic gold set and a harness report per-category precision and recall for each model actually run; a model card records the result and its limits.
+
+## Consequences
+
+- **Behaviour change on the development machine:** with the default `none`, the dev app stops sending anything to hosted providers even though keys are present in `.env`. Using them again means setting `ai.provider: hosted`.
+- **Small local models are weaker.** On this machine (4 GB video memory, 15.7 GB RAM) a 3-to-4-billion-parameter model is realistic; extraction quality, multilingual speech quality and latency will be lower than a hosted frontier model and must be measured and shown to the doctor as draft-only, as all AI output already is.
+- **Runtimes and weights are downloads** and need the owner's approval; until installed the AI steps are unavailable, and automated tests use labelled local stand-ins for the model servers.
+- **Open technical questions, not assumed:** whether a given local runtime honours the JSON-schema response format reliably at small sizes (fallback: grammar-constrained decoding or a validate-and-retry loop with the existing zod schemas); whether the chosen speech model returns usable timestamps and language on this hardware.
+- **Not solved by this decision:** speaker diarisation (a doctor assigns speakers in the transcript; nothing is called "diarised" unless a diariser produced it), pseudonymisation of audio (not needed for `local`, still a limit for `hosted`), and clinical validation of any model output.

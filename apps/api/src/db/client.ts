@@ -10,6 +10,14 @@ export function createDb(pool: pg.Pool): Db {
   return drizzle(pool, { schema })
 }
 
+/** Name of the constraint a driver error is about (unique, check, exclusion), if any. */
+export function pgConstraint(e: unknown): string | undefined {
+  const err = e as { constraint?: unknown; cause?: { constraint?: unknown } }
+  if (typeof err?.constraint === 'string') return err.constraint
+  if (typeof err?.cause?.constraint === 'string') return err.cause.constraint
+  return undefined
+}
+
 /** Postgres error code of a driver error (e.g. '23505' unique violation), if any. */
 export function pgCode(e: unknown): string | undefined {
   const err = e as { code?: unknown; cause?: { code?: unknown } }

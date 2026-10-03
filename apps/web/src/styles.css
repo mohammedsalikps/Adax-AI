@@ -1,26 +1,51 @@
 @import 'tailwindcss';
 
 /*
- * Design tokens. Neutral surfaces, one brand accent, and semantic status
- * colours that are always paired with an icon and text (never colour alone).
- * Text colours meet WCAG AA contrast on their intended backgrounds.
+ * Design tokens (see docs/DESIGN.md). Neutral surfaces, one restrained blue
+ * accent, soft borders and semantic status colours that are always paired
+ * with an icon and text, never colour alone. Text colours meet WCAG AA
+ * contrast on their intended backgrounds (checked by the axe e2e runs).
+ * Everything below is a token: components use these names, not raw values.
  */
 @theme {
-  --font-sans: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Tamil', Arial, sans-serif;
+  /* Type: a modern system sans. No web font is bundled, so nothing is fetched from a third party and the app works offline. */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Tamil', Arial, sans-serif;
 
-  --color-canvas: #f5f7f9;
+  /* Type scale (size / line height). */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-stat: 1.875rem;
+  --text-stat--line-height: 2.25rem;
+
+  /* Surfaces and lines. */
+  --color-canvas: #f5f7fb;
   --color-surface: #ffffff;
-  --color-ink: #111827;
-  --color-ink-muted: #4b5563;
-  --color-line: #e2e6eb;
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-line: #e3e8ef;
+  --color-line-strong: #cbd5e1;
+  /* The edge of a form control (3.4:1 on white, 3.2:1 on the canvas: non-text contrast, WCAG 1.4.11). */
+  --color-control: #7c8ba1;
 
-  --color-brand: #0e7490;
-  --color-brand-strong: #155e75;
-  --color-brand-soft: #ecfeff;
+  /* Brand: one restrained blue. White text on brand is 5.2:1; brand text on white 5.2:1. */
+  --color-brand: #2563eb;
+  --color-brand-strong: #1d4ed8;
+  --color-brand-soft: #eff6ff;
 
+  /* Status: ink on a soft tint of the same hue. */
   --color-ok: #166534;
   --color-ok-soft: #dcfce7;
-  --color-down: #991b1b;
+  --color-down: #b91c1c;
   --color-down-soft: #fee2e2;
   --color-pending: #92400e;
   --color-pending-soft: #fef3c7;
@@ -29,6 +54,25 @@
   /* AI-generated draft content: always visually distinct from signed records. */
   --color-ai: #5b21b6;
   --color-ai-soft: #f5f3ff;
+
+  /* Radii: controls 8px, cards 16px, dialogs 20px. */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* Elevation: barely there. */
+  --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.05);
+  --shadow-pop: 0 10px 30px -8px rgb(15 23 42 / 0.2), 0 2px 6px -2px rgb(15 23 42 / 0.08);
+
+  /* Sizes: touch targets are at least 44px (controls) or 36px (small, dense rows). */
+  --spacing-control: 2.75rem;
+  --spacing-control-sm: 2.25rem;
+  --spacing-row: 4.5rem;
+  --spacing-row-compact: 3.5rem;
+  --spacing-sidebar: 16rem;
+  --spacing-topbar: 4rem;
 }
 
 /* New content settles in gently (disabled by prefers-reduced-motion below). */
@@ -50,10 +94,13 @@
   html {
     @apply bg-canvas text-ink antialiased;
     font-family: var(--font-sans);
+    /* The top bar is sticky: a focused element is scrolled clear of it (WCAG 2.4.11), also on phones where it is two rows tall. */
+    scroll-padding-top: 8rem;
   }
   body {
     @apply min-h-screen;
   }
+  /* One focus treatment everywhere: a 2px brand ring, offset so it never hides the control. */
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-brand;
   }
@@ -62,7 +109,9 @@
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
     }
   }
 }

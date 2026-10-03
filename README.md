@@ -4,7 +4,7 @@ ADAXAI Connected Clinical Platform: a role-based clinical web platform (Doctor, 
 Patient portals) with **Mana AI**, the doctor's patient-record companion; a Fastify API on
 PostgreSQL; and a Python service for thermal imaging, image validation and dataset evaluation.
 
-Product specification: [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) · audit of the current state:
+Product specification: [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) · design system: [docs/DESIGN.md](docs/DESIGN.md) · audit of the current state:
 [docs/AUDIT.md](docs/AUDIT.md) · progress and test results: [docs/STATUS.md](docs/STATUS.md) ·
 decisions: [docs/adr/](docs/adr/).
 
@@ -33,6 +33,7 @@ decisions: [docs/adr/](docs/adr/).
 | Patient portal (PWA) | Activation with MRN + one-time code; the patient's own signed records with prescriptions and amendments, visits, vital signs, consents, profile and allergies, approved thermal measurements; installable (manifest, icons, service worker that caches only the app shell, never `/api/`) |
 | Devices | **Integration boundary only, no hardware integrated**: registry, assignment to consenting patients, token-authenticated gateway ingestion API (readings stored as *device, unverified*), stethoscope audio upload and playback. See [docs/DEVICES.md](docs/DEVICES.md) |
 | Record lifecycle | Visit and consultation state machines enforced by the API and the database, with status history (who, when, how, why); **My consultations** worklist of unsigned drafts from any day and recent signed records; discarding a draft with a reason (kept read-only); versioned signed-record verification including the amendment chain; see [ADR 0008](docs/adr/0008-record-lifecycle-and-signed-record-verification.md) |
+| Appointments and notifications | Booking and rescheduling by staff on the facility's clock, with no double booking for a doctor or a patient (database constraints), cancel and did-not-attend with reasons, status history, **check-in that creates or joins exactly one visit** (idempotent, race-safe) and starts no consultation, schedule pages for doctors, nurses and administrators (administrators see no patient identity or free text), the patient's own appointments in the portal. Messages go through an outbox with recorded attempts and safe retries; **the only channel is the patient portal: no SMS, email or push is sent**. See [ADR 0010](docs/adr/0010-appointments-visit-linkage-and-notification-outbox.md) |
 | Operations | Cold backup / verify / restore, audio retention, orphan-file check, synthetic demo seed, audit-chain verification, database identity guard for test tooling |
 
 ## Accounts and security model
@@ -317,7 +318,10 @@ encrypted and access-controlled.
   recordings append-only or frozen, and allow reviewed AI output, labels, routing suggestions and
   device assignments to change only in their single permitted way.
 - **Migrations:** `apps/api/drizzle/`, each in its own transaction with a checksum; never edit an
-  applied migration.
+  applied migration. They are additive. Before applying new ones to a database that holds data,
+  stop the app (`Ctrl+C` in the `npm run dev` window), take a cold backup with `npm run backup`,
+  check it with `npm run backup:verify -- <dir>`, then restart. Migration 0022 enables the
+  `btree_gist` extension (bundled with the PostgreSQL binaries) for the no-double-booking constraints.
 - **On disk (git-ignored):** `.data/pg`, `.data/logs`, `storage/`, `storage-test/`,
   `storage-e2e/`, `backups/`.
 
@@ -369,6 +373,12 @@ and thermal images; set `clinical` only in a real clinical deployment.
   that, or the removal of the newest events.
 - Every audited request waits briefly for the audit chain's lock; this has not been measured under
   load.
+- Appointments: there are no clinic hours, clinician calendars, department capacity limits,
+  recurring appointments or waiting lists; patients cannot book or cancel for themselves; no
+  reminders are sent (nothing schedules them); a missed appointment is marked by staff, not
+  automatically. Messages reach the patient portal only: a patient without a portal account is
+  not told by any other route. The length and horizon rules (10 to 60 minutes, up to 180 days
+  ahead) are conservative defaults, not clinical policy.
 - Unsigned drafts can be edited, signed or discarded only by their author; there is no supervised
   reassignment yet.
 - "Care records" (`data_processing`) consent is recorded and shown but not enforced: whether care
@@ -392,7 +402,7 @@ packages/
 services/
   thermal/        FastAPI service: thermal, image validation, dataset evaluation (Python)
 config/           YAML settings (no secrets)
-docs/             PRODUCT_SPEC.md, AUDIT.md, STATUS.md, DEMO.md, DEVICES.md, adr/ (decisions)
+docs/             PRODUCT_SPEC.md, DESIGN.md, AUDIT.md, STATUS.md, DEMO.md, DEVICES.md, adr/ (decisions)
 demo/             Synthetic consultation transcript
 scripts/          db lifecycle, setup, backup, retention helpers, icons
 e2e/              Playwright end-to-end tests (and the test-only AI mock)

@@ -1,0 +1,113 @@
+import type { Role } from '@adaxai/contracts'
+import { Info } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Outlet, ScrollRestoration, useLocation, useNavigate } from 'react-router'
+import { useLogout, useMe } from '../../lib/auth.tsx'
+import { Sidebar } from './Sidebar.tsx'
+import { TopBar } from './TopBar.tsx'
+
+const NAV_ID = 'portal-nav'
+const DESKTOP = '(min-width: 64rem)'
+
+/**
+ * The frame of every signed-in page: sidebar (a drawer on phones), top bar,
+ * the development notice and the page. One shell for every role, so the app
+ * looks and behaves the same wherever you are; what differs is the pages the
+ * role has (lib/nav.ts) and whether patient search is offered.
+ *
+ * On phones the sidebar is a drawer: opening it moves focus into it and makes
+ * the page behind inert; Escape, its close button, the dimmed backdrop and
+ * choosing a page close it, and focus goes back to the menu button (or to the
+ * new page).
+ */
+export function AppShell({ role }: { role: Role }) {
+  const { data: me } = useMe()
+  const logout = useLogout()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuButton = useRef<HTMLButtonElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
+  const wasOpen = useRef(false)
+  const openNow = useRef(false)
+  openNow.current = menuOpen
+  // Where focus goes when the drawer closes: back to the menu button, to the new page, or nowhere in particular.
+  const leaveTo = useRef<'menu' | 'page' | 'none'>('menu')
+
+  const closeMenu = useCallback((to: 'menu' | 'page' | 'none' = 'menu') => {
+    leaveTo.current = to
+    setMenuOpen(false)
+  }, [])
+  // Any navigation closes the drawer (choosing a page is handled by the sidebar's links too, for the page you are already on).
+  useEffect(() => {
+    if (openNow.current) closeMenu('page')
+  }, [location.pathname, closeMenu])
+  // Opening moves focus into the drawer. Closing hands it on once the page behind is no longer inert (a focus() on an inert page does nothing).
+  useEffect(() => {
+    if (menuOpen) {
+      wasOpen.current = true
+      closeButton.current?.focus()
+      return
+    }
+    if (!wasOpen.current) return
+    wasOpen.current = false
+    if (leaveTo.current === 'menu') menuButton.current?.focus()
+    else if (leaveTo.current === 'page') document.getElementById('main')?.focus()
+    leaveTo.current = 'menu'
+  }, [menuOpen])
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeMenu('menu')
+    document.addEventListener('keydown', onKey)
+    // The page behind the drawer does not scroll (it is inert, but wheel and touch scrolling would still move it).
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    // Growing to the desktop layout turns the drawer into the permanent sidebar: the menu button is gone, so focus is left alone.
+    const mq = window.matchMedia(DESKTOP)
+    const onChange = () => mq.matches && closeMenu('none')
+    mq.addEventListener('change', onChange)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      mq.removeEventListener('change', onChange)
+      document.body.style.overflow = overflow
+    }
+  }, [menuOpen, closeMenu])
+
+  const signOut = () => logout.mutate(undefined, { onSettled: () => navigate('/login', { replace: true }) })
+  const base = `/${role}`
+
+  return (
+    <div className="min-h-screen lg:grid lg:grid-cols-[var(--spacing-sidebar)_minmax(0,1fr)]">
+      <a href="#main" inert={menuOpen} className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:rounded-md focus:bg-surface focus:px-4 focus:py-2 focus:shadow-pop">
+        Skip to main content
+      </a>
+      {menuOpen && <div aria-hidden="true" className="fixed inset-0 z-30 bg-ink/40 lg:hidden print:hidden" onClick={() => closeMenu('menu')} />}
+      <Sidebar
+        role={role}
+        id={NAV_ID}
+        facilityName={me?.facilityName}
+        onClose={() => closeMenu('menu')}
+        onNavigate={() => closeMenu('page')}
+        closeRef={closeButton}
+        className={`${menuOpen ? 'fixed inset-y-0 left-0 z-40 flex w-72 shadow-pop' : 'hidden'} lg:sticky lg:top-0 lg:z-auto lg:flex lg:h-dvh lg:w-auto lg:shadow-none print:hidden`}
+      />
+      {/* While the drawer is open the page behind it cannot be reached by keyboard or screen reader. */}
+      <div className="flex min-w-0 flex-col" inert={menuOpen}>
+        <div role="note" className="border-b border-line bg-notice-soft text-notice print:hidden">
+          <p className="flex items-start gap-2 px-4 py-1.5 text-xs sm:px-6 lg:px-8">
+            <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              <strong className="font-semibold">Development build.</strong> Synthetic data only. Not for clinical use. Not a medical device.
+            </span>
+          </p>
+        </div>
+        <TopBar me={me} base={base} menuOpen={menuOpen} onMenu={() => setMenuOpen(true)} menuRef={menuButton} navId={NAV_ID} onSignOut={signOut} />
+        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-7xl min-w-0 flex-1 px-4 py-6 focus:outline-none sm:px-6 lg:px-8 print:p-0">
+          <Outlet />
+        </main>
+      </div>
+      {/* A new page starts at the top (the browser would keep the old scroll position); going back restores it. A change of search parameters within a page opts out with preventScrollReset. */}
+      <ScrollRestoration />
+    </div>
+  )
+}

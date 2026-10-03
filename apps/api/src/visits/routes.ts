@@ -8,11 +8,11 @@ import { currentUser } from '../auth/plugin.ts'
 import type { SessionUser } from '../auth/sessions.ts'
 import { type Db, type DbOrTx, pgCode } from '../db/client.ts'
 import { setLifecycleContext } from '../db/lifecycle.ts'
-import { dailyTokenCounters, departments, encounters, observations, users, visits } from '../db/schema.ts'
+import { departments, encounters, observations, users, visits } from '../db/schema.ts'
 import { badRequest, conflict, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { ageOn, facilityToday, getPatientOr404 } from '../patients/service.ts'
-import { getVisitOr404, loadVisits, toObservation, unitFor } from './service.ts'
+import { createVisit, getVisitOr404, loadVisits, toObservation, unitFor } from './service.ts'
 
 const IdParams = z.object({ id: z.uuid() })
 
@@ -51,27 +51,9 @@ export function registerVisitRoutes(app: FastifyInstance, { db, encounterLookup 
     try {
       const visit = await db.transaction(async (tx) => {
         await setLifecycleContext(tx, { actorId: me.id, source: 'check_in' })
-        const [counter] = await tx
-          .insert(dailyTokenCounters)
-          .values({ facilityId: me.facilityId, visitDate: today, lastToken: 1 })
-          .onConflictDoUpdate({ target: [dailyTokenCounters.facilityId, dailyTokenCounters.visitDate], set: { lastToken: sql`${dailyTokenCounters.lastToken} + 1` } })
-          .returning({ token: dailyTokenCounters.lastToken })
-        const [v] = await tx
-          .insert(visits)
-          .values({
-            facilityId: me.facilityId,
-            patientId: body.patientId,
-            departmentId: body.departmentId,
-            assignedDoctorId: body.assignedDoctorId ?? null,
-            visitDate: today,
-            tokenNumber: counter!.token,
-            priority: body.priority,
-            chiefComplaint: body.chiefComplaint ?? null,
-            createdBy: me.id,
-          })
-          .returning()
-        await audit(tx, req, { action: 'visit.create', entityType: 'visit', entityId: v!.id, patientId: body.patientId, details: { token: v!.tokenNumber, visitDate: today } })
-        return v!
+        const v = await createVisit(tx, me, { patientId: body.patientId, departmentId: body.departmentId, assignedDoctorId: body.assignedDoctorId ?? null, priority: body.priority, chiefComplaint: body.chiefComplaint ?? null }, today)
+        await audit(tx, req, { action: 'visit.create', entityType: 'visit', entityId: v.id, patientId: body.patientId, details: { token: v.tokenNumber, visitDate: today } })
+        return v
       })
       const [out] = await withEncounters(eq(visits.id, visit.id), today)
       return reply.code(201).send(out)

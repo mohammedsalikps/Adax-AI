@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm'
 import type { DbOrTx } from './client.ts'
 
 /** Where a visit or consultation status change came from (kept in the status history). */
-export type LifecycleSource = 'check_in' | 'queue' | 'vitals' | 'consultation_start' | 'consultation_resume' | 'consultation_signed' | 'consultation_discarded'
+export type LifecycleSource = 'check_in' | 'appointment_check_in' | 'booking' | 'reschedule' | 'cancellation' | 'no_show' | 'queue' | 'vitals' | 'consultation_start' | 'consultation_resume' | 'consultation_signed' | 'consultation_discarded'
 
 /**
  * Names the acting user, the source and the reason for the status changes
@@ -19,4 +19,6 @@ export const LIFECYCLE_REFUSALS: Record<string, { code: string; message: string 
   AX003: { code: 'invalid_transition', message: 'This status change is not allowed in the current state. Refresh and try again.' },
   AX004: { code: 'consultation_in_progress', message: 'This visit has an unsigned consultation. The doctor must sign or discard it first.' },
   AX005: { code: 'visit_in_consultation', message: 'The patient is with the doctor; the doctor and department cannot change now.' },
+  AX006: { code: 'invalid_appointment_change', message: 'This appointment change is not allowed. Refresh and try again.' },
+  AX007: { code: 'appointment_closed', message: 'This appointment is closed and cannot be changed.' },
 }

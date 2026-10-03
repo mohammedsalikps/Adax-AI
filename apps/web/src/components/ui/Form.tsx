@@ -1,7 +1,7 @@
 import { type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes, useId } from 'react'
 
 const control =
-  'block w-full rounded-md border bg-surface px-3 text-sm text-ink placeholder:text-ink-muted/70 disabled:bg-canvas disabled:text-ink-muted aria-[invalid=true]:border-down'
+  'block w-full rounded-md border bg-surface px-3 text-sm text-ink shadow-card placeholder:text-ink-muted/70 disabled:bg-canvas disabled:text-ink-muted aria-[invalid=true]:border-down'
 
 interface FieldProps {
   label: ReactNode
@@ -50,7 +50,7 @@ export function TextField({ label, error, hint, className, required, ...rest }: 
   return (
     <Field label={label} error={error} hint={hint} required={required} className={className}>
       {({ id, describedBy, invalid }) => (
-        <input id={id} aria-describedby={describedBy} aria-invalid={invalid} required={required} className={`${control} min-h-11 border-line`} {...rest} />
+        <input id={id} aria-describedby={describedBy} aria-invalid={invalid} required={required} className={`${control} min-h-control border-control`} {...rest} />
       )}
     </Field>
   )
@@ -60,7 +60,7 @@ export function SelectField({ label, error, hint, className, required, children,
   return (
     <Field label={label} error={error} hint={hint} required={required} className={className}>
       {({ id, describedBy, invalid }) => (
-        <select id={id} aria-describedby={describedBy} aria-invalid={invalid} required={required} className={`${control} min-h-11 border-line`} {...rest}>
+        <select id={id} aria-describedby={describedBy} aria-invalid={invalid} required={required} className={`${control} min-h-control border-control`} {...rest}>
           {children}
         </select>
       )}
@@ -72,7 +72,7 @@ export function TextAreaField({ label, error, hint, className, required, ...rest
   return (
     <Field label={label} error={error} hint={hint} required={required} className={className}>
       {({ id, describedBy, invalid }) => (
-        <textarea id={id} aria-describedby={describedBy} aria-invalid={invalid} required={required} className={`${control} border-line py-2 leading-relaxed`} {...rest} />
+        <textarea id={id} aria-describedby={describedBy} aria-invalid={invalid} required={required} className={`${control} border-control py-2 leading-relaxed`} {...rest} />
       )}
     </Field>
   )

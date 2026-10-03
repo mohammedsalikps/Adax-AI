@@ -126,7 +126,7 @@ export function MyConsultationsPage() {
             key={t}
             type="button"
             aria-pressed={tab === t}
-            onClick={() => setParams(t === 'signed' ? { show: 'signed' } : {}, { replace: true })}
+            onClick={() => setParams(t === 'signed' ? { show: 'signed' } : {}, { replace: true, preventScrollReset: true })}
             className={`rounded px-3 py-1.5 text-sm font-medium ${tab === t ? 'bg-brand-soft text-brand-strong' : 'text-ink-muted hover:text-ink'}`}
           >
             {t === 'in_progress' ? 'Unsigned drafts' : 'Signed recently'}

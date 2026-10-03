@@ -35,7 +35,10 @@ export const Me = z.object({
   fullName: z.string(),
   role: Role,
   facilityId: z.uuid(),
+  /** The clinic's name and the user's department, for the header. */
+  facilityName: z.string(),
   departmentId: z.uuid().nullable(),
+  departmentName: z.string().nullable(),
   patientId: z.uuid().nullable(),
   mustChangePassword: z.boolean(),
 })

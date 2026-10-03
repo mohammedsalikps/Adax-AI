@@ -73,7 +73,7 @@ test('patient activates, sees only their own signed records on a phone-sized ins
   // Another patient's record is not found; staff pages send the patient back home.
   await page.goto(`/patient/records/${b.recordId}`)
   await expect(page.getByRole('alert')).toContainText('Record not found')
-  await page.goto('/doctor')
+  await page.goto('/doctor/queue')
   await expect(page).toHaveURL(/\/patient$/)
   expect((await page.request.get(`/api/encounters/${b.recordId}`)).status()).toBe(403)
   expect((await page.request.get(`/api/portal/records/${b.recordId}`)).status()).toBe(404)

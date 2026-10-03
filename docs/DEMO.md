@@ -153,7 +153,43 @@ Accepted assistant items use **Add to …** the same way.
    card; the patient sets a new password at `/activate`. If the patient withdraws portal access
    in the portal themselves, they are signed out with an explanation.
 
-## 6. Oversight (admin)
+## 6. Appointments (nurse, doctor, patient, admin)
+
+Synthetic data only. Times are on the clinic's clock (shown on every page).
+
+1. **Book** (nurse): **Appointments** → **Book appointment**.
+   - Find the patient, choose the department and optionally a doctor, then a date, a time and a length.
+   - From a patient's record, the **Appointments** card books for that patient.
+2. **Conflicts are refused, not moved.**
+   - Book the same doctor at an overlapping time: the dialog says the clinician is taken and keeps your entries.
+   - Back-to-back is fine.
+   - The same patient cannot be booked twice at overlapping times, with any doctor.
+3. Each row shows its time, the patient, the clinician, its status and, when the server allows it, **Check in**. Open **Details** for everything else:
+   - **Reschedule…** books the new time and closes the old appointment as *rescheduled*.
+   - **Cancel…** asks for confirmation and a reason, and frees the slot.
+   - The history and the messages to the patient are there too.
+   - The list can be filtered by status (with counts) and by patient name or MRN; the search runs on this device and sends nothing.
+4. **Check in** (on the day of the appointment).
+   - It creates the patient's visit in **OPD queue** with a token, or joins the visit they already have today. It never makes a second one.
+   - The queue row shows the appointment time. No consultation is started.
+   - Checking in again does nothing new.
+5. **The doctor** (`dr.meera`) lands on **Home**: four numbers (in the queue, with a doctor, completed today, appointments to come), **Today's schedule**, the patients **Ready for you** with *Start consultation*, and shortcuts.
+   - The same appointment is in **Appointments → My schedule** (assigned to them, or unassigned in their department), with the visit's state.
+   - **OPD queue** (in the menu) is the full queue; start the consultation from there or from Home.
+   - **Search patients** in the top bar opens the Patients page with the search filled in (the term is not put in the address).
+   - When the consultation is signed, the appointment becomes *Completed* by itself.
+   - Cancelling or marking the visit as no-show in the queue closes the appointment the same way.
+6. **Messages to the patient.** The appointment's **Details** show each message and its delivery status.
+   - Delivery is to the **patient portal only**. No SMS or email is sent.
+   - Without a portal account the status is *Not delivered* with the reason.
+   - After a booking, move or cancellation a message says whether the patient was told; if not, it says so and that nothing is sent by SMS or email.
+   - After the patient activates the portal (see §5 above), **Try again** delivers the messages that still hold. A message about a time that no longer stands (for example “booked” for an appointment that was moved) is not retried.
+   - The patient then sees it under **Appointments** in the portal, and **Mark as read** shows staff that it was seen. The booking reason (staff free text) is not shown to the patient, and a booked appointment whose time passed shows as “time has passed”, not upcoming.
+7. **Administrator** (`admin`): **Appointments** shows the facility's schedule without patient names or reasons, and cannot change anything. There is no patient search in the top bar for administrators.
+8. **On a phone** the menu is a drawer: it takes the focus, Escape or its close button shuts it, and the page behind it cannot be reached while it is open. Below 1280 px the schedule is a list of cards instead of a table.
+9. A booked appointment whose time has passed is flagged *Awaiting an outcome*. Mark it **Did not attend…**, reschedule it, or cancel it; nothing does this automatically.
+
+## 7. Oversight (admin)
 
 - **AI operations**: provider status, job counts, failures, review outcomes per model and prompt
   version (*Includes synthetic*), **Store snapshot**. Counts only, no patient data.
@@ -169,7 +205,8 @@ Accepted assistant items use **Add to …** the same way.
 
 `npm test` runs the API tests (real PostgreSQL), the service-worker policy tests, the Python
 tests and the Playwright suite (desktop and mobile, axe WCAG 2.2 AA, phone-overflow checks). For
-this demonstration see `apps/api/test/lifecycle.test.ts`, `integrity.test.ts`, `db-safety.test.ts`,
+this demonstration see `apps/api/test/appointments.test.ts`, `appointments-db.test.ts`,
+`appointment-notifications.test.ts`, `e2e/appointments.spec.ts`, `apps/api/test/lifecycle.test.ts`, `integrity.test.ts`, `db-safety.test.ts`,
 `e2e/record-lifecycle.spec.ts`, `apps/api/test/mana.test.ts`, `e2e/mana.spec.ts`, `apps/api/test/ai-clinical.test.ts`, `portal.test.ts`, `routing.test.ts`,
 `images.test.ts`, `devices.test.ts`, `hardening.test.ts` and `e2e/*.spec.ts`. AI output in tests
 comes from test doubles or the test-only mock `e2e/mock-anthropic.mjs`.

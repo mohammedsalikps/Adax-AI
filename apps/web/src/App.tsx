@@ -10,11 +10,14 @@ import { RequireAuth, RoleRedirect } from './components/RequireAuth.tsx'
 import { ToastProvider } from './components/ui/Toast.tsx'
 import { createQueryClient } from './lib/queryClient.ts'
 import { AdminAuditPage } from './pages/admin/AdminAuditPage.tsx'
+import { AppointmentsPage } from './pages/clinical/AppointmentsPage.tsx'
+import { PortalAppointmentsPage } from './pages/patient/PortalAppointmentsPage.tsx'
 import { AdminDepartmentsPage } from './pages/admin/AdminDepartmentsPage.tsx'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage.tsx'
 import { AdminAiOperationsPage } from './pages/admin/AdminAiOperationsPage.tsx'
 import { AdminThermalDataPage } from './pages/admin/AdminThermalDataPage.tsx'
 import { AiReviewPage } from './pages/doctor/AiReviewPage.tsx'
+import { DoctorHomePage } from './pages/doctor/DoctorHomePage.tsx'
 import { EarlierDraftsNotice, MyConsultationsPage } from './pages/doctor/MyConsultationsPage.tsx'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage.tsx'
 import { ActivatePage } from './pages/ActivatePage.tsx'
@@ -82,14 +85,17 @@ const router = createBrowserRouter([
       { path: 'thermal-data', element: <AdminThermalDataPage /> },
       { path: 'ai', element: <AdminAiOperationsPage /> },
       { path: 'audit', element: <AdminAuditPage /> },
+      { path: 'appointments', element: <AppointmentsPage /> },
     ],
   },
   {
     path: '/doctor',
     element: portal('doctor'),
     children: [
-      { index: true, element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
+      { index: true, element: <DoctorHomePage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
+      { path: 'queue', element: <QueuePage consultationAction={(v) => <ConsultAction visit={v} />} notice={<EarlierDraftsNotice />} /> },
       { path: 'consultations', element: <MyConsultationsPage /> },
+      { path: 'appointments', element: <AppointmentsPage /> },
       { path: 'patients', element: <PatientsPage /> },
       { path: 'patients/:patientId', element: doctorProfile },
       {
@@ -119,6 +125,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <QueuePage /> },
       { path: 'register', element: <RegisterPatientPage /> },
+      { path: 'appointments', element: <AppointmentsPage /> },
       { path: 'patients', element: <PatientsPage /> },
       { path: 'patients/:patientId', element: profile },
       { path: 'encounters/:encounterId', element: <ConsultationPage /> },
@@ -134,6 +141,7 @@ const router = createBrowserRouter([
       { path: 'records', element: <PortalRecordsPage /> },
       { path: 'records/:recordId', element: <PortalRecordPage /> },
       { path: 'visits', element: <PortalVisitsPage /> },
+      { path: 'appointments', element: <PortalAppointmentsPage /> },
       { path: 'vitals', element: <PortalVitalsPage /> },
       { path: 'consents', element: <PortalConsentsPage /> },
       { path: 'profile', element: <PortalProfilePage /> },

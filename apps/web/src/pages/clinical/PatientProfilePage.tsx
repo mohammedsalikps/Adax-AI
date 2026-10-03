@@ -12,6 +12,7 @@ import { type ReactNode, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { CheckInDialog } from '../../components/clinical/CheckInDialog.tsx'
 import { ConsentsCard } from '../../components/clinical/ConsentsCard.tsx'
+import { PatientAppointmentsCard } from '../../components/clinical/PatientAppointmentsCard.tsx'
 import { PortalAccountCard } from '../../components/clinical/PortalAccountCard.tsx'
 import { PatientBanner } from '../../components/clinical/PatientBanner.tsx'
 import { FlagLabel, fmtValue } from '../../components/clinical/Vitals.tsx'
@@ -248,7 +249,7 @@ export function PatientProfilePage({ visitAction, timeline, extra, companion }: 
   const active = p.allergies.filter((a) => a.status === 'active').map((a) => a.substance)
   const closeCheckIn = () => {
     setCheckingIn(false)
-    if (params.has('checkin')) setParams({}, { replace: true })
+    if (params.has('checkin')) setParams({}, { replace: true, preventScrollReset: true })
   }
   return (
     <>
@@ -289,6 +290,9 @@ export function PatientProfilePage({ visitAction, timeline, extra, companion }: 
         {timeline && <div className="xl:col-span-2">{timeline(p.id)}</div>}
         <div className="xl:col-span-2">
           <VitalsHistory patientId={p.id} />
+        </div>
+        <div className="xl:col-span-2">
+          <PatientAppointmentsCard p={p} />
         </div>
         <div className="xl:col-span-2">
           <VisitsCard patientId={p.id} extra={visitAction} />

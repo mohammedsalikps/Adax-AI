@@ -3,7 +3,7 @@ import { and, eq, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../audit/audit.ts'
 import type { Db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { departments, facilities, users } from '../db/schema.ts'
 import { consentState } from '../consents/service.ts'
 import { badRequest, HttpError } from '../http/errors.ts'
 import { enforceLimit, type LimitRule, type RateLimiter } from '../http/rate-limit.ts'
@@ -17,14 +17,18 @@ export const LOCKOUT_MS = 15 * 60 * 1000
 
 type UserRow = typeof users.$inferSelect
 
-export function toMe(u: Pick<UserRow, 'id' | 'username' | 'fullName' | 'role' | 'facilityId' | 'departmentId' | 'patientId' | 'mustChangePassword'>): Me {
+export async function toMe(db: Db, u: Pick<UserRow, 'id' | 'username' | 'fullName' | 'role' | 'facilityId' | 'departmentId' | 'patientId' | 'mustChangePassword'>): Promise<Me> {
+  const [facility] = await db.select({ name: facilities.name }).from(facilities).where(eq(facilities.id, u.facilityId))
+  const [department] = u.departmentId ? await db.select({ name: departments.name }).from(departments).where(eq(departments.id, u.departmentId)) : []
   return {
     id: u.id,
     username: u.username,
     fullName: u.fullName,
     role: u.role,
     facilityId: u.facilityId,
+    facilityName: facility?.name ?? '',
     departmentId: u.departmentId,
+    departmentName: department?.name ?? null,
     patientId: u.patientId,
     mustChangePassword: u.mustChangePassword,
   }
@@ -120,7 +124,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: { db: Db; cookieS
     const session = await createSession(db, user.id, req.ip, req.headers['user-agent'] ?? null)
     void reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions(cookieSecure, session.expiresAt))
     await audit(db, req, { action: 'auth.login', actorUserId: user.id, actorRole: user.role, facilityId: user.facilityId, details: { username: user.username } })
-    return toMe(user)
+    return toMe(db, user)
   })
 
   app.post('/api/auth/logout', { config: { anySession: true, allowWhilePasswordChangeRequired: true } }, async (req, reply) => {
@@ -133,7 +137,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: { db: Db; cookieS
 
   app.get('/api/auth/me', { config: { anySession: true, allowWhilePasswordChangeRequired: true } }, async (req) => {
     const u = currentUser(req)
-    return toMe(u)
+    return toMe(db, u)
   })
 
   app.post('/api/auth/change-password', { config: { anySession: true, allowWhilePasswordChangeRequired: true } }, async (req, reply) => {
@@ -171,6 +175,6 @@ export function registerAuthRoutes(app: FastifyInstance, deps: { db: Db; cookieS
     // Other sessions of this user end; the current one continues.
     await revokeUserSessions(db, u.id, u.sessionId)
     await audit(db, req, { action: 'auth.password_change' })
-    return toMe({ ...u, mustChangePassword: false })
+    return toMe(db, { ...u, mustChangePassword: false })
   })
 }

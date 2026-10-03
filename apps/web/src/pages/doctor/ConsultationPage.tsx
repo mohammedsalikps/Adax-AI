@@ -324,6 +324,7 @@ function ConsultationEditor({ initial, sidePanel }: { initial: Encounter; sidePa
     onSuccess: (e) => {
       qc.setQueryData(encounterKey(e.id), e)
       void qc.invalidateQueries({ queryKey: ['visits'] })
+      void qc.invalidateQueries({ queryKey: ['appointments'] })
       void qc.invalidateQueries({ queryKey: ['patient', e.patient.id] })
       void qc.invalidateQueries({ queryKey: ['my-consultations'] })
       toast('success', 'Consultation signed and visit completed')

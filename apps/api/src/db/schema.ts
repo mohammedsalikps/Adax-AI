@@ -1304,3 +1304,153 @@ export const noteInsertions = pgTable(
     uniqueIndex('note_insertions_once_uq').on(t.encounterId, t.subjectType, t.subjectId, t.section, sql`md5(${t.text})`),
   ],
 )
+
+// ---------------------------------------------------------------------------
+// Appointments, their status history, and notifications (slice 4)
+// ---------------------------------------------------------------------------
+
+export const appointmentStatus = pgEnum('appointment_status', ['booked', 'checked_in', 'completed', 'cancelled', 'rescheduled', 'no_show'])
+
+/**
+ * A booked slot for a patient. It is a promise, not a visit: checking in
+ * creates or links exactly one visit (visit_id). The time is an instant;
+ * the facility's timezone gives its local day and clock time. While booked
+ * or checked in, a doctor and a patient each hold their slot (exclusion
+ * constraints, migration 0022). Rescheduling replaces the row with a new
+ * one (rescheduled_from / rescheduled_to), so no earlier state is erased.
+ * Closed appointments are frozen, rows are never deleted, and every status
+ * change is recorded in appointment_status_events by a trigger.
+ */
+export const appointments = pgTable(
+  'appointments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id),
+    doctorId: uuid('doctor_id').references(() => users.id),
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }).notNull(),
+    durationMinutes: integer('duration_minutes').notNull(),
+    /** What the patient says the visit is for (free text, as typed by staff). */
+    reason: text('reason'),
+    status: appointmentStatus('status').notNull().default('booked'),
+    statusReason: text('status_reason'),
+    version: integer('version').notNull().default(1),
+    /** Set at check-in: the one visit this appointment became or joined. */
+    visitId: uuid('visit_id').references(() => visits.id),
+    rescheduledFrom: uuid('rescheduled_from').references((): AnyPgColumn => appointments.id),
+    rescheduledTo: uuid('rescheduled_to').references((): AnyPgColumn => appointments.id),
+    /** Client-chosen key that makes a retried booking or reschedule return the same appointment. */
+    idempotencyKey: uuid('idempotency_key'),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('appointments_facility_time_idx').on(t.facilityId, t.scheduledAt),
+    index('appointments_patient_time_idx').on(t.patientId, t.scheduledAt),
+    index('appointments_doctor_time_idx').on(t.doctorId, t.scheduledAt),
+    uniqueIndex('appointments_idempotency_uq')
+      .on(t.facilityId, t.idempotencyKey)
+      .where(sql`idempotency_key is not null`),
+    uniqueIndex('appointments_visit_uq')
+      .on(t.visitId)
+      .where(sql`visit_id is not null`),
+    uniqueIndex('appointments_rescheduled_from_uq')
+      .on(t.rescheduledFrom)
+      .where(sql`rescheduled_from is not null`),
+    check('appointments_duration_check', sql`duration_minutes between 5 and 240`),
+    check('appointments_slot_check', sql`(extract(epoch from scheduled_at)::bigint % 300) = 0`),
+    check('appointments_reason_length', sql`length(coalesce(reason, '')) <= 300 and length(coalesce(status_reason, '')) <= 300`),
+    check('appointments_visit_link_check', sql`(status in ('checked_in', 'completed') and visit_id is not null) or (status in ('booked', 'rescheduled') and visit_id is null) or status in ('cancelled', 'no_show')`),
+    check('appointments_rescheduled_check', sql`(status = 'rescheduled') = (rescheduled_to is not null)`),
+    check('appointments_cancel_reason_check', sql`status <> 'cancelled' or length(btrim(coalesce(status_reason, ''))) > 0`),
+    check('appointments_not_self_check', sql`rescheduled_from is distinct from id and rescheduled_to is distinct from id`),
+  ],
+)
+
+/** Who changed an appointment's status, when, how and why. Written by a trigger; append-only. */
+export const appointmentStatusEvents = pgTable(
+  'appointment_status_events',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    appointmentId: uuid('appointment_id')
+      .notNull()
+      .references(() => appointments.id),
+    fromStatus: appointmentStatus('from_status'),
+    toStatus: appointmentStatus('to_status').notNull(),
+    source: text('source').notNull(),
+    reason: text('reason'),
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('appointment_status_events_appointment_idx').on(t.appointmentId, t.id)],
+)
+
+/**
+ * Outbox of messages to patients. The only channel is `in_app` (the patient
+ * portal): "delivered" means it is available there. No SMS, email or push
+ * provider exists, so none is claimed. One row per (appointment, event):
+ * dedup_key is unique, so a retried request never queues a message twice.
+ * The payload holds no clinical content (times, department, clinician name).
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    appointmentId: uuid('appointment_id').references(() => appointments.id),
+    /** appointment.booked | appointment.rescheduled | appointment.cancelled */
+    kind: text('kind').notNull(),
+    channel: text('channel').notNull().default('in_app'),
+    dedupKey: text('dedup_key').notNull(),
+    payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+    /** queued | delivered | undeliverable | failed */
+    status: text('status').notNull().default('queued'),
+    failureCode: text('failure_code'),
+    attempts: integer('attempts').notNull().default(0),
+    lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('notifications_dedup_uq').on(t.dedupKey),
+    index('notifications_patient_idx').on(t.patientId, t.createdAt),
+    index('notifications_appointment_idx').on(t.appointmentId),
+    check('notifications_status_check', sql`status in ('queued', 'delivered', 'undeliverable', 'failed')`),
+    check('notifications_channel_check', sql`channel in ('in_app')`),
+    check('notifications_delivered_check', sql`(status = 'delivered') = (delivered_at is not null)`),
+  ],
+)
+
+/** One row per delivery attempt, with its outcome. Append-only. */
+export const notificationAttempts = pgTable(
+  'notification_attempts',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    notificationId: uuid('notification_id')
+      .notNull()
+      .references(() => notifications.id),
+    attemptNo: integer('attempt_no').notNull(),
+    outcome: text('outcome').notNull(),
+    code: text('code'),
+    /** The staff member who asked for the retry; null for the first, automatic attempt. */
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('notification_attempts_uq').on(t.notificationId, t.attemptNo), check('notification_attempts_outcome_check', sql`outcome in ('delivered', 'undeliverable', 'failed')`)],
+)

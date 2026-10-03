@@ -5,9 +5,13 @@ import { type ReactNode, useEffect, useId, useRef } from 'react'
  * Modal dialog on the native <dialog> element: focus is trapped and restored
  * by the browser, Escape closes it, and the page behind is inert.
  */
-export function Dialog({ open, onClose, title, children, footer, wide }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Dialog({ open, onClose, title, children, footer, wide, dismissible = true }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; dismissible?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null)
   const titleId = useId()
+  // `dismissible: false` (a request is in flight) keeps the dialog open: Escape and the close button do nothing, and if the
+  // browser closes it anyway (Chromium makes a repeated Escape uncancellable) it is shown again.
+  const latest = useRef({ open, dismissible })
+  latest.current = { open, dismissible }
   useEffect(() => {
     const d = ref.current
     if (!d) return
@@ -19,21 +23,28 @@ export function Dialog({ open, onClose, title, children, footer, wide }: { open:
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      onClose={onClose}
-      onCancel={(e) => {
-        e.preventDefault()
+      onClose={() => {
+        const d = ref.current
+        if (latest.current.open && !latest.current.dismissible && d && !d.open) {
+          d.showModal()
+          return
+        }
         onClose()
       }}
-      className={`m-auto max-h-[90dvh] w-[calc(100%-2rem)] overflow-hidden ${wide ? 'max-w-3xl' : 'max-w-lg'} rounded-xl border border-line bg-surface p-0 text-ink shadow-xl backdrop:bg-ink/40`}
+      onCancel={(e) => {
+        e.preventDefault()
+        if (latest.current.dismissible) onClose()
+      }}
+      className={`m-auto max-h-[90dvh] w-[calc(100%-2rem)] overflow-hidden ${wide ? 'max-w-3xl' : 'max-w-lg'} rounded-2xl border border-line bg-surface p-0 text-ink shadow-pop backdrop:bg-ink/40`}
     >
       {open && (
         // Header and footer stay fixed; only the body scrolls (min-h-0 lets it shrink).
         <div className="flex max-h-[90dvh] flex-col">
-          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-3">
+          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-3.5">
             <h2 id={titleId} className="text-lg font-semibold">
               {title}
             </h2>
-            <button type="button" onClick={onClose} className="rounded-md p-2 text-ink-muted hover:bg-canvas" aria-label="Close dialog">
+            <button type="button" onClick={onClose} disabled={!dismissible} className="rounded-md p-2 text-ink-muted hover:bg-canvas disabled:opacity-40" aria-label="Close dialog">
               <X aria-hidden="true" className="size-5" />
             </button>
           </div>

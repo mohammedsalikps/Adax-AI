@@ -70,7 +70,7 @@ test('doctor consults, writes the note, prescribes, signs, prints and amends; nu
   await expect(page.getByRole('region', { name: 'Amendments' })).toContainText('Clarify fever threshold')
 
   // The visit left the doctor's open queue.
-  await page.goto('/doctor')
+  await page.goto('/doctor/queue')
   await expect(page.getByRole('listitem').filter({ hasText: p.name })).toHaveCount(0)
 
   // The nurse sees the saved record in the timeline and can read (not edit) it.

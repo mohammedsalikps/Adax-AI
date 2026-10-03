@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { api, errorMessage } from '../../lib/api.ts'
 import { useMe } from '../../lib/auth.tsx'
-import { usePortalBase } from '../../lib/clinical.ts'
+import { usePortalQueuePath } from '../../lib/clinical.ts'
 import { useForm } from '../../lib/useForm.ts'
 import { useDepartments } from '../../pages/admin/AdminUsersPage.tsx'
 import { Button } from '../ui/Button.tsx'
@@ -26,7 +26,7 @@ export function CheckInDialog({ patientId, patientName, onClose }: { patientId: 
   const qc = useQueryClient()
   const toast = useToast()
   const navigate = useNavigate()
-  const base = usePortalBase()
+  const queuePath = usePortalQueuePath()
   const depts = useDepartments()
   const doctors = useDoctors()
   const form = useForm(CreateVisitRequest, { patientId, departmentId: me?.departmentId ?? '', assignedDoctorId: null, priority: 'normal', chiefComplaint: '' })
@@ -37,7 +37,7 @@ export function CheckInDialog({ patientId, patientName, onClose }: { patientId: 
       void qc.invalidateQueries({ queryKey: ['patient', patientId] })
       toast('success', `${patientName} checked in — token ${v.tokenNumber}`)
       onClose()
-      navigate(base)
+      navigate(queuePath)
     },
     onError: (e) => form.applyServerErrors(e),
   })

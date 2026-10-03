@@ -3,6 +3,8 @@ import multipart from '@fastify/multipart'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type pg from 'pg'
 import { registerAdminRoutes } from './admin/routes.ts'
+import { type NotificationChannel } from './appointments/notifications.ts'
+import { registerAppointmentRoutes } from './appointments/routes.ts'
 import { type AiProviders, providersFromConfig } from './ai/providers.ts'
 import { JobService } from './ai/jobs.ts'
 import { registerOversightRoutes } from './ai/oversight.ts'
@@ -47,6 +49,8 @@ export interface AppDeps {
   settings?: AppSettings
   /** config/routing.yaml (re-read on change). */
   routing?: RoutingRulesSource
+  /** How appointment messages are delivered; defaults to the patient portal. Tests inject a failing channel. */
+  notificationChannel?: NotificationChannel
   /** false: no logging (tests). A stream: the API's own log settings, written to that stream (tests of log content). */
   logger?: false | { stream: NodeJS.WritableStream }
 }
@@ -82,6 +86,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerAdminRoutes(app, { db })
   registerPatientRoutes(app, { db })
   registerVisitRoutes(app, { db, encounterLookup: encounterIdsForVisits })
+  registerAppointmentRoutes(app, { db, channel: deps.notificationChannel })
   registerEncounterRoutes(app, { db })
   registerInsertionRoutes(app, { db })
   registerFileRoutes(app, { db, config: deps.config })
@@ -131,6 +136,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // The database's own lifecycle guards (migration 0019) are the backstop for the checks in the routes.
     const refusal = LIFECYCLE_REFUSALS[pgCode(err) ?? '']
     if (refusal) return reply.code(409).send({ error: refusal.code, message: refusal.message, requestId: req.id })
+    // PostgreSQL gave up on one of two changes that were waiting for each other (deadlock, serialization): nothing was changed, trying again is safe.
+    if (pgCode(err) === '40P01' || pgCode(err) === '40001') return reply.code(409).send({ error: 'try_again', message: 'The system was busy with another change. Nothing was saved. Try again.', requestId: req.id })
     if (err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
       return reply.code(err.statusCode).send({ error: 'bad_request', message: err.statusCode === 413 ? 'Request too large' : 'Malformed request', requestId: req.id })
     }

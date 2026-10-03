@@ -226,6 +226,7 @@ export type MyConsultationsResponse = z.infer<typeof MyConsultationsResponse>
 export const STATUS_SOURCE_LABELS: Record<string, string> = {
   history_start: 'Status when the history began',
   check_in: 'Checked in',
+  appointment_check_in: 'Checked in from an appointment',
   queue: 'Changed in the queue',
   vitals: 'Vitals recorded',
   consultation_start: 'Consultation started',

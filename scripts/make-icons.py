@@ -9,18 +9,18 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parent.parent / "apps" / "web" / "public" / "icons"
-TEAL = (14, 116, 144, 255)
+BLUE = (37, 99, 235, 255)
 WHITE = (255, 255, 255, 255)
 
 
 def mark(size: int, maskable: bool) -> Image.Image:
-    img = Image.new("RGBA", (size, size), TEAL if maskable else (0, 0, 0, 0))
+    img = Image.new("RGBA", (size, size), BLUE if maskable else (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     # Maskable icons keep the mark inside the central 80% safe zone.
     pad = int(size * 0.1) if maskable else 0
     inner = size - 2 * pad
     if not maskable:
-        d.rounded_rectangle((0, 0, size - 1, size - 1), radius=int(size * 7 / 32), fill=TEAL)
+        d.rounded_rectangle((0, 0, size - 1, size - 1), radius=int(size * 7 / 32), fill=BLUE)
     s = inner / 32
 
     def pt(x: float, y: float) -> tuple[float, float]:

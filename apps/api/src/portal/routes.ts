@@ -1,5 +1,5 @@
-import { CONSENT_LABELS, CONSENT_VERSIONS, CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT, type ConsentType, consentWording, type PortalConsent, WithdrawConsentRequest, type PortalHome, type PortalProfile, type PortalRecord, type PortalRecordSummary, type PortalThermalReport, type PortalVisit, type PortalVital } from '@adaxai/contracts'
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
+import { CONSENT_LABELS, CONSENT_VERSIONS, CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT, type ConsentType, consentWording, type NotificationPayload, type PortalAppointmentList, type PortalConsent, type PortalNotifications, WithdrawConsentRequest, type PortalHome, type PortalProfile, type PortalRecord, type PortalRecordSummary, type PortalThermalReport, type PortalVisit, type PortalVital } from '@adaxai/contracts'
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
@@ -8,7 +8,7 @@ import { currentUser } from '../auth/plugin.ts'
 import { SESSION_COOKIE } from '../auth/sessions.ts'
 import { consentState, withdrawConsentType } from '../consents/service.ts'
 import type { Db } from '../db/client.ts'
-import { allergies, consents, departments, diagnoses, encounterAmendments, encounters, facilities, observations, patients, prescriptionItems, thermalCaptures, users, visits } from '../db/schema.ts'
+import { allergies, appointments, consents, departments, diagnoses, encounterAmendments, encounters, facilities, notifications, observations, patients, prescriptionItems, thermalCaptures, users, visits } from '../db/schema.ts'
 import { forbidden, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 
@@ -173,6 +173,84 @@ export function registerPortalRoutes(app: FastifyInstance, deps: { db: Db }) {
       amendments: am.map(({ a, name }) => ({ createdAt: a.createdAt.toISOString(), authorName: name, reason: a.reason, content: a.content })),
       contentHash: r.e.contentHash ?? '',
     }
+  })
+
+  /**
+   * The patient's own appointments (a moved appointment is shown as its new
+   * time), on the clinic's clock. No staff free text (the booking reason is
+   * not shown) and nothing about other patients.
+   */
+  app.get('/api/portal/appointments', perm, async (req): Promise<PortalAppointmentList> => {
+    const { patientId } = await self(req)
+    const doctor = alias(users, 'doctor')
+    const rows = await db
+      .select({
+        a: appointments,
+        dept: departments.name,
+        doctorName: doctor.fullName,
+        timezone: facilities.timezone,
+        localDate: sql<string>`to_char(${appointments.scheduledAt} at time zone ${facilities.timezone}, 'YYYY-MM-DD')`,
+        localTime: sql<string>`to_char(${appointments.scheduledAt} at time zone ${facilities.timezone}, 'HH24:MI')`,
+      })
+      .from(appointments)
+      .innerJoin(departments, eq(departments.id, appointments.departmentId))
+      .innerJoin(facilities, eq(facilities.id, appointments.facilityId))
+      .leftJoin(doctor, eq(doctor.id, appointments.doctorId))
+      .where(and(eq(appointments.patientId, patientId), ne(appointments.status, 'rescheduled')))
+      .orderBy(desc(appointments.scheduledAt))
+      .limit(100)
+    await read(req, patientId, 'appointments')
+    return {
+      appointments: rows.map(({ a, dept, doctorName, timezone, localDate, localTime }) => ({
+        id: a.id,
+        status: a.status,
+        scheduledAt: a.scheduledAt.toISOString(),
+        timezone,
+        localDate,
+        localTime,
+        durationMinutes: a.durationMinutes,
+        departmentName: dept,
+        doctorName,
+        awaitingOutcome: a.status === 'booked' && a.scheduledAt.getTime() <= Date.now(),
+      })),
+    }
+  })
+
+  /** Messages the clinic made available to this patient (only delivered ones exist for the patient). */
+  app.get('/api/portal/notifications', perm, async (req): Promise<PortalNotifications> => {
+    const { patientId } = await self(req)
+    const mine = and(eq(notifications.patientId, patientId), eq(notifications.status, 'delivered'))
+    // Unread first (so a read message cannot push an unread one out of the list), then newest delivery first. With more than 50 unread the oldest are not listed; the count stays right.
+    const rows = await db.select().from(notifications).where(mine).orderBy(desc(sql`${notifications.readAt} is null`), desc(notifications.deliveredAt)).limit(50)
+    const [counted] = await db.select({ unread: sql<number>`count(*)::int` }).from(notifications).where(and(mine, isNull(notifications.readAt)))
+    const [clinic] = await db.select({ timezone: facilities.timezone }).from(facilities).where(eq(facilities.id, currentUser(req).facilityId))
+    await read(req, patientId, 'notifications')
+    return {
+      unread: counted?.unread ?? 0,
+      timezone: clinic?.timezone ?? 'UTC',
+      notifications: rows.map((n) => ({ id: n.id, kind: n.kind, deliveredAt: (n.deliveredAt ?? n.createdAt).toISOString(), readAt: n.readAt?.toISOString() ?? null, appointmentId: n.appointmentId, payload: n.payload as NotificationPayload })),
+    }
+  })
+
+  /** Marks one of the patient's own messages as read. Another patient's message is "not found"; reading twice changes nothing. */
+  app.post('/api/portal/notifications/:id/read', perm, async (req) => {
+    const { patientId } = await self(req)
+    const { id } = parse(z.object({ id: z.uuid() }), req.params)
+    const [marked] = await db
+      .update(notifications)
+      .set({ readAt: sql`now()` })
+      .where(and(eq(notifications.id, id), eq(notifications.patientId, patientId), eq(notifications.status, 'delivered'), isNull(notifications.readAt)))
+      .returning({ id: notifications.id })
+    if (!marked) {
+      const own = await db.query.notifications.findFirst({ columns: { id: true }, where: and(eq(notifications.id, id), eq(notifications.patientId, patientId), eq(notifications.status, 'delivered')) })
+      if (!own) {
+        await audit(db, req, { action: 'portal.read', outcome: 'denied', entityType: 'notification', entityId: id, patientId, details: { what: 'notification', reason: 'not_found_or_not_owned' } })
+        req.denialAudited = true
+        throw notFound('Notification')
+      }
+    }
+    await read(req, patientId, 'notification', id)
+    return { ok: true }
   })
 
   app.get('/api/portal/vitals', perm, async (req) => {

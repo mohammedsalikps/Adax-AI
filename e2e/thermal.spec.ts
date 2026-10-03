@@ -53,6 +53,9 @@ test('nurse uploads and measures; doctor approves, runs experimental rules and l
   if (!isMobile) {
     // Hover readout and drawing by drag.
     const overlay = page.getByTestId('thermal-overlay')
+    // The image starts below the fold of a 1280 x 720 window (its centre is at y = 797 there); bring it to the top first, clear of
+    // the toasts that sit at the bottom of the window, so the pointer is over the image.
+    await overlay.evaluate((el) => el.scrollIntoView({ block: 'start' }))
     const box = (await overlay.boundingBox())!
     await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5)
     await expect(page.getByTestId('hover-readout')).toContainText(/x 1\d\d, y 1\d\d: \d+\.\d\d °C/)

@@ -1,7 +1,7 @@
 import { SEX_LABELS } from '@adaxai/contracts'
 import { Search, UserPlus } from 'lucide-react'
-import { useState } from 'react'
-import { Link } from 'react-router'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { Alert, EmptyState, Spinner } from '../../components/ui/Feedback.tsx'
 import { Card, PageHeader } from '../../components/ui/Layout.tsx'
 import { Table } from '../../components/ui/Table.tsx'
@@ -13,7 +13,17 @@ import { useDocumentTitle } from '../../lib/useDocumentTitle.ts'
 export function PatientsPage() {
   useDocumentTitle('Patients')
   const base = usePortalBase()
-  const [q, setQ] = useState('')
+  // A search started from the top bar arrives in the router state (never in the address). It is taken once and then cleared from the
+  // history entry, so a reload or Back does not repeat the (audited) search; a new one from the top bar replaces the current term.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const started = (location.state as { q?: string } | null)?.q
+  const [q, setQ] = useState(started ?? '')
+  useEffect(() => {
+    if (!started) return
+    setQ(started)
+    void navigate(location.pathname, { replace: true, state: null, preventScrollReset: true })
+  }, [started, location.key, location.pathname, navigate])
   const results = usePatientSearch(q)
   return (
     <>

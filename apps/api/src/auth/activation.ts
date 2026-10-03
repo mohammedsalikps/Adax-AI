@@ -109,7 +109,7 @@ export function registerActivationRoutes(app: FastifyInstance, { db, cookieSecur
       })
       const session = await createSession(db, user.id, req.ip, req.headers['user-agent'] ?? null)
       void reply.setCookie(SESSION_COOKIE, session.token, sessionCookieOptions(cookieSecure, session.expiresAt))
-      return reply.code(reset ? 200 : 201).send(toMe(user))
+      return reply.code(reset ? 200 : 201).send(await toMe(db, user))
     } catch (e) {
       if (pgCode(e) === '23505') throw conflict('This patient already has a portal account. Sign in with your MRN.', 'portal_account_exists')
       throw e

@@ -1,5 +1,6 @@
 import type { Role } from '@adaxai/contracts'
 import {
+  CalendarDays,
   ClipboardList,
   FileSignature,
   FileClock,
@@ -18,7 +19,6 @@ import {
   UserPlus,
   Users,
   Watch,
-  Search,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -31,6 +31,7 @@ export interface NavItem {
 export const NAV: Record<Role, NavItem[]> = {
   admin: [
     { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
+    { to: '/admin/appointments', label: 'Appointments', icon: CalendarDays },
     { to: '/admin/users', label: 'Users', icon: Users },
     { to: '/admin/departments', label: 'Departments', icon: Building2 },
     { to: '/admin/devices', label: 'Devices', icon: Watch },
@@ -39,21 +40,25 @@ export const NAV: Record<Role, NavItem[]> = {
     { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
   ],
   doctor: [
-    { to: '/doctor', label: 'OPD queue', icon: Stethoscope, end: true },
+    { to: '/doctor', label: 'Home', icon: LayoutDashboard, end: true },
+    { to: '/doctor/queue', label: 'OPD queue', icon: Stethoscope },
+    { to: '/doctor/appointments', label: 'Appointments', icon: CalendarDays },
     { to: '/doctor/consultations', label: 'My consultations', icon: FileSignature },
-    { to: '/doctor/patients', label: 'Patients', icon: Search },
+    { to: '/doctor/patients', label: 'Patients', icon: Users },
     { to: '/doctor/thermal', label: 'Thermal', icon: ScanLine },
     { to: '/doctor/ai-review', label: 'AI review', icon: BrainCircuit },
   ],
   nurse: [
     { to: '/nurse', label: 'OPD queue', icon: ClipboardList, end: true },
+    { to: '/nurse/appointments', label: 'Appointments', icon: CalendarDays },
     { to: '/nurse/register', label: 'Register patient', icon: UserPlus },
-    { to: '/nurse/patients', label: 'Patients', icon: Search },
+    { to: '/nurse/patients', label: 'Patients', icon: Users },
     { to: '/nurse/devices', label: 'Devices', icon: Watch },
   ],
   patient: [
     { to: '/patient', label: 'Home', icon: HeartPulse, end: true },
     { to: '/patient/records', label: 'Records', icon: FileText },
+    { to: '/patient/appointments', label: 'Appointments', icon: CalendarDays },
     { to: '/patient/visits', label: 'Visits', icon: FileClock },
     { to: '/patient/vitals', label: 'Vital signs', icon: Activity },
     { to: '/patient/consents', label: 'Consents', icon: ShieldCheck },

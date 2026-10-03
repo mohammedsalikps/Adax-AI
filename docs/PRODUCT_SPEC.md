@@ -22,9 +22,9 @@ The doctor works with **Mana AI**, a companion for the patient's record and the 
 
 | User | Application | Core jobs |
 | --- | --- | --- |
-| Patient | PWA (`/patient`) | Activate and sign in; book and follow appointments; read signed records, prescriptions, vitals, released reports and follow-ups; manage consents; read notifications. |
-| Nurse | `/nurse` | Appointments and queue; registration with duplicate warning and MRN; consent capture; check-in and intake; vitals with units and source; routing suggestion apply/override; device assignment; portal activation; alert escalation. |
-| Doctor | `/doctor` | Dashboard (today's appointments, waiting, active, completed, drafts awaiting review, alerts, follow-ups due); patient list and profile; **Mana AI**; three-panel consultation workspace; notes and prescriptions with immutable signed versions and amendments; **My consultations** (unsigned drafts from any day, records signed in the last 30 days); discarding a draft with a reason; record verification and status history. |
+| Patient | PWA (`/patient`) | Activate and sign in; **see their appointments and the in-app messages about them** (booking by the patient is not built); read signed records, prescriptions, vitals, released reports and follow-ups; manage consents. |
+| Nurse | `/nurse` | **Appointments** (book, reschedule, cancel, did-not-attend, check-in, message status) and queue; registration with duplicate warning and MRN; consent capture; check-in and intake; vitals with units and source; routing suggestion apply/override; device assignment; portal activation; alert escalation. |
+| Doctor | `/doctor` | **Home** (today's queue counts, today's schedule, patients ready, shortcuts); **Appointments** (own schedule or whole clinic, today / upcoming / past); **OPD queue** (`/doctor/queue`); patient search in the top bar; alerts and follow-ups due *(planned)*; patient list and profile; **Mana AI**; three-panel consultation workspace; notes and prescriptions with immutable signed versions and amendments; **My consultations** (unsigned drafts from any day, records signed in the last 30 days); discarding a draft with a reason; record verification and status history. |
 | Admin | `/admin` | Staff and roles; facility and departments; routing and alert configuration viewers with versions; device registry; AI job and provider status; review metrics; audit search, filter and export; operational health. |
 
 ## 3. Domain entities (PostgreSQL)
@@ -35,7 +35,7 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 | --- | --- |
 | Identity | facilities, departments, users (roles: admin, doctor, nurse, patient), sessions, audit_events (append-only, SHA-256 hash chain since migration 0019) |
 | Patient | patients (MRN sequence), allergies, consents (typed, versioned, withdrawable), patient_activation_codes |
-| Flow | visits (daily tokens), **visit_status_events**, observations (vitals; `source`, `validation_status`, device), *(planned)* appointments, appointment_status_events, notifications |
+| Flow | visits (daily tokens), **visit_status_events**, **appointments**, **appointment_status_events**, **notifications**, **notification_attempts**, observations (vitals; `source`, `validation_status`, device) |
 | Record | encounters (signed snapshot + versioned content hash, or discarded with who/when/why), **encounter_status_events**, diagnoses, prescription_items, encounter_amendments (numbered, hash-linked), **note_insertions** |
 | AI | ai_jobs, ai_runs, ai_prompt_versions, ai_settings_snapshots, ai_models, transcripts, transcript_segments, clinical_facts, ai_recommendations, ai_evidence, ai_review_actions, **mana_questions**, *(planned)* transcript_corrections |
 | Imaging and devices | clinical_images, image_analyses, thermal_* tables, devices, device_assignments, auscultation_recordings, *(planned)* device_batches, alert_rules, alerts, alert_events |
@@ -43,9 +43,21 @@ Implemented tables are listed in `apps/api/src/db/schema.ts`. Planned items are 
 
 ## 4. State machines
 
-**Appointment** *(planned)*: `booked → checked_in → (visit flow) → completed`.
-- From `booked` the appointment may also become `cancelled`, `rescheduled` (a new appointment linked to the old one) or `no_show`.
-- Every transition is appended to `appointment_status_events` with actor, time and reason.
+**Appointment** (implemented, [ADR 0010](adr/0010-appointments-visit-linkage-and-notification-outbox.md)): `booked → checked_in → completed`.
+- **From `booked`:** also `cancelled` (with a reason), `rescheduled` (a new appointment linked to the old one; the old row is kept) or `no_show` (only after the start time).
+- **From `checked_in`:** the appointment follows its visit: `completed` when the consultation is signed, `cancelled` or `no_show` when the visit is closed in the queue. It is never changed by hand.
+- **Check-in:**
+  - only on the appointment's own day;
+  - it creates or joins exactly one visit and starts no consultation;
+  - repeating it, or doing it twice at once, makes no second visit.
+- **Enforcement:** the API and the database both enforce the transitions. Closed appointments are frozen and rows are never deleted.
+- **Time:** an instant, shown on the facility's clock.
+- **Slots:** a doctor, and a patient, cannot hold overlapping slots (database constraint).
+- **History:** every change is appended to `appointment_status_events` with actor, source, reason and time.
+
+**Notification** (implemented): `queued → delivered | undeliverable | failed`, with every attempt recorded; a delivered message stays delivered and can be read once.
+- The only channel is the patient portal. No SMS, email or push is sent.
+- Undeliverable and failed messages are retried by staff, and never delivered twice.
 
 **Visit** (implemented, [ADR 0008](adr/0008-record-lifecycle-and-signed-record-verification.md)): `waiting → in_triage → ready → in_consultation → completed`.
 - **Manual moves** (queue, `VISIT_TRANSITIONS`):
@@ -188,6 +200,17 @@ The rules flag:
 | Application role has no UPDATE/DELETE/TRUNCATE on append-only tables | `integrity.test.ts` › "privileges of the application role" |
 | Tests and scripts cannot empty, reseed or migrate the development database | `db-safety.test.ts` |
 | Browser: worklist and discard, signed record verification and history, admin chain check with anchor, axe and mobile layout | `e2e/record-lifecycle.spec.ts` (desktop and mobile) |
+
+| A booking is validated field by field (past, horizon, slot, length, department, doctor, patient, facility) and its time is on the facility's clock | `appointments.test.ts` › "booking" |
+| A doctor and a patient cannot hold overlapping slots (database); simultaneous bookings: one wins; retries and twins make one appointment | `appointments-db.test.ts` › "no double booking"; `appointments.test.ts` › "two bookings cannot hold…", "a retried request returns…" |
+| Time zones and date boundaries: local day vs UTC, nonexistent and repeated clock times, day-boundary listing | `appointments.test.ts` › "time zones and dates" |
+| The schedule by day with counts and filters; per-role views; administrators see no identity or free text; no cross-facility access, probes audited | `appointments.test.ts` › "the schedule" |
+| Rescheduling keeps both appointments in the history; conflicts, stale screens and closed appointments change nothing; concurrent changes: one wins | `appointments.test.ts` › "rescheduling", "cancelling and not attending" |
+| The appointment state machine in the database equals the contract's; closed appointments are frozen; status history is written and append-only | `appointments-db.test.ts` › "appointment state machine in the database", "status history and the visit" |
+| Check-in creates or joins exactly one visit, starts no consultation, is idempotent and race-safe (also against a walk-in), and the appointment follows its visit | `appointments.test.ts` › "check-in and the visit" |
+| Notifications: one per event, attempts recorded, retry without double delivery, a failing channel does not fail the booking or leak content, consent respected, no clinical content | `appointment-notifications.test.ts` |
+| The patient portal shows only the patient's own appointments and messages | `appointment-notifications.test.ts` › "the patient’s own view" |
+| Browser: book, conflict, reschedule, cancel; check-in to the queue and completion; portal message delivery and reading; administrator view; axe and mobile layout | `e2e/appointments.spec.ts` (desktop and mobile) |
 
 Acceptance criteria for the planned slices are written in [AUDIT.md](AUDIT.md) §7 and will move here as each slice lands.
 

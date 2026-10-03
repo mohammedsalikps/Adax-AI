@@ -71,6 +71,8 @@ export const Visit = z.object({
   checkedInAt: z.string(),
   updatedAt: z.string(),
   encounterId: z.uuid().nullable(),
+  /** The appointment this visit came from, when it was checked in from one (time on the facility's clock). */
+  appointment: z.object({ id: z.uuid(), scheduledAt: z.string(), localTime: z.string() }).nullable(),
   patient: z.object({ id: z.uuid(), mrn: z.string(), fullName: z.string(), sex: Sex, dateOfBirth: z.string(), noKnownAllergies: z.boolean(), activeAllergies: z.array(z.string()) }),
   latestVitals: z.array(Observation),
   abnormalVitalCount: z.number().int(),

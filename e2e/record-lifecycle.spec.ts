@@ -57,7 +57,7 @@ test('a doctor finds an unsigned draft in their worklist and discards it with a 
   await expect(page.getByText(p.name)).toHaveCount(0)
 
   // Back in the queue, ready for a doctor; a new consultation can start.
-  await page.goto('/doctor')
+  await page.goto('/doctor/queue')
   const row = page.getByRole('listitem').filter({ hasText: p.name })
   await expect(row).toContainText('Ready for doctor')
   await expect(row.getByRole('button', { name: 'Start consultation' })).toBeVisible()

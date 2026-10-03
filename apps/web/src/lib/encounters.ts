@@ -26,6 +26,7 @@ export function useStartConsultation() {
     onSuccess: (e) => {
       qc.setQueryData(encounterKey(e.id), e)
       void qc.invalidateQueries({ queryKey: ['visits'] })
+      void qc.invalidateQueries({ queryKey: ['appointments'] })
       void qc.invalidateQueries({ queryKey: ['my-consultations'] })
       navigate(`/doctor/encounters/${e.id}`)
     },
@@ -54,6 +55,7 @@ export function useDiscardDraft(encounterId: string) {
     onSuccess: (e) => {
       qc.setQueryData(encounterKey(e.id), e)
       void qc.invalidateQueries({ queryKey: ['visits'] })
+      void qc.invalidateQueries({ queryKey: ['appointments'] })
       void qc.invalidateQueries({ queryKey: ['my-consultations'] })
       void qc.invalidateQueries({ queryKey: ['patient', e.patient.id] })
       void qc.invalidateQueries({ queryKey: ['encounter-history', e.id] })

@@ -8,7 +8,131 @@ ADAXAI is an MVP. It is not production-ready, not a medical device, and not clin
 | --- | --- |
 | 1. Mana AI patient-context Q&A; AI text in notes with provenance | `5cbefc1` |
 | 2. Consent and access control | `be5ca8b` |
-| 3. Record lifecycle and integrity | this commit (see below) |
+| 3. Record lifecycle and integrity | `26db008` |
+| 4. Appointments, check-in, schedules, notifications, and the design foundation | this commit (see below) |
+
+## Slice 4: appointments, check-in, schedules and notifications, and the design foundation
+
+**Basis:** the existing visit queue, roles, consent, audit and portal code. Before this slice there was no appointment of any kind and no notification mechanism. Decisions are in [ADR 0010](adr/0010-appointments-visit-linkage-and-notification-outbox.md). The UI work follows a design brief with a reference mock-up of a clinical “Doctor App”; its audit, tokens and components are in [DESIGN.md](DESIGN.md).
+
+### Implemented
+
+**Appointments** (staff book; check-in is the only link to a visit):
+- Book, reschedule, cancel (with a reason) and mark *did not attend*, on the **facility's clock**. A time that does not exist (a daylight-saving gap) is refused, never moved.
+- A doctor and a patient cannot hold overlapping slots: database exclusion constraints, not just API checks. Rescheduling books a new appointment and closes the old one as *rescheduled*; closed rows are frozen; nothing is deleted.
+- Status history for every change (who, how, why), written by a database trigger.
+- **Check-in** creates or joins **exactly one visit** (idempotent, safe against double clicks, a walk-in racing it, and two staff at once). It starts no consultation and does not mark the patient as with the doctor. A checked-in appointment then follows its visit: *completed* when the consultation is signed, *cancelled* or *no-show* when the visit is closed in the queue.
+- Doctors' and nurses' schedules (today, upcoming, past, one date; a doctor can limit it to their own patients) and an administrator's schedule **without patient identity or free text** (administrators cannot change anything). Another facility's appointment is “not found” and the lookup is audited.
+- The patient portal shows the patient's own appointments and messages. Patients cannot book or cancel.
+
+**Notifications** (an outbox with one real channel):
+- One message per appointment event (booked, moved, cancelled), queued in the same transaction as the change, then delivered. **The only channel is the patient portal. No SMS, email or push is sent or claimed.** A message to a patient without a portal account (or whose portal consent is withdrawn) is recorded as *not delivered*, with the reason, and can be retried.
+- Each attempt is made exclusively (a row lock held for the whole attempt) and recorded; retries cannot deliver twice; a channel that fails cannot fail a booking and its error text is not kept; messages hold times, the department and the clinician's name, never the reason or a diagnosis.
+- Only a message that still holds is retried (not “booked” for an appointment that was moved).
+- Staff are told whether the patient was told: in the message after a booking, move or cancellation, and on the schedule for a cancellation or a failed message.
+
+**Design foundation and UI** (current slice only; see [DESIGN.md](DESIGN.md)):
+- Tokens: restrained blue, type scale, radii, control and row sizes, elevation, one focus ring; control edges at 3:1.
+- Components: `AppShell` (sidebar, top bar with patient search for doctors and nurses, user, role and clinic; phone drawer with focus handling), `StatCard`, `PatientAvatar`, `AppointmentTable`, `SegmentedControl`, `ConfirmationDialog`, `LoadingState`, `ErrorState` (with retry, or a plain refusal), and refined `Badge`, `Card`, `EmptyState`, `Button`, `Form`, `Dialog`, `Toast`.
+- Screens: the doctor's **Home** (four real counts, today's schedule, patients ready, shortcuts), the **Appointments** pages and dialogs for staff, the patient record's appointments card, the portal's appointments page, and the queue's appointment line. The doctor's OPD queue moved to `/doctor/queue`.
+- Favicon, PWA icons and the theme colour follow the new brand colour.
+
+**Migration** (additive: no existing row is changed or removed):
+
+| Migration | Contents |
+| --- | --- |
+| `0022_appointments_and_notifications` | The `btree_gist` extension. `appointment_ends_at()`. Tables `appointments`, `appointment_status_events`, `notifications`, `notification_attempts` with checks and unique and exclusion constraints. Triggers: status history, state machine and freeze, facility membership of patient, department and doctor, a checked-in appointment following its visit, and a guard on what a notification may change. The two history tables are registered as append-only. |
+
+**Migration safety:** the development database held data. A cold backup (`backups/adaxai-2026-10-03T02-41-04`, not in Git) was taken with the app stopped and **read back and verified** before 0022 was applied to it. Applying it also took the test and end-to-end databases to 0022 (each runner confirms the database's identity first). The audit chain verified intact afterwards. One unplanned event: stopping the dev services for the backup also stopped PostgreSQL uncleanly; it was restarted, crash recovery completed, and only then was the backup taken and verified.
+
+### Not implemented, or needing a decision
+
+- **No external delivery.** SMS, email and push are not built and nothing is claimed. A patient without portal access is not told by any other route; staff are told so, and must tell the patient.
+- **No scheduling model.** No clinic hours, clinician calendars, department capacity, recurring appointments or waiting lists. Patients cannot book or cancel. No reminders (nothing schedules them). A missed appointment is marked by staff, not automatically.
+- **Conservative defaults, not clinical policy:** 5-minute start marks, lengths of 10, 15, 20, 30, 45 or 60 minutes, up to 180 days ahead, check-in only on the appointment's own day. A clinical owner should confirm them.
+- **Audit volume from polling.** Every read of the schedule list is audited with the patients it disclosed, and an open page refreshes it every 60 seconds while visible. A day left open on one screen adds about 60 events an hour. The chain lock under that load has not been measured.
+- **Booking waits are queued on advisory locks.** Many simultaneous bookings for one doctor make later ones wait for a pooled connection each (the pool is 10). It was not load-tested.
+- **Check-in racing a booking.** In theory PostgreSQL can end one of them as a deadlock; the answer is a 409 “try again”, and nothing is saved.
+- **A key-reuse conflict raised while handling another error is not audited** (the initial one is not either).
+- **Design.** Only the shared foundation and the current slice's screens were redesigned; every other page just inherits the tokens (see [DESIGN.md](DESIGN.md) §7). No web font is bundled. The consultation workspace is the recommended next slice. The patient-profile panel from the brief was not built (nothing needs it yet), and Reports, Settings, a Mana AI page and a notification bell were not built because the product has nothing behind them.
+
+### Tests
+
+New API tests (**56**):
+
+| File | Tests | Covers |
+| --- | --- | --- |
+| `appointments-db` | 11 | Exclusion constraints for doctor and patient (half-open slots, release on close), the state machine in the database equals the contract's, frozen closed rows, history and the visit trigger, what a booking must look like, concurrent raw inserts |
+| `appointments` | 25 | Booking validation field by field, time zones and date boundaries (including a nonexistent and a repeated clock time), the schedule by role, administrator redaction, cross-facility refusal and audit, rescheduling, cancelling, did-not-attend, check-in (one visit, idempotent, concurrent, against a walk-in, wrong day, following its visit), the patient's list |
+| `appointments-concurrency` | 5 | Twin reschedules with one key, the same key for two bookings, eight bookings for one slot, swapping two back-to-back appointments (never a deadlock), a year-0000 date |
+| `appointment-notifications` | 15 | Undeliverable, retry and delivery, simultaneous retries, a retry while an attempt is in flight, a half-recorded attempt rolls back whole, a failing or throwing channel (no content in logs or audit), withdrawn consent, stale messages not retried (also under the lock), message content, the patient's own view, inbox order and the hidden booking reason, a missed appointment not shown as upcoming |
+
+New end-to-end tests (**20 runs**: 10 tests on desktop and phone):
+- `appointments.spec.ts` (4 journeys): book, a taken slot, reschedule, cancel; check-in to the queue and to completion; the portal message undelivered, retried, read; the administrator's view.
+- `doctor-home.spec.ts` (6 tests): Home from real data and its shortcuts; patient search from the top bar; the phone drawer; loading, failure with retry and refusal; the schedule as table or cards at 1440, 1280, 1024 and 768 px; a dialog that cannot be dismissed while its request runs. Two are skipped by design on the other device class.
+- Existing specs changed: three `/doctor` to `/doctor/queue`; the thermal hover test scrolls the image into view first (see below).
+
+### Verified test results (slice 4, 3 Oct 2026)
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm run lint` | exit 0 |
+| `npm run test:api` | 29 files, **309 passed**, 0 failed (new: 56 in 4 files) |
+| `npm run test:web` | **5 passed** |
+| `npm run test:thermal` | **32 passed** |
+| `npx playwright test` | **67 passed, 0 failed, 0 timed out, 3 skipped**, in each of the last two full runs on the final tree (see the note on an earlier failed run) |
+
+**Notes on the end-to-end runs:**
+- The three skips are by design: the desktop-only keyboard test on the phone project (existing), the drawer test on desktop, and the table-width test on the phone project.
+- The slowest test of the two clean runs took 35.4 s; an earlier run on a slightly earlier tree had one at 49.0 s in the first wave of six workers. Every test is within the 60 s budget. No timeout was changed.
+- **One full run on the final tree failed: 7 failed, 60 passed.** All seven started in the same window, and each spent its 60 s waiting for the sign-in form after `page.goto('/login')` (the others in the run rendered the same page normally, and the server logs show nothing). Re-running those five specs gave 14 of 14, and two full runs after that gave 67 passed each. **The cause was not established**; I classify it as an environmental stall of the test web server (six workers start at once) and not as a product defect, but that is a judgement, not a finding. If it recurs, capture the page's console and network errors at the 60 s mark before anything else.
+
+### Failures found during this slice, and what was done
+
+| Failure | Classification | Action |
+| --- | --- | --- |
+| `thermal.spec` (desktop): the hover readout stayed empty, 3 of 3 times alone | Two causes. **Product defect:** a new page kept the old page's scroll position (906 px), found when this slice put a card above the thermal card. Then **test geometry:** the new shell puts the image's centre at y = 797, below the fold of the 1280 × 720 window | `ScrollRestoration` (a new page starts at the top, Back restores); the test scrolls the image to the top before hovering. No assertion changed |
+| `appointments-db`: “two bookings for the same slot, exactly one wins” failed once in 3 runs | **Product risk:** raw concurrent inserts can be ended by the deadlock detector (`40P01`) instead of the exclusion check | The API takes per-doctor and per-patient advisory locks in a fixed order first, so its callers always get `slot_taken`; `40P01` and `40001` are answered 409 “try again”. The raw-insert DB test accepts either refusal (exactly one is refused); the API tests assert `slot_taken` exactly |
+| New concurrency tests were rate-limited at sign-in | Test setup | The file was split (the limit is 30 sign-ins a minute per account); no limit changed |
+| `doctor-home` Home test failed in repeated runs | Test defect: parallel runs booked the same doctor at random times (the exclusion constraint refused) | The appointment is unassigned and early in the day; repeated 8 of 8 passes |
+| Phone drawer: its own close button was covered by the drawer (found in the screenshot tour) | **Product defect** | The drawer has its own close button; focus and inert handling tested |
+| `appointments.spec`: portal assertion expected the booking reason; a hard-coded 17:30 could collide with another booking | Test defects after the review (the reason is no longer shown to the patient) | Assertions use the clinic-clock time and the department; the new time is outside the random range |
+| First test runs of the new files: slot not on a 5-minute mark, a multi-statement admin query, wrong expected orderings | Test defects | Fixed in the tests; no assertion weakened |
+| Final-tree e2e run: 7 tests stalled 60 s at the sign-in form | **Unexplained**, not reproduced in three later runs (see above) | None; recorded as a limitation |
+
+### Pre-commit adversarial review (slice 4)
+
+**Method:** independent read-only reviewers under distinct lenses, each asked to try to refute their own findings; I checked every finding against the code while fixing it. No separate skeptic agents were run, and the counts below are the reviewers' reports, not a count of confirmed defects. Rounds repeated until the last found nothing new.
+- **Round 1** (5 reviewers): concurrency and transactions; authorization, privacy and audit; time zones, dates and SQL; notifications and the portal; web UI and regressions.
+- **Round 2:** the backend fixes; the design foundation, shell and appointment screens.
+- **Round 3:** the round-2 fixes, backend and web.
+- **Round 4:** the round-3 fixes.
+- **Round 5:** the round-4 fixes: nothing found.
+
+| Round | Raised | Fixed | Accepted and documented |
+| --- | --- | --- | --- |
+| 1 | 27 (one a duplicate) | 27 | 0 |
+| 2 | 25 | 23 | 2 (key-reuse refusal not audited; a check-in/booking deadlock window, answered as 409 “try again”) |
+| 3 | 15 | 15 (a drawer test for Back-while-open was not added) | 0 |
+| 4 | 5 (2 low defects, 3 minor) | 5 | 0 |
+| 5 | 0 | n/a | 0 |
+
+**What the rounds changed in the product** (examples):
+- Retry attempts overlapped: now exclusive, in one transaction, on one connection, with the message's currency re-checked under the locks.
+- A cancelled-by-queue appointment showed a false “patient not told” flag; messages that no longer hold are not retried.
+- The staff-typed booking reason was shown to the patient; it is no longer.
+- Same-key concurrent requests gave a 500 or a false conflict; now idempotent or a clear 409.
+- A year-0000 date gave a 500; booking dialogs fetched 25 unrelated patients on opening; admins saw a dead link.
+- Drawer, dialog and focus behaviour, a doctor's Home that lacked the MRN beside a one-click “Start consultation”, a table whose columns did not line up, and an invisible focusable button.
+
+### Browser verification
+
+**Automated:** Playwright drove real Chromium (the suite's 1280 × 720 desktop and 412 × 915 phone projects) with axe (WCAG 2.2 A and AA rules) and an overflow check on the schedule, details, the portal, the administrator's view, Home, the failed and refused states, and the drawer.
+
+**Manual check:** a throwaway Playwright script (not committed) toured the redesigned screens on the **disposable end-to-end stack** (synthetic data; not the development database) at **1440 × 900**, **1280 × 800**, **1024 × 768** and **390 × 844**, and saved full-page screenshots. I looked at: at 1440, Home (empty and with data), appointments, details, the cancel confirmation with its validation error, booking with patient results, the queue, and the loading, failed and refused states, the administrator's schedule and the portal's appointments; at 390, Home, the open menu, appointments, details, booking and a patient record; at 1280 and 1024, the appointments page (table and cards). The other captures of that tour were produced but not individually inspected. The tour found the drawer defect above.
+
+**Not done:** Firefox, Safari, real devices, a screen reader by hand, Windows high contrast, browser zoom beyond the default, print styles for the new pages.
 
 ## Slice 3: record lifecycle and integrity
 

@@ -12,10 +12,12 @@ import { Dialog } from '../../components/ui/Dialog.tsx'
 import { Alert, Badge, EmptyState, Spinner } from '../../components/ui/Feedback.tsx'
 import { SelectField, TextAreaField, TextField } from '../../components/ui/Form.tsx'
 import { PageHeader } from '../../components/ui/Layout.tsx'
+import { SegmentedControl } from '../../components/ui/SegmentedControl.tsx'
 import { useToast } from '../../components/ui/Toast.tsx'
 import { errorMessage } from '../../lib/api.ts'
 import { useMe } from '../../lib/auth.tsx'
 import { usePortalBase, useVisitMutation, useVisits } from '../../lib/clinical.ts'
+import { fmtClock } from '../../lib/appointments.ts'
 import { fmtDate, fmtTime } from '../../lib/format.ts'
 import { useDocumentTitle } from '../../lib/useDocumentTitle.ts'
 import { useDepartments } from '../admin/AdminUsersPage.tsx'
@@ -131,7 +133,7 @@ function QueueRow({ visit, role, onOpen, consultationAction }: { visit: Visit; r
   const open = OPEN_VISIT_STATUSES.includes(visit.status)
   const can = (to: VisitStatus) => VISIT_TRANSITIONS[visit.status].includes(to)
   return (
-    <li className={`rounded-xl border bg-surface p-4 ${visit.priority === 'urgent' && open ? 'border-down/40' : 'border-line'}`} data-testid={`queue-row-${visit.tokenNumber}`}>
+    <li className={`rounded-xl border bg-surface p-4 shadow-card ${visit.priority === 'urgent' && open ? 'border-down/40' : 'border-line'}`} data-testid={`queue-row-${visit.tokenNumber}`}>
       <div className="flex flex-wrap gap-4">
         <div className="flex size-14 shrink-0 flex-col items-center justify-center rounded-lg bg-canvas" aria-label={`Token ${visit.tokenNumber}`}>
           <span className="text-[10px] font-medium text-ink-muted uppercase">Token</span>
@@ -153,6 +155,7 @@ function QueueRow({ visit, role, onOpen, consultationAction }: { visit: Visit; r
           <VitalsInline vitals={visit.latestVitals} />
           <p className="text-xs text-ink-muted">
             {visit.departmentName} · {visit.assignedDoctorName ?? 'Any doctor'} · checked in {fmtTime(visit.checkedInAt)}
+            {visit.appointment && ` · appointment ${fmtClock(visit.appointment.localTime)}`}
           </p>
         </div>
         {open && (
@@ -221,13 +224,15 @@ export function QueuePage({ consultationAction, notice }: { consultationAction?:
       {notice}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {role === 'doctor' && (
-          <div role="group" aria-label="Whose patients" className="inline-flex rounded-md border border-line bg-surface p-0.5">
-            {(['mine', 'all'] as const).map((s) => (
-              <button key={s} type="button" aria-pressed={scope === s} onClick={() => setScope(s)} className={`rounded px-3 py-1.5 text-sm font-medium ${scope === s ? 'bg-brand-soft text-brand-strong' : 'text-ink-muted hover:text-ink'}`}>
-                {s === 'mine' ? 'My patients' : 'Whole clinic'}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            label="Whose patients"
+            value={scope}
+            onChange={setScope}
+            options={[
+              { value: 'mine', label: 'My patients' },
+              { value: 'all', label: 'Whole clinic' },
+            ]}
+          />
         )}
         <label className="ml-auto inline-flex items-center gap-2 text-sm">
           <input type="checkbox" className="size-4 accent-brand" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />

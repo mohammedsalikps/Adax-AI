@@ -148,11 +148,14 @@ export interface SpeechHealth {
   reason: string | null
   model: { id: string; runtime: string | null; weightsSha256: string | null } | null
 }
-/** Speech-to-text that runs on this machine. There is no hosted implementation and none may be added behind this interface by default. */
+/** Speech-to-text by a service the operator runs. There is no hosted implementation and none may be added behind this interface by default. */
 export interface Transcriber {
   readonly provider: string
   readonly model: string
-  readonly local: true
+  /** True when the service is on this machine (a loopback address); false only if the operator pointed it at another host on purpose. */
+  readonly local: boolean
+  /** host:port of the service (shown only when it is not on this machine). */
+  readonly host?: string
   transcribe(audio: Buffer, mimeType: string, filename: string, opts?: { language?: string | null }): Promise<SpeechResult>
   health(): Promise<SpeechHealth>
 }
@@ -178,15 +181,31 @@ export interface AiProviders {
   recommender?: Recommender | null
   describer?: ImageDescriber | null
   qa?: RecordQuestionAnswerer | null
+  /** Whether consultation text may go to a hosted provider, and where it would go. A key alone never allows it. */
+  egress?: { hosted: boolean; destination: string | null }
   /** Why a provider is unavailable, shown to users instead of any fabricated output. */
   reasons: { llm: string | null; stt: string | null; vision?: string | null; qa?: string | null }
   features?: AiFeatures
   liveChunkSeconds?: number
 }
 
+/** Shown wherever a hosted AI step is unavailable because egress is off: the default, and not an error. */
+export const EGRESS_OFF = 'Hosted AI processing is switched off on this server, so no consultation text leaves this computer. Turning it on is a server setting (ai.egress.hostedProviders in config/adaxai.yaml, or AI_EGRESS_HOSTED), not something this screen can do.'
+
+const hostOf = (baseUrl: string | undefined): string => {
+  try {
+    return baseUrl ? new URL(baseUrl).host : 'api.anthropic.com'
+  } catch {
+    return 'api.anthropic.com'
+  }
+}
+
 export function providersFromConfig(config: Config, settings: AppSettings): AiProviders {
-  // `settings` already has the environment model overrides applied (effectiveSettings).
-  const llm = config.ai.anthropicApiKey ? createAnthropicProviders(config.ai.anthropicApiKey, settings.ai.llm, settings.ai.vision) : null
+  // `settings` already has the environment overrides applied (effectiveSettings). A hosted provider is built only when egress is allowed
+  // on purpose AND a key is set: the key alone enables nothing, and nothing here falls back from a local step to a hosted one.
+  const egressAllowed = settings.ai.egress.hostedProviders
+  const llm = egressAllowed && config.ai.anthropicApiKey ? createAnthropicProviders(config.ai.anthropicApiKey, settings.ai.llm, settings.ai.vision) : null
+  const destination = llm ? hostOf(process.env.ANTHROPIC_BASE_URL) : null
   const stt = settings.ai.stt
   let transcriber: Transcriber | null = null
   let sttReason: string | null = null
@@ -201,6 +220,8 @@ export function providersFromConfig(config: Config, settings: AppSettings): AiPr
   const extractor: FactExtractor | null = !f.extraction ? null : settings.ai.extraction.provider === 'llm' ? (llm?.extractor ?? null) : new RuleFactExtractor()
   const off = (name: string) => `${name} is switched off in config/adaxai.yaml.`
   const noKey = 'ANTHROPIC_API_KEY is not set on this server'
+  // The reason shown when no hosted provider is used: egress off (the default) is not an error, and says nothing leaves this computer.
+  const noLlm = !egressAllowed ? EGRESS_OFF : `AI drafting, extraction and recommendations are not configured: ${noKey}.`
   return {
     drafter: f.noteDraft ? (llm?.drafter ?? null) : null,
     extractor,
@@ -210,11 +231,12 @@ export function providersFromConfig(config: Config, settings: AppSettings): AiPr
     transcriber,
     features: f,
     liveChunkSeconds: settings.ai.stt.liveChunkSeconds,
+    egress: { hosted: egressAllowed, destination },
     reasons: {
-      llm: llm ? null : `AI drafting, extraction and recommendations are not configured: ${noKey}.`,
+      llm: llm ? null : noLlm,
       stt: sttReason,
-      vision: !f.imageAnalysis ? off('AI image analysis') : llm ? null : `AI image analysis is not configured: ${noKey}. Photographs are still stored for clinician review.`,
-      qa: !f.patientQa ? off('Mana AI summaries') : llm ? null : `Mana AI summaries are not configured: ${noKey}. Answers read directly from the record are still shown.`,
+      vision: !f.imageAnalysis ? off('AI image analysis') : llm ? null : `${egressAllowed ? `AI image analysis is not configured: ${noKey}.` : EGRESS_OFF} Photographs are still stored for clinician review.`,
+      qa: !f.patientQa ? off('Mana AI summaries') : llm ? null : `${egressAllowed ? `Mana AI summaries are not configured: ${noKey}.` : EGRESS_OFF} Answers read directly from the record are still shown.`,
     },
   }
 }
@@ -224,7 +246,7 @@ const providerStatus = (p: { provider: string; model: string } | null | undefine
 /** What the local speech service says about itself just now (a short, cached health check), never a guess from configuration alone. */
 async function speechStatus(p: AiProviders): Promise<SpeechStatus> {
   const t = p.transcriber
-  if (!t) return { available: false, provider: null, model: null, reason: p.reasons.stt ?? 'Local transcription is not configured.', state: 'not_configured', local: true, runtime: null, weightsSha256: null }
+  if (!t) return { available: false, provider: null, model: null, reason: p.reasons.stt ?? 'Local transcription is not configured.', state: 'not_configured', local: true, host: null, runtime: null, weightsSha256: null }
   const h = await t.health()
   return {
     available: h.state === 'ready',
@@ -232,7 +254,8 @@ async function speechStatus(p: AiProviders): Promise<SpeechStatus> {
     model: h.model?.id ?? t.model,
     reason: h.state === 'ready' ? null : (h.reason ?? 'The local speech service is not ready.'),
     state: h.state,
-    local: true,
+    local: t.local,
+    host: t.local ? null : (t.host ?? null),
     runtime: h.model?.runtime ?? null,
     weightsSha256: h.model?.weightsSha256 ?? null,
   }
@@ -250,5 +273,6 @@ export async function aiStatus(p: AiProviders): Promise<AiStatus> {
     qa: providerStatus(p.qa, p.reasons.qa ?? p.reasons.llm),
     features: p.features ?? ALL_FEATURES,
     liveChunkSeconds: p.liveChunkSeconds ?? 20,
+    egress: { hosted: p.egress?.hosted ?? false, destination: p.egress?.destination ?? null },
   }
 }

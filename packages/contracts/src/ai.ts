@@ -12,7 +12,10 @@ export const ProviderStatus = z.object({ available: z.boolean(), provider: z.str
  */
 export const SpeechStatus = ProviderStatus.extend({
   state: z.enum(['ready', 'loading', 'unavailable', 'not_configured']),
-  local: z.literal(true),
+  /** True when the service is on this computer (a loopback address). False only if the operator pointed it at another host on purpose; there is never a hosted one. */
+  local: z.boolean(),
+  /** Where it is (host:port) when it is not on this computer; null when it is. */
+  host: z.string().nullable(),
   runtime: z.string().nullable(),
   weightsSha256: z.string().nullable(),
 })
@@ -21,8 +24,14 @@ export type SpeechStatus = z.infer<typeof SpeechStatus>
 export const ExtractionStatus = z.object({ available: z.boolean(), provider: z.string(), version: z.string(), local: z.boolean(), languages: z.array(z.string()), reason: z.string().nullable() })
 export type ExtractionStatus = z.infer<typeof ExtractionStatus>
 export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean() })
+/**
+ * Whether consultation text may go to a hosted AI provider (a server setting; a provider key alone never allows it) and, if so, to which host. It
+ * carries no key and no way to change it: the screen can only show it.
+ */
+export const AiEgress = z.object({ hosted: z.boolean(), destination: z.string().nullable() })
+export type AiEgress = z.infer<typeof AiEgress>
 /** `qa`: Mana AI summaries of the patient record. */
-export const AiStatus = z.object({ llm: ProviderStatus, stt: SpeechStatus, extraction: ExtractionStatus, vision: ProviderStatus, qa: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number() })
+export const AiStatus = z.object({ llm: ProviderStatus, stt: SpeechStatus, extraction: ExtractionStatus, vision: ProviderStatus, qa: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number(), egress: AiEgress })
 export type AiStatus = z.infer<typeof AiStatus>
 
 export const TranscriptSource = z.enum(['typed', 'pasted', 'audio_upload', 'browser_recording'])

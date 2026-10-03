@@ -14,8 +14,9 @@ export interface RetentionResult {
 }
 
 /**
- * Deletes the stored bytes of consultation audio from SIGNED consultations
- * older than `retention.consultationAudioDays`. The file row (who, what,
+ * Deletes the stored bytes of consultation audio of SIGNED consultations that
+ * was stored more than `retention.consultationAudioDays` days ago (counted from
+ * when the audio was stored, not from signing). The file row (who, what,
  * when, checksum), the transcript and the signed note are kept; each deletion
  * is audited. Nothing else is deleted by this policy.
  */
@@ -33,7 +34,7 @@ export async function runRetention(db: Db, storageDir: string, settings: AppSett
   for (const { f } of rows) {
     await fs.rm(resolveStoragePath(storageDir, f.storageKey), { force: true })
     await db.transaction(async (tx) => {
-      await tx.update(files).set({ deletedAt: new Date(), deletedReason: `retention: consultation audio older than ${days} days after signing` }).where(and(eq(files.id, f.id), isNull(files.deletedAt)))
+      await tx.update(files).set({ deletedAt: new Date(), deletedReason: `retention: consultation audio stored more than ${days} days ago, consultation signed` }).where(and(eq(files.id, f.id), isNull(files.deletedAt)))
       await audit(tx, null, { action: 'file.retention_delete', actorUserId: null, actorRole: null, entityType: 'file', entityId: f.id, patientId: f.patientId, details: { kind: f.kind, days, sha256: f.sha256 } })
     })
     deleted++

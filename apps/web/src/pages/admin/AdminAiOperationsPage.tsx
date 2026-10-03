@@ -24,6 +24,7 @@ interface Outcome {
 }
 interface Overview {
   status: AiStatus
+  hostedKeyConfigured: boolean
   settingsSha256: string
   jobs: { kind: string; status: string; data_origin: string; n: number }[]
   failures: { kind: string; code: string; n: number }[]
@@ -70,6 +71,17 @@ export function AdminAiOperationsPage() {
               <ProviderRow label="Speech-to-text" p={o.status.stt} />
               <ProviderRow label="Image description" p={o.status.vision} />
             </ul>
+            <p className="mt-3 text-sm" data-testid="egress-status">
+              <strong>Hosted AI egress: {o.status.egress.hosted ? `allowed${o.status.egress.destination ? ` (to ${o.status.egress.destination})` : ''}` : 'off'}.</strong>{' '}
+              {o.status.egress.hosted
+                ? o.status.egress.destination
+                  ? 'Consultation text can go to the hosted provider after the patient’s consent and the doctor’s click.'
+                  : 'Hosted AI is allowed, but no provider key is configured on this server, so nothing can be sent.'
+                : o.hostedKeyConfigured
+                  ? 'A hosted provider key is configured on this server but is not used: a key alone does not allow anything to be sent.'
+                  : 'No consultation text leaves this computer.'}{' '}
+              Audio is never sent to a hosted service{o.status.stt.local ? ' and stays on this computer' : `; speech-to-text runs on ${o.status.stt.host ?? 'another computer'}, which is not this one`}. This is a server setting (config/adaxai.yaml or AI_EGRESS_HOSTED), not something this page can change.
+            </p>
             <p className="mt-3 text-xs text-ink-muted">
               Features: {Object.entries(o.status.features).map(([k, v]) => `${k} ${v ? 'on' : 'off'}`).join(' · ')} · live chunk {o.status.liveChunkSeconds} s · settings {o.settingsSha256.slice(0, 12)}… (config/adaxai.yaml; keys in .env, never shown)
             </p>

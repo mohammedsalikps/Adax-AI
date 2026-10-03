@@ -1,0 +1,50 @@
+# What consultation capture stores, where, and what withdrawing consent does
+
+**Status: written 4 Oct 2026 (slice V2.1) from the code and the tests, not from intentions.** An engineering record, not a retention policy, a privacy notice or legal advice. **Nothing here decides retention, erasure or encryption: those are governance decisions that have not been made** (see the last section). Everything is synthetic data in this prototype.
+
+## 1. What is stored when a consultation is captured
+
+| What | Where | Form | Who can read it | Can the application delete it? |
+| --- | --- | --- | --- | --- |
+| **The audio** of each recorded part (about 20 s) or an uploaded recording | **Files on this computer's disk**, under `STORAGE_DIR` (`storage/` in development; `storage-test/`, `storage-e2e/` for the test runs) as `<year>/<month>/<random id>.<ext>`; **plain bytes, not encrypted** | One file per part | Doctors (playback through `GET /api/files/:id`, audited); nurses and others are told "not found" | Only the retention job (below), by removing the bytes |
+| The audio's **file record** | Table `files` (`kind = consultation_audio`): patient, consultation, original name (`live-chunk-N.webm`), type, size, SHA-256, who/when; `deleted_at` and a reason if the bytes were removed | A row | The same | The row is kept even when the bytes are removed |
+| The **recording and its parts** | Tables `transcripts` (status `live`/`final`, source, **end reason**: `doctor_stopped`, `consent_withdrawn`, `stale_replaced`) and `transcript_chunks` (index, offset and length on the recording, language, status, file) | Rows | Doctors of the facility | No (rows are kept) |
+| The **transcript lines** | Table `transcript_segments`: the text exactly as heard, start and end, language, model score, the run that made it. **Append-only** (a database trigger refuses changes and deletes) | Rows | Any doctor of the facility reading that consultation | **No**: the trigger blocks the application role |
+| **Who spoke** (the doctor's assignments) | Table `transcript_segment_speakers`, append-only; the latest row per line is the reviewed speaker | Rows | Doctors | No |
+| The **important points** (proposed, confirmed or rejected) | Table `clinical_facts` (the point in the speaker's own words, its category, status, who decided and when), with the cited lines' text copied into `ai_evidence` (**append-only**, up to 2,000 characters per excerpt) and every decision in `ai_review_actions` (including the confirmed or edited text) | Rows | Doctors | No (review guards and append-only triggers) |
+| **Drafts and suggestions** made by the hosted language model, if egress was allowed | `ai_drafts`, `ai_draft_items`, `ai_recommendations` (derived from the transcript text) | Rows | Doctors | No |
+| Text the doctor **adds to the note** | The consultation note and `note_insertions` with provenance; part of the signed record once signed (immutable, hash-linked) | Rows | Per the record's rules | No (amendments only) |
+| **Run provenance** | `ai_jobs` (inputs by id, counts, status), `ai_runs` (model, runtime, weights SHA-256, local or external, input and output hashes, latency), `ai_models` | Rows | Doctors and administrators (counts only for administrators) | No |
+| **Audit** | `audit_events`: that a step happened, by whom, for which consultation, with **counts and ids, never the words** (tested with a sentinel phrase). Hash-chained, append-only | Rows | Administrators | No |
+| **Backups** | `npm run backup` copies the whole database directory **and the storage directory**, so a backup holds all of the above | Files in `backups/` (git-ignored) | Whoever can read the machine | By hand |
+| **The browser** | **Nothing**: no localStorage, sessionStorage or IndexedDB; the service worker never caches `/api` or audio; the page keeps the transcript in memory only | | | |
+| **The speech service** | **Nothing**: audio and text exist only in memory while a request is served; nothing is written to disk (an upload over the size limit is cut off before it is parsed, so the parser never reaches the point at which it would spool to a temporary file; tested) and its logs name error classes only (V2 and V2.1 hardening, tests) | | | |
+| **Application logs** | Request paths without query strings, error classes and codes; database errors are logged without the values being stored (V2.1 serializer) | | | |
+
+Also: **facility-wide**, any doctor can open the AI review page (`GET /api/ai/review-outcomes`), which lists rejected or edited AI output with the patient's name and MRN and the original text (including important points that quote a transcript). That visibility predates V2 and is listed below as a decision.
+
+## 2. What happens when the patient withdraws recording consent
+
+Done in one step by `withdrawConsentType` (`apps/api/src/consents/service.ts`), tested in `capture.test.ts`:
+
+1. **The consent row is marked withdrawn** (who, when, why, how). It is never deleted or rewritten.
+2. **Any recording in progress is ended in the same step**, with the end reason `consent_withdrawn`, and the step is audited (`ai.live_end`, and the withdrawal's own audit entry lists `live_recordings_ended:N`). This does not wait for the doctor's browser.
+3. **Everything that handles audio checks consent again and refuses**: starting a recording, every part (before its body is read and again before it is stored), every upload, every retry, extraction, and **once more after the speech model returns**, so a part that was being transcribed when consent was withdrawn is not stored (its audio, already received, stays; the part is marked failed).
+4. **The browser** stops the microphone, throws away the part it was recording and says so (within about four seconds, by polling, or at the next part).
+
+**What a withdrawal does NOT do:** it does **not** delete, hide, redact or restrict **anything already captured**: the audio files, the transcript lines, the speaker assignments, the important points and any text already added to the note all stay, and **doctors of the facility can still read them**. Consent-withdrawal screens now say this in words ("Audio and transcripts already captured are NOT deleted or hidden by this: they stay with the consultation (what happens to them is the clinic's decision, not yet defined)"; the patient's own version says the same). **No part of the product claims that withdrawal deletes historical data, and none does.**
+
+## 3. Retention that exists today
+
+- **`npm run retention`** (a manual command, not scheduled): removes the **bytes** of consultation audio that was **stored more than `retention.consultationAudioDays` days ago** (default **90**; 0 turns it off) **and belongs to a consultation that is signed**. The age counts from when the audio was stored, not from signing: audio recorded long ago in a consultation signed today is eligible at the next run. The `files` row, the transcript, the points and the signed note are kept. Each removal is audited.
+- **Nothing else is deleted by any policy.** Audio of a **discarded** or never-signed consultation is **kept indefinitely**. Transcript text, points, evidence excerpts and review records are **kept indefinitely** and cannot be deleted by the application (append-only).
+- **Nothing is encrypted at rest** by the application (files on disk, the database directory, backups). Whole-disk encryption of the machine is outside the application.
+
+## 4. Decisions that are NOT made (they need the clinic, clinical governance and legal advice; nothing was invented here)
+
+1. **Retention periods** for audio, transcripts and derived points, including for discarded consultations and for consultations whose consent was later withdrawn.
+2. **Erasure on request or on withdrawal**: whether withdrawal should purge or restrict historical captures, and who may do it. The tables are append-only on purpose (clinical evidence, audit): an erasure procedure would be a reviewed, audited administrative operation that does not exist yet, and its conflict with record-keeping duties is a legal question.
+3. **Encryption at rest** of audio and database, key management, and what backups may contain.
+4. **Who may read** captured audio and transcript text (today: doctors of the facility, any consultation) and the facility-wide AI review list.
+5. **The consent wording** itself. Two things differ and neither is decided here: (a) the capture screen's explanation to the patient was changed in V2 (audio stays on this computer; a hosted-AI sentence only if hosted AI is switched on; what withdrawal does not delete), but (b) **the formal wording recorded as read to the patient (`CONSENT_LABELS.ai_recording`, version `2026-10-v2` in `packages/contracts/src/patients.ts`, shown on the patient record's consent card) still says "using external speech-to-text and AI services"**, which has not been true of speech-to-text since V2. Changing it means a new wording version that existing consents would have to be renewed under: a legal and clinical-governance decision, so it was not done. A legal and clinical-governance review of all of it is needed before any real use.
+6. **Whether hosted AI egress is acceptable at all** for real consultations, under what agreement, and whether pseudonymised transcript text is enough ([ADR 0015](../adr/0015-hosted-ai-egress-policy-and-speech-service-hardening.md)).

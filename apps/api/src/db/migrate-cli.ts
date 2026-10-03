@@ -3,6 +3,7 @@
 import { loadConfig, loadDotEnv } from '../config.ts'
 import { assertDistinctNames, claimIdentity, type DbRole, readIdentity, UnsafeDatabaseError } from './identity.ts'
 import { migrate } from './migrator.ts'
+import { PREFLIGHTS } from './preflight.ts'
 import { createAdminClient } from './pool.ts'
 
 loadDotEnv()
@@ -15,9 +16,10 @@ if (swallowed.length) {
   console.error(`[migrate] ${swallowed.join(', ')} is set: an option given without "--" (npm keeps it), or set in your environment or .npmrc. Pass options after "--" (npm run db:migrate -- --target test|e2e [--claim-existing]) and unset the variable.`)
   process.exit(2)
 }
-const known = (a: string, i: number) => a === '--target' || a === '--claim-existing' || args[i - 1] === '--target'
+const remedies = PREFLIGHTS.map((p) => p.flag)
+const known = (a: string, i: number) => a === '--target' || a === '--claim-existing' || remedies.includes(a) || args[i - 1] === '--target'
 if (!args.every(known) || (args.includes('--target') && !args[args.indexOf('--target') + 1])) {
-  console.error(`[migrate] unexpected arguments: ${args.join(' ') || '(none)'} (usage: --target dev|test|e2e [--claim-existing])`)
+  console.error(`[migrate] unexpected arguments: ${args.join(' ') || '(none)'} (usage: --target dev|test|e2e [--claim-existing] [${remedies.join('] [')}])`)
   process.exit(2)
 }
 const target = args.includes('--target') ? args[args.indexOf('--target') + 1] : 'dev'
@@ -42,7 +44,7 @@ try {
   // A database that says it is something else is refused before anything is applied.
   const current = await readIdentity(client)
   if (current && current !== role) throw new UnsafeDatabaseError(`this database identifies as "${current}", not "${role}".`)
-  const r = await migrate(client, undefined, { appRole: config.db.appUser, log: (m) => console.log(`[migrate] ${database}: ${m}`) })
+  const r = await migrate(client, undefined, { appRole: config.db.appUser, resolve: args.filter((a) => remedies.includes(a)), log: (m) => console.log(`[migrate] ${database}: ${m}`) })
   console.log(`[migrate] ${database}: ${r.applied.length} applied, ${r.skipped.length} already applied`)
   // Record what this database is for.
   const identity = await claimIdentity(client, role, { claimExisting: process.argv.includes('--claim-existing') })

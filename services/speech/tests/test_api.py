@@ -129,6 +129,81 @@ def test_uploads_are_kept_in_memory_not_spooled_to_temporary_files():
     assert MultiPartParser.spool_max_size >= main.MAX_AUDIO_BYTES
 
 
+@pytest.fixture
+def parse_spy(monkeypatch):
+    """Records whether the multipart body was handed to the parser (the step that would hold it in memory or spool it to disk)."""
+    from starlette.formparsers import MultiPartParser
+
+    seen = {"parsed": 0}
+    real = MultiPartParser.parse
+
+    async def spy(self):
+        seen["parsed"] += 1
+        return await real(self)
+
+    monkeypatch.setattr(MultiPartParser, "parse", spy)
+    return seen
+
+
+def test_an_upload_over_the_limit_is_refused_before_its_body_is_parsed_and_leaves_nothing_on_disk(
+    monkeypatch, tmp_path, parse_spy
+):
+    import tempfile
+
+    monkeypatch.setattr(main, "MAX_AUDIO_BYTES", 1024)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    c = client_for()
+    # Declared length (the client states how long the body is): refused without reading it.
+    res = post(c, b"x" * (3 * 1024 * 1024))
+    assert res.status_code == 413 and res.json()["error"] == "too_large"
+    assert parse_spy["parsed"] == 0
+    assert c.app.state.pending == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_body_that_declares_no_length_is_cut_off_at_the_limit_too(monkeypatch, tmp_path, parse_spy):
+    import tempfile
+
+    monkeypatch.setattr(main, "MAX_AUDIO_BYTES", 1024)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    read = {"bytes": 0}
+
+    def stream():
+        yield b'--b\r\ncontent-disposition: form-data; name="file"; filename="a.wav"\r\ncontent-type: audio/wav\r\n\r\n'
+        for _ in range(200):  # 12.5 MiB offered; the limit is 1 MiB and a bit
+            read["bytes"] += 65536
+            yield b"x" * 65536
+        yield b"\r\n--b--\r\n"
+
+    c = client_for()
+    res = c.post("/v1/transcribe", content=stream(), headers={"content-type": "multipart/form-data; boundary=b"})
+    assert "content-length" not in res.request.headers  # the length was not declared: only counting the bytes can stop it
+    assert res.status_code == 413 and res.json()["error"] == "too_large"
+    assert parse_spy["parsed"] == 1  # it was handed to the parser, which stopped when the guard cut the body off
+    assert c.app.state.pending == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_request_is_counted_before_its_body_is_read_so_a_burst_of_uploads_is_refused_not_held(parse_spy):
+    c = client_for()
+    c.app.state.pending = main.MAX_PENDING
+    res = post(c, silent_wav(2.0))
+    assert res.status_code == 429 and res.headers["retry-after"] == "5"
+    assert parse_spy["parsed"] == 0
+    assert c.app.state.pending == main.MAX_PENDING
+    c.app.state.pending = 0
+
+
+def test_an_upload_within_the_limit_never_touches_the_disk(monkeypatch, tmp_path):
+    import tempfile
+
+    monkeypatch.setattr(main, "MAX_AUDIO_BYTES", 2 * 1024 * 1024)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    res = post(client_for(), silent_wav(40.0))  # 1.25 MiB: over Starlette's own 1 MiB spooling default
+    assert res.status_code == 200
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_the_server_error_log_cannot_carry_an_exception_message_or_traceback():
     secret = "words the patient said"
     logger = logging.getLogger("uvicorn.error")

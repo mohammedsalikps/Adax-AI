@@ -47,6 +47,11 @@ const EnvSchema = z.object({
   /** Where the local speech service listens (default http://127.0.0.1:8002). Loopback only unless SPEECH_ALLOW_NON_LOOPBACK is "true". */
   SPEECH_URL: z.union([z.url(), z.literal('')]).optional().transform((v) => v || undefined),
   SPEECH_ALLOW_NON_LOOPBACK: z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
+  /**
+   * Hosted AI egress: whether consultation text may be sent to a hosted AI provider at all. A provider key alone never enables it. Unset: the
+   * setting in config/adaxai.yaml (ai.egress.hostedProviders, false) decides. "true" allows it on purpose; "false" forbids it whatever the file says.
+   */
+  AI_EGRESS_HOSTED: z.union([z.enum(['true', 'false']), z.literal('')]).optional().transform((v) => (v ? v === 'true' : undefined)),
 })
 
 export interface DbConfig {
@@ -78,6 +83,8 @@ export interface Config {
     noteModel: string | undefined
     /** Env overrides of ai.stt in config/adaxai.yaml; undefined means "use the file". */
     speech: { provider: 'none' | 'local' | undefined; url: string | undefined; allowNonLoopback: boolean }
+    /** The environment's say on hosted egress (undefined: the settings file decides). */
+    egressHosted: boolean | undefined
     /** An AI_STT_API_KEY is set in the environment. It is never used; the server says so at start-up. */
     hostedSttKeyIgnored: boolean
   }
@@ -118,6 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       anthropicApiKey: e.ANTHROPIC_API_KEY,
       noteModel: e.AI_NOTE_MODEL,
       speech: { provider: e.SPEECH_PROVIDER, url: e.SPEECH_URL?.replace(/\/+$/, ''), allowNonLoopback: e.SPEECH_ALLOW_NON_LOOPBACK },
+      egressHosted: e.AI_EGRESS_HOSTED,
       hostedSttKeyIgnored: !!env.AI_STT_API_KEY,
     },
   }

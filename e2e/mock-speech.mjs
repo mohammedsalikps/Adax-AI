@@ -6,18 +6,10 @@
 // length of the audio it was sent (read from the WebM container, so timestamps follow the real recording).
 // It keeps no audio and no text: only how many parts it was sent (GET /__calls).
 import http from 'node:http'
+// The synthetic consultation this stand-in "hears" (shared with the hosted-provider stand-in, which watches for its words).
+import { SCRIPT } from './synthetic-consultation.mjs'
 
 const PORT = Number(process.env.MOCK_SPEECH_PORT || 8199)
-
-/** The synthetic consultation this stand-in "hears". `confidence` and the other scores are invented test values. */
-const SCRIPT = [
-  { text: 'I have had a cough and a fever for three days.', confidence: 0.93, avgLogprob: -0.07, noSpeechProb: 0.01 },
-  { text: 'I am allergic to penicillin.', confidence: 0.95, avgLogprob: -0.05, noSpeechProb: 0.01 },
-  { text: 'I take metformin five hundred milligrams twice a day.', confidence: 0.9, avgLogprob: -0.1, noSpeechProb: 0.02 },
-  { text: 'Let us do a chest X-ray and see you again in one week.', confidence: 0.88, avgLogprob: -0.13, noSpeechProb: 0.02 },
-  // Below the app's "low model score" mark, so the end-to-end tests see how an unsure line is shown.
-  { text: 'It gets worse in the evening.', confidence: 0.45, avgLogprob: -0.8, noSpeechProb: 0.1 },
-]
 
 const MODEL = { id: 'mock-speech-e2e', runtime: 'mock-speech (TEST-ONLY, no speech recognition)', computeType: 'none', device: 'none', weightsSha256: '0'.repeat(64), multilingual: false, local: true }
 

@@ -121,7 +121,7 @@ describe('Mana record answers (explicit rules, no AI provider)', () => {
 
     // No provider: an explicit unavailable state, no generated text, no AI job.
     expect(a.generation).toMatchObject({ status: 'unavailable', statements: [], jobId: null })
-    expect(a.generation.reason).toMatch(/ANTHROPIC_API_KEY/)
+    expect(a.generation.reason).toMatch(/switched off on this server/)
     expect((await adminQuery('SELECT count(*)::int AS n FROM ai_jobs')).rows[0].n).toBe(0)
     const { rows } = await adminQuery("SELECT patient_id, details FROM audit_events WHERE action = 'mana.ask'")
     expect(rows).toEqual([{ patient_id: p.id, details: expect.objectContaining({ intent: 'last_prescription', generation: 'unavailable', itemsForAi: 0 }) }])

@@ -239,7 +239,7 @@ describe('recommendations', () => {
     const res = await call(noKeys.app, 'POST', `/api/encounters/${e.id}/recommendations`, { cookie: doctor, body: {} })
     expect(res.statusCode).toBe(201)
     const ai = EncounterAi.parse(res.json())
-    expect(res.json().notice).toMatch(/ANTHROPIC_API_KEY/)
+    expect(res.json().notice).toMatch(/switched off on this server/)
     expect(ai.recommendations.every((r) => r.source === 'rules' && r.producedBy.provider === 'adaxai-rules' && r.producedBy.model === 'safety-rules-v1')).toBe(true)
 
     const allergy = ai.recommendations.find((r) => r.kind === 'safety_check' && r.text.includes('Amoxicillin'))!
@@ -312,7 +312,7 @@ describe('live transcription', () => {
     const tid = start.json().transcriptId as string
     const chunk = (i: number) => {
       const boundary = '----chunk'
-      const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunkIndex"\r\n\r\n${i}\r\n--${boundary}\r\nContent-Disposition: form-data; name="offsetMs"\r\n\r\n${i * 1000}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="c.webm"\r\nContent-Type: audio/webm\r\n\r\n`), Buffer.from(`audio-${i}`), Buffer.from(`\r\n--${boundary}--\r\n`)])
+      const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunkIndex"\r\n\r\n${i}\r\n--${boundary}\r\nContent-Disposition: form-data; name="offsetMs"\r\n\r\n${i * 1000}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="c.webm"\r\nContent-Type: audio/webm\r\n\r\n`), Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from(`audio-${i}`)]), Buffer.from(`\r\n--${boundary}--\r\n`)])
       return withAi.app.inject({ method: 'POST', url: `/api/transcripts/${tid}/chunks`, headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, cookie: doctor, 'x-adaxai-csrf': '1' }, payload })
     }
     expect((await chunk(0)).statusCode).toBe(201)

@@ -113,13 +113,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
   })
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
-  registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors })
+  registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors, limiter })
   registerManaRoutes(app, { db, providers, settings, jobs, executors, dataOrigin: deps.config.dataOrigin })
   registerImageRoutes(app, { db, config: deps.config, settings, providers, thermal, jobs, executors })
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })
   registerRoutingRoutes(app, { db, routing })
-  registerOversightRoutes(app, { db, providers, jobs })
+  registerOversightRoutes(app, { db, providers, jobs, hostedKeyConfigured: !!deps.config.ai.anthropicApiKey })
   registerPortalRoutes(app, { db })
   registerDeviceRoutes(app, { db, config: deps.config, settings, limiter })
 

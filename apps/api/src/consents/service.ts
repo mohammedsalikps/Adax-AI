@@ -5,7 +5,7 @@ import type { FastifyRequest } from 'fastify'
 import { audit } from '../audit/audit.ts'
 import { revokeUserSessions } from '../auth/sessions.ts'
 import { type DbOrTx, pgCode } from '../db/client.ts'
-import { consents, deviceAssignments, patientActivationCodes, users } from '../db/schema.ts'
+import { consents, deviceAssignments, encounters, patientActivationCodes, transcripts, users } from '../db/schema.ts'
 import { conflict, HttpError } from '../http/errors.ts'
 
 export type ConsentRow = typeof consents.$inferSelect
@@ -19,9 +19,14 @@ export type ConsentRow = typeof consents.$inferSelect
  * per patient and purpose is active (unique index).
  */
 
-/** The grant that applies now, if any: current wording first, then the most recent (deterministic). */
-export async function currentConsent(db: DbOrTx, patientId: string, type: ConsentType, encounterId?: string): Promise<ConsentRow | null> {
-  const [row] = await db
+/**
+ * The grant that applies now, if any: current wording first, then the most recent (deterministic).
+ * `lock`: inside a transaction, also locks that grant against a withdrawal until the transaction ends, so a step that stores something because
+ * the consent holds and a withdrawal that is ending recordings cannot pass each other: either the step commits first (and the withdrawal then
+ * sees what it stored) or the withdrawal commits first (and the step is refused).
+ */
+export async function currentConsent(db: DbOrTx, patientId: string, type: ConsentType, encounterId?: string, lock = false): Promise<ConsentRow | null> {
+  const query = db
     .select()
     .from(consents)
     .where(
@@ -34,6 +39,7 @@ export async function currentConsent(db: DbOrTx, patientId: string, type: Consen
     )
     .orderBy(sql`(${consents.version} = ${CONSENT_VERSIONS[type]}) desc`, desc(consents.recordedAt))
     .limit(1)
+  const [row] = lock ? await query.for('share') : await query
   return row ?? null
 }
 
@@ -159,6 +165,17 @@ export async function withdrawConsentType(tx: DbOrTx, req: FastifyRequest, patie
       .where(and(eq(patientActivationCodes.patientId, patientId), isNull(patientActivationCodes.usedAt), isNull(patientActivationCodes.revokedAt)))
       .returning({ id: patientActivationCodes.id })
     if (revoked.length) effects.push('activation_codes_revoked')
+  }
+  if (type === 'ai_recording') {
+    // A recording in progress ends in the same step as the withdrawal, whether or not the browser notices: the record says so at once. Only the
+    // recording ends. What was already captured (audio, transcript lines, points) is NOT deleted or hidden by this: that is a clinic decision.
+    const live = await tx
+      .update(transcripts)
+      .set({ status: 'final', endedAt: sql`now()`, endReason: 'consent_withdrawn' })
+      .where(and(eq(transcripts.status, 'live'), sql`${transcripts.encounterId} in (select id from ${encounters} where ${encounters.patientId} = ${patientId})`))
+      .returning({ id: transcripts.id, encounterId: transcripts.encounterId })
+    for (const t of live) await audit(tx, req, { action: 'ai.live_end', entityType: 'transcript', entityId: t.id, patientId, details: { encounterId: t.encounterId, reason: 'consent_withdrawn', via: 'consent_withdrawal' } })
+    if (live.length) effects.push(`live_recordings_ended:${live.length}`)
   }
   if (type === 'device_monitoring') {
     const ended = await tx

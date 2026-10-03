@@ -19,6 +19,11 @@ export async function storeBytes(storageDir: string, data: Buffer, ext: string):
   return { storageKey, sha256: crypto.createHash('sha256').update(data).digest('hex'), sizeBytes: data.length }
 }
 
+/** Removes bytes that were written but never became part of a record (a step was refused after the file was written). Never throws. */
+export async function discardStoredBytes(storageDir: string, storageKey: string): Promise<void> {
+  await fs.rm(resolveStoragePath(storageDir, storageKey), { force: true }).catch(() => undefined)
+}
+
 /** Absolute path for a storage key; refuses anything that would escape STORAGE_DIR. */
 export function resolveStoragePath(storageDir: string, storageKey: string): string {
   const root = path.resolve(storageDir)

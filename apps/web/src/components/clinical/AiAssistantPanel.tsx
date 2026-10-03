@@ -146,6 +146,11 @@ export function AiAssistantPanel({ encounter, inserter }: { encounter: Encounter
   const pending = latestDraft?.items.filter((i) => i.decision === 'pending').length ?? 0
   const live = latest?.status === 'live'
   const llm = ai.status.llm.available
+  // Whether a hosted client exists at all (egress allowed AND a key set): then consultation text can leave this computer, for whichever of these
+  // features is switched on. "Drafting available" alone is not the test: photograph descriptions, Mana summaries or a hosted extractor can exist without it.
+  const hostedReachable = ai.status.egress.destination !== null
+  const ex = ai.status.extraction
+  const hostedFeatures = [llm && 'drafting and AI suggestions', ai.status.qa.available && 'Mana summaries', ai.status.vision.available && 'photograph descriptions', ex.available && !ex.local && 'the important points'].filter((x): x is string => !!x)
   const tabs: [Tab, string, number][] = [
     ['draft', 'Note suggestions', pending],
     ['recommendations', 'Recommendations', ai.recommendations.filter((r) => r.status === 'pending' || r.status === 'deferred').length],
@@ -168,12 +173,23 @@ export function AiAssistantPanel({ encounter, inserter }: { encounter: Encounter
             <Badge tone={llm ? 'ok' : 'neutral'}>AI drafting: {llm ? `available (${ai.status.llm.model})` : 'unavailable'}</Badge>
           </li>
           <li>
+            <span data-testid="egress-badge">
+              <Badge tone={ai.status.egress.hosted ? 'notice' : 'neutral'}>
+                Hosted AI: {ai.status.egress.hosted ? (ai.status.egress.destination ? `allowed (to ${ai.status.egress.destination})` : 'allowed, no provider key') : 'off'}
+              </Badge>
+            </span>
+          </li>
+          <li>
             <Badge tone="notice">Safety rules: always on</Badge>
           </li>
         </ul>
-        {llm && (
+        {hostedReachable ? (
           <p className="text-xs text-ink-muted" data-testid="external-disclosure">
-            <strong className="font-semibold text-ink">External service.</strong> “Generate draft” and AI suggestions send the transcript text (the patient’s name, MRN and phone number removed, which is best effort) to the AI service ({ai.status.llm.model}), which is not on this computer. Audio is never sent. Safety rules and the important points run on this computer.
+            <strong className="font-semibold text-ink">External service.</strong> Hosted AI is allowed on this server. {hostedFeatures.length ? `${hostedFeatures.join(', ')} send` : 'The features that use it (none is switched on at the moment) would send'} consultation text (the patient’s name, MRN and phone number removed, which is best effort) to {ai.status.egress.destination}, which is not on this computer, after the patient’s consent and your click. Audio is never sent. Safety rules{ai.status.extraction.local ? ', the important points' : ''} and speech-to-text run {ai.status.stt.local ? 'on this computer' : `on ${ai.status.stt.host ?? 'another computer'}, not this one`}.
+          </p>
+        ) : (
+          <p className="text-xs text-ink-muted" data-testid="egress-off-note">
+            <strong className="font-semibold text-ink">Nothing leaves this computer.</strong> {ai.status.egress.hosted ? 'Hosted AI is allowed on this server but no provider key is configured.' : 'Hosted AI is switched off on this server: a server setting that this screen cannot change.'} Safety rules{ai.status.extraction.local ? ', the important points' : ''} and speech-to-text run {ai.status.stt.local ? 'here' : `on ${ai.status.stt.host ?? 'another computer'}, not this one`}.
           </p>
         )}
         {!ai.consent.granted && <p className="text-sm text-ink-muted">Record the patient’s consent in “Live transcription” to use drafting and record-aware suggestions.</p>}

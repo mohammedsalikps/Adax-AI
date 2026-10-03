@@ -13,7 +13,7 @@ const pool = createAppPool(config.db)
 try {
   const r = await runRetention(createDb(pool), config.storageDir, loadAppSettings(), { dryRun: process.argv.includes('--dry-run') })
   if (r.days === 0) console.log('[retention] disabled (retention.consultationAudioDays is 0)')
-  else console.log(`[retention] consultation audio older than ${r.days} days after signing: ${r.candidates} eligible, ${r.dryRun ? 'dry run, nothing deleted' : `${r.deleted} deleted`}`)
+  else console.log(`[retention] consultation audio of signed consultations, stored more than ${r.days} days ago: ${r.candidates} eligible, ${r.dryRun ? 'dry run, nothing deleted' : `${r.deleted} deleted`}`)
 } catch (e) {
   console.error(`[retention] ERROR ${(e as Error).message}`)
   process.exitCode = 1

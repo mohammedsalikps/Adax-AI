@@ -21,6 +21,13 @@ ai:
     # record by explicit rules are always available and need no AI provider).
     patientQa: true
 
+  # HOSTED AI EGRESS. May consultation text (pseudonymised, best effort) be sent to a hosted AI provider (Anthropic) for note drafts, recommendations,
+  # Mana summaries and photo descriptions? `false`: never, and the features below say "unavailable" even if ANTHROPIC_API_KEY is set: a key in .env
+  # does not turn this on. `true`: allowed on purpose, and each use still needs the patient's consent and the doctor's click. Env AI_EGRESS_HOSTED
+  # (true/false) overrides this value. Audio never leaves this computer under either setting: there is no hosted speech provider.
+  egress:
+    hostedProviders: false
+
   # Language model for drafting, extraction and recommendations.
   # Env AI_NOTE_MODEL overrides `model`. Key: ANTHROPIC_API_KEY.
   llm:
@@ -97,6 +104,10 @@ security:
     activationPerIp: { max: 20, windowSeconds: 900 }
     passwordChangePerUser: { max: 10, windowSeconds: 900 }
     deviceIngestPerToken: { max: 600, windowSeconds: 60 }
+    # Per signed-in user: audio parts and uploads (a live recording sends about three parts a minute) and the steps that cost the most to run
+    # (note drafts, important points, recommendations). Beyond the limit a request is refused with 429 and the time to wait.
+    aiAudioPerUser: { max: 60, windowSeconds: 60 }
+    aiStepPerUser: { max: 30, windowSeconds: 60 }
 
 retention:
   # Consultation audio of SIGNED consultations is deleted after this many days

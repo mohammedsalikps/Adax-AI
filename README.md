@@ -127,8 +127,9 @@ decisions: [docs/adr/](docs/adr/) · what the Doctor App actually does today:
   `embedded-postgres` npm package.
 - Verified on Windows 11 (x64) only. macOS/Linux binaries exist in the same package but these
   scripts are **not verified** there.
-- Optional: `ANTHROPIC_API_KEY` (drafting, recommendations, image description). Speech-to-text needs
-  **no key**: it is a local model (below). Everything else works without them.
+- Optional: `ANTHROPIC_API_KEY` (drafting, recommendations, Mana summaries, image description), **and only if you also allow hosted AI
+  on purpose**: a key alone sends nothing (`AI_EGRESS_HOSTED=true`, below). Speech-to-text needs **no key**: it is a local model.
+  Everything else works without them.
 - Optional, one-time **download** for live transcription (about 70 MB of Python packages and a
   486 MB model, from PyPI and Hugging Face; MIT-licensed): `npm run speech:setup` (done by
   `npm run setup`) then `npm run speech:model`. `npm run dev` starts the local speech service on
@@ -169,9 +170,9 @@ PostgreSQL keeps running after `npm run dev` exits; stop it with `npm run db:sto
 | Rule-based safety checks (allergy vs prescription incl. an illustrative group list, vital-sign flags, missing information, red-flag phrases, record conflicts) | Works without credentials; deterministic, versioned (`safety-rules-v1`, `record-compare-v1`) |
 | Routing suggestions | Works without credentials; deterministic |
 | Mana record answers (briefing, history, last prescription, vitals comparison, changes, allergies, diagnoses, search) | Works without credentials; deterministic, versioned (`mana-record-v1`) |
-| Mana AI summaries | **Need `ANTHROPIC_API_KEY`** and the patient's `ai_record_assistant` consent; otherwise the answer says why and shows the record answer only |
-| Note drafting, fact extraction, recommendations, image description | **Need `ANTHROPIC_API_KEY`.** Without it the UI says the feature is unavailable and never shows placeholder output |
-| Transcription of recorded or uploaded audio, live in 20-second parts | **Local speech service** (`faster-whisper` small, CPU) after `npm run speech:model`; no key, **no audio leaves this computer**; finished text per part, no interim text; English is the supported language |
+| Mana AI summaries | **Need `ANTHROPIC_API_KEY` AND hosted AI egress turned on (`AI_EGRESS_HOSTED=true`)**, and the patient's `ai_record_assistant` consent; otherwise the answer says why and shows the record answer only |
+| Note drafting, AI recommendations, Mana summaries, image description | **Need `ANTHROPIC_API_KEY` AND `AI_EGRESS_HOSTED=true`** (or `ai.egress.hostedProviders: true` in `config/adaxai.yaml`). **Hosted AI egress is off by default and a key alone enables nothing**: with it off the UI says "Hosted AI processing is switched off on this server, so no consultation text leaves this computer" and never shows placeholder output. With it on, pseudonymised transcript text (never audio) goes to the hosted provider after the patient's consent and the doctor's click; the screen says where |
+| Transcription of recorded or uploaded audio, live in 20-second parts | **Local speech service** (`faster-whisper` small, CPU) after `npm run speech:model`; no key, **no audio leaves this computer** (unless the clinic points `SPEECH_URL` at its own service on another computer on purpose, which the screens then say); finished text per part, no interim text; English is the supported language |
 | Important points | **Fixed rules on this computer** (`extract-rules-v1`, English only); no key. A hosted language-model extractor exists only if `ai.extraction.provider: llm` is set on purpose |
 | Speaker identification | **Not done by any model.** The doctor assigns Doctor / Patient / … line by line (kept as a review); typed “Doctor:” / “Patient:” labels are the typed text's own |
 | Clinical accuracy of any AI output | **Not evaluated.** Tested only against test doubles and a local mock of the provider API |
@@ -350,7 +351,7 @@ validated strictly at start-up:
 | --- | --- | --- |
 | [`config/adaxai.yaml`](config/adaxai.yaml) | AI features, models, effort, timeouts, live chunk length, context limits, Mana record window and outdated threshold, upload types and limits, retention, safety-rule groups and tolerances | **API restart** |
 | [`config/routing.yaml`](config/routing.yaml) | Routing rules, red-flag phrases and instructions, required intake | **At runtime** (re-read on change; an invalid edit keeps the last valid rules) |
-| `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `SPEECH_PROVIDER`, `SPEECH_URL` (the old `AI_STT_*` settings are ignored) | **Restart** |
+| `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `AI_EGRESS_HOSTED`, `SPEECH_PROVIDER`, `SPEECH_URL` (the old `AI_STT_*` settings are ignored) | **Restart** |
 
 `DATA_ORIGIN` (default `synthetic`) is recorded on AI jobs, photographs, stethoscope recordings
 and thermal images; set `clinical` only in a real clinical deployment.

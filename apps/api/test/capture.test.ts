@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { CaptureStatus, Encounter, EncounterAi, factState, PatientDetail, Visit } from '@adaxai/contracts'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { RuleFactExtractor } from '../src/ai/extract/rules.ts'
 import type { AiProviders, SpeechSegment } from '../src/ai/providers.ts'
 import { LocalSpeechTranscriber } from '../src/ai/stt.ts'
-import { departments, facilities, users } from '../src/db/schema.ts'
+import { currentConsent } from '../src/consents/service.ts'
+import { departments, facilities, transcripts, users } from '../src/db/schema.ts'
 import { hashPassword } from '../src/auth/password.ts'
+import { loadAppSettings } from '../src/settings/load.ts'
+import type { AppSettings } from '../src/settings/schema.ts'
 import { adminQuery, call, createFixture, createTestApp, type Fixture, login, resetDatabase, samplePatient, TEST_PASSWORD, type TestContext } from './helpers.ts'
-import { FakeTranscriber, multipartAudio, startSpeechStub, type SpeechStub } from './speech-support.ts'
+import { FakeTranscriber, multipartAudio, startSpeechStub, type SpeechStub, webm } from './speech-support.ts'
 
 // Live consultation capture (V2): local speech-to-text, the recording's lifecycle and consent, timestamps, speaker assignment by the doctor,
 // the important points, and the line between what was heard, what was extracted and what the doctor confirmed.
@@ -16,8 +21,14 @@ const seg = (text: string, startMs: number, endMs: number, over: Partial<SpeechS
 
 const speech = new FakeTranscriber()
 const providers = (): AiProviders => ({ drafter: null, transcriber: speech, extractor: new RuleFactExtractor(), reasons: { llm: null, stt: null } })
-const withSpeech = createTestApp({ ai: providers() })
-const noSpeech = createTestApp() // as configured by default: no speech provider
+// Each test signs in a nurse and a doctor again (the database is reset between tests), so the per-account sign-in limit is lifted here; the limit itself is
+// tested elsewhere (auth tests) and the limits on audio and costly steps are tested below with their own settings.
+const manyLogins = (): AppSettings => {
+  const f = loadAppSettings()
+  return { ...f, security: { ...f.security, rateLimits: { ...f.security.rateLimits, loginPerAccount: { max: 10_000, windowSeconds: 60 }, loginPerIp: { max: 10_000, windowSeconds: 60 } } } }
+}
+const withSpeech = createTestApp({ ai: providers(), settings: manyLogins() })
+const noSpeech = createTestApp({ settings: manyLogins() }) // as configured by default: no speech provider
 let fx: Fixture
 
 beforeEach(async () => {
@@ -50,7 +61,7 @@ async function open(ctx: TestContext, { consent = true } = {}) {
 
 const capture = async (ctx: TestContext, eid: string, cookie: string) => CaptureStatus.parse((await call(ctx.app, 'GET', `/api/encounters/${eid}/capture`, { cookie })).json())
 const startLive = (ctx: TestContext, eid: string, cookie: string) => call(ctx.app, 'POST', `/api/encounters/${eid}/live-transcripts`, { cookie })
-const chunk = (ctx: TestContext, tid: string, cookie: string, fields: Record<string, string>, data = Buffer.from('audio-bytes')) => {
+const chunk = (ctx: TestContext, tid: string, cookie: string, fields: Record<string, string>, data = webm()) => {
   const m = multipartAudio(fields, { name: 'c.webm', type: 'audio/webm', data })
   return ctx.app.inject({ method: 'POST', url: `/api/transcripts/${tid}/chunks`, headers: { ...m.headers, cookie, 'x-adaxai-csrf': '1' }, payload: m.payload })
 }
@@ -483,7 +494,7 @@ describe('privacy, and no external calls', () => {
       const { e, doctor } = await open(ctx)
       expect((await capture(ctx, e.id, doctor)).speech).toMatchObject({ available: true, state: 'ready', model: 'stub-model' })
       const tid = (await startLive(ctx, e.id, doctor)).json().transcriptId as string
-      expect((await chunk(ctx, tid, doctor, { chunkIndex: '0', offsetMs: '0' }, Buffer.from('RAW-AUDIO-BYTES-123'))).statusCode).toBe(201)
+      expect((await chunk(ctx, tid, doctor, { chunkIndex: '0', offsetMs: '0' }, webm('RAW-AUDIO-BYTES-123'))).statusCode).toBe(201)
       await call(ctx.app, 'POST', `/api/transcripts/${tid}/speakers`, { cookie: doctor, body: { assignments: [{ segmentId: 'S1', speaker: 'Patient' }] } })
       const out = EncounterAi.parse((await call(ctx.app, 'POST', `/api/transcripts/${tid}/extract`, { cookie: doctor })).json())
       expect(out.facts.some((f) => f.attributes.medication === 'lisinopril')).toBe(false) // not in the word list: it is not invented, and not found either
@@ -542,6 +553,93 @@ describe('after the security review: races, stale state and long input', () => {
     } finally {
       speech.hook = null
     }
+  })
+
+  it('withdrawal ends a recording in progress in the same step, whether or not the browser notices, and deletes nothing that was already captured', async () => {
+    const { p, e, doctor, nurse } = await open(withSpeech)
+    speech.script = () => [seg('Words captured before the patient changed their mind.', 0, 2500)]
+    const tid = (await startLive(withSpeech, e.id, doctor)).json().transcriptId as string
+    expect((await chunk(withSpeech, tid, doctor, { chunkIndex: '0', offsetMs: '0' })).statusCode).toBe(201)
+    await withdraw(withSpeech, p, nurse)
+    // No further request from the browser has happened: the record already says the recording ended because consent was withdrawn.
+    const t = (await ai(withSpeech, e.id, doctor)).transcripts[0]!
+    expect(t).toMatchObject({ status: 'final', endReason: 'consent_withdrawn' })
+    expect((await adminQuery("SELECT details->'effects' AS effects FROM audit_events WHERE action = 'consent.withdraw'")).rows[0].effects).toContain('live_recordings_ended:1')
+    // What was captured is still there: nothing is deleted or hidden by a withdrawal.
+    expect(t.segments.map((x) => x.text)).toEqual(['Words captured before the patient changed their mind.'])
+    expect((await adminQuery("SELECT count(*)::int AS n FROM files WHERE kind = 'consultation_audio' AND deleted_at IS NULL")).rows[0].n).toBe(1)
+    expect((await adminQuery('SELECT count(*)::int AS n FROM transcript_chunks')).rows[0].n).toBe(1)
+    // And nothing more can be added.
+    expect((await chunk(withSpeech, tid, doctor, { chunkIndex: '1', offsetMs: '0' })).statusCode).toBe(409)
+  })
+
+  it('consent withdrawn while an uploaded recording is still arriving: it is not stored, and the refusal is audited', async () => {
+    // The upload is sent in two halves over a real connection; the withdrawal happens between them, so the first consent check (before the body is
+    // read) passes and only the check after the body has arrived can stop it.
+    const slow = createTestApp({ ai: providers(), settings: manyLogins() })
+    try {
+      const { p, e, doctor, nurse } = await open(slow)
+      await slow.app.listen({ port: 0, host: '127.0.0.1' })
+      const { port } = slow.app.server.address() as AddressInfo
+      const m = multipartAudio({ source: 'audio_upload' }, { name: 'a.webm', type: 'audio/webm', data: webm() })
+      const body = Buffer.from(m.payload)
+      const half = Math.floor(body.length / 2)
+      const reply = await new Promise<{ status: number; json: { error?: string } }>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: `/api/encounters/${e.id}/audio`, headers: { ...m.headers, cookie: doctor, 'x-adaxai-csrf': '1', 'content-length': String(body.length) } }, (res) => {
+          const chunks: Buffer[] = []
+          res.on('data', (c: Buffer) => chunks.push(c))
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, json: JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { error?: string } }))
+        })
+        req.on('error', reject)
+        req.write(body.subarray(0, half))
+        setTimeout(() => {
+          withdraw(slow, p, nurse).then(
+            () => req.end(body.subarray(half)),
+            (err: unknown) => reject(err),
+          )
+        }, 400)
+      })
+      expect(reply.status).toBe(409)
+      expect(reply.json.error).toBe('consent_withdrawn')
+      expect((await adminQuery("SELECT count(*)::int AS n FROM files WHERE kind = 'consultation_audio'")).rows[0].n).toBe(0)
+      expect((await adminQuery("SELECT count(*)::int AS n FROM audit_events WHERE action = 'consent.blocked' AND details->>'state' = 'withdrawn'")).rows[0].n).toBeGreaterThan(0)
+    } finally {
+      await slow.close()
+    }
+  })
+
+  it('consent withdrawn while the speech service is being asked whether it is ready: no recording is created', async () => {
+    const { p, e, doctor, nurse } = await open(withSpeech)
+    speech.healthHook = () => withdraw(withSpeech, p, nurse)
+    try {
+      const res = await startLive(withSpeech, e.id, doctor)
+      expect(res.statusCode).toBe(409)
+      expect(res.json().error).toBe('consent_withdrawn')
+    } finally {
+      speech.healthHook = null
+    }
+    expect((await adminQuery('SELECT count(*)::int AS n FROM transcripts')).rows[0].n).toBe(0)
+  })
+
+  it('the steps that store audio read the consent under a lock: a withdrawal waits for them, then ends the recording they created', async () => {
+    const { p, e, doctor, nurse } = await open(withSpeech)
+    let withdrew = false
+    let withdrawal: Promise<void> = Promise.resolve()
+    await withSpeech.db.transaction(async (tx) => {
+      expect(await currentConsent(tx, p.id, 'ai_recording', e.id, true)).not.toBeNull()
+      withdrawal = withdraw(withSpeech, p, nurse).then(() => {
+        withdrew = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      // The withdrawal cannot pass the step that has read the consent: it is waiting.
+      expect(withdrew).toBe(false)
+      await tx.insert(transcripts).values({ encounterId: e.id, source: 'browser_recording', status: 'live', createdBy: e.doctor.id })
+    })
+    await withdrawal
+    expect(withdrew).toBe(true)
+    // It then saw the recording the step made, and ended it.
+    expect((await adminQuery('SELECT status, end_reason FROM transcripts')).rows).toEqual([{ status: 'final', end_reason: 'consent_withdrawn' }])
+    void doctor
   })
 
   it('a job that was running when the system stopped is failed and retryable at the next start', async () => {
@@ -650,5 +748,64 @@ describe('after the security review: races, stale state and long input', () => {
     const segments = (await ai(withSpeech, e.id, doctor)).transcripts[0]!.segments
     expect(segments.length).toBeGreaterThan(5)
     expect(segments.every((s) => s.text.length <= 1000 && s.speaker === 'Patient')).toBe(true)
+  })
+})
+
+describe('uploads are judged by their content, and the costly steps are rate-limited (V2.1)', () => {
+  const upload = (ctx: TestContext, tid: string, cookie: string, data: Buffer, mime: string, name: string, i = 0) => {
+    const m = multipartAudio({ chunkIndex: String(i), offsetMs: '0' }, { name, type: mime, data })
+    return ctx.app.inject({ method: 'POST', url: `/api/transcripts/${tid}/chunks`, headers: { ...m.headers, cookie, 'x-adaxai-csrf': '1' }, payload: m.payload })
+  }
+
+  it('refuses a file that is not audio of the kind it claims, whatever its name or declared type, and stores nothing', async () => {
+    const { e, doctor } = await open(withSpeech)
+    const tid = (await startLive(withSpeech, e.id, doctor)).json().transcriptId as string
+    const playlist = Buffer.from('#EXTM3U\n#EXTINF:10,\nhttp://169.254.169.254/latest/meta-data/\n')
+    const concat = Buffer.from("ffconcat version 1.0\nfile '/etc/passwd'\n")
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)])
+    const wavDeclaredAsWebm = Buffer.from('RIFF$\0\0\0WAVEfmt \x10\0\0\0', 'binary')
+    for (const [data, mime, name] of [
+      [playlist, 'audio/webm', 'part.webm'],
+      [concat, 'audio/mpeg', 'part.mp3'],
+      [png, 'audio/webm', 'photo.webm'],
+      [Buffer.from('plain text'), 'audio/wav', 'a.wav'],
+      [wavDeclaredAsWebm, 'audio/webm', 'wrong-kind.webm'],
+    ] as const) {
+      const res = await upload(withSpeech, tid, doctor, data, mime, name)
+      expect(res.statusCode, name).toBe(415)
+      expect(res.json().error).toBe('unsupported_media')
+    }
+    expect((await adminQuery("SELECT count(*)::int AS n FROM files WHERE kind = 'consultation_audio'")).rows[0].n).toBe(0)
+    expect(speech.calls).toHaveLength(0)
+    // A recording of the right kind is accepted.
+    expect((await upload(withSpeech, tid, doctor, webm(), 'audio/webm', 'ok.webm')).statusCode).toBe(201)
+  })
+
+  it('rate-limits audio and the costly steps per user, with the time to wait, and audits the first refusal', async () => {
+    const file = loadAppSettings()
+    const tight: AppSettings = { ...file, security: { ...file.security, rateLimits: { ...file.security.rateLimits, loginPerAccount: { max: 10_000, windowSeconds: 60 }, loginPerIp: { max: 10_000, windowSeconds: 60 }, aiAudioPerUser: { max: 3, windowSeconds: 60 }, aiStepPerUser: { max: 2, windowSeconds: 60 } } } }
+    const limited = createTestApp({ ai: providers(), settings: tight })
+    try {
+      const { e, doctor } = await open(limited)
+      const tid = (await startLive(limited, e.id, doctor)).json().transcriptId as string
+      const codes: number[] = []
+      for (let i = 0; i < 5; i++) codes.push((await chunk(limited, tid, doctor, { chunkIndex: String(i), offsetMs: '0' })).statusCode)
+      expect(codes).toEqual([201, 201, 201, 429, 429])
+      const refused = await chunk(limited, tid, doctor, { chunkIndex: '9', offsetMs: '0' })
+      expect(refused.json().error).toBe('rate_limited')
+      expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0)
+      const steps: number[] = []
+      for (let i = 0; i < 3; i++) steps.push((await call(limited.app, 'POST', `/api/transcripts/${tid}/extract`, { cookie: doctor })).statusCode)
+      expect(steps).toEqual([201, 201, 429])
+      expect((await adminQuery("SELECT count(*)::int AS n FROM audit_events WHERE action = 'access.rate_limited'")).rows[0].n).toBe(2)
+      // Another user is not held up by this one's limit: the same limited route answers them from their own count (here, "not your consultation"),
+      // while the first user is still refused for the time left.
+      const other = await login(limited.app, 't.doctor2')
+      const theirs = await chunk(limited, tid, other, { chunkIndex: '0', offsetMs: '0' })
+      expect(theirs.statusCode).toBe(403)
+      expect((await chunk(limited, tid, doctor, { chunkIndex: '9', offsetMs: '0' })).statusCode).toBe(429)
+    } finally {
+      await limited.close()
+    }
   })
 })

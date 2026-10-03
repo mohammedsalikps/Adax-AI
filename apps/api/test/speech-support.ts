@@ -23,6 +23,8 @@ export class FakeTranscriber implements Transcriber {
   calls: { bytes: number; language: string | null | undefined; mime: string }[] = []
   /** Runs while a transcription is in progress (a test changes the world under it, as a slow model lets real life do). */
   hook: (() => Promise<void>) | null = null
+  /** Runs while the service is being asked whether it is ready (the same, for a step that checks health before it writes). */
+  healthHook: (() => Promise<void>) | null = null
 
   async transcribe(audio: Buffer, mime: string, _filename: string, opts: { language?: string | null } = {}): Promise<SpeechResult> {
     this.calls.push({ bytes: audio.length, language: opts.language, mime })
@@ -37,6 +39,7 @@ export class FakeTranscriber implements Transcriber {
   }
 
   async health(): Promise<SpeechHealth> {
+    await this.healthHook?.()
     return this.ready ? { state: 'ready', reason: null, model: { id: this.model, runtime: 'fake-runtime 1', weightsSha256: WEIGHTS } } : { state: 'unavailable', reason: this.reason ?? 'The local speech service is not running.', model: null }
   }
 }
@@ -89,6 +92,9 @@ export async function startSpeechStub(): Promise<SpeechStub> {
   stub.url = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
   return stub
 }
+
+/** Bytes that are a WebM recording as far as the application can tell (its first bytes are the container's signature), then whatever the test says. */
+export const webm = (text = 'audio-bytes') => Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from(text)])
 
 /** Multipart body for an audio upload (fields first, then the file), as the browser sends it. */
 export function multipartAudio(fields: Record<string, string>, file: { name: string; type: string; data: Buffer }) {

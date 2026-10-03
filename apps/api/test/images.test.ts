@@ -112,7 +112,8 @@ describe.skipIf(!haveThermal)('clinical photographs', () => {
     await call(withAi.app, 'POST', `/api/patients/${p.id}/consents`, { cookie: nurse, body: { type: 'ai_image_analysis', method: 'verbal' } })
     const noProvider = await call(noKeys.app, 'POST', `/api/images/${img.id}/analyze`, { cookie: await login(noKeys.app, 't.doctor') })
     expect(noProvider.statusCode).toBe(503)
-    expect(noProvider.json().message).toMatch(/not configured/)
+    // Hosted AI egress is off by default (V2.1): the step says why, and that no text leaves this computer.
+    expect(noProvider.json().message).toMatch(/switched off on this server/)
     expect((await call(withAi.app, 'POST', `/api/images/${img.id}/analyze`, { cookie: nurse })).statusCode).toBe(403)
 
     const res = await call(withAi.app, 'POST', `/api/images/${img.id}/analyze`, { cookie: doctor, body: {} })

@@ -14,6 +14,8 @@
 // - Mana record questions: one statement citing the first two record items,
 //   one citing a reference that does not exist, and one "not found" entry.
 import http from 'node:http'
+// The phrase by which a request is recognised as carrying words from the synthetic consultation of the speech stand-in (one definition, shared with it).
+import { CAPTURE_PHRASE } from './synthetic-consultation.mjs'
 
 const PORT = Number(process.env.MOCK_ANTHROPIC_PORT || 4199)
 
@@ -90,11 +92,22 @@ function respond(body) {
   return draftFrom(user)
 }
 
+// How many requests the (mock) hosted provider has been sent: a count only, no content. The capture tests read it to show that recording, transcription
+// and the important points never call a hosted provider.
+let messages = 0
+// Requests that carry a phrase only the speech stand-in (e2e/mock-speech.mjs) ever "hears": other specs call this mock in parallel, so the capture tests
+// check that none of THEIR text reaches it, not that nobody called it.
+let fromCapture = 0
+
 http
   .createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'text/plain' })
       return res.end('ok')
+    }
+    if (req.method === 'GET' && req.url === '/__calls') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ calls: messages, fromCapture }))
     }
     const chunks = []
     req.on('data', (c) => chunks.push(c))
@@ -103,7 +116,10 @@ http
         res.writeHead(404, { 'content-type': 'application/json' })
         return res.end(JSON.stringify({ type: 'error', error: { type: 'not_found_error', message: 'mock: unknown route' } }))
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString())
+      messages++
+      const raw = Buffer.concat(chunks).toString()
+      if (raw.includes(CAPTURE_PHRASE)) fromCapture++
+      const body = JSON.parse(raw)
       res.writeHead(200, { 'content-type': 'application/json', 'request-id': `req_mock_${Date.now()}` })
       res.end(
         JSON.stringify({

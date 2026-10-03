@@ -187,7 +187,7 @@ export function consentWording(type: ConsentType, version: string): { title: str
 /** What withdrawing a consent does, for staff, shown before the withdrawal is confirmed (every purpose listed). */
 export const CONSENT_WITHDRAWAL_EFFECTS: Record<ConsentType, string> = {
   data_processing: 'The withdrawal is recorded and shown on the patient record. ADAXAI does not stop keeping or using care records by itself: what it means for the patient’s care is the clinic’s decision (not yet defined).',
-  ai_recording: 'Recording and AI assistance stop at once for every consultation, including ones with a consultation-only consent.',
+  ai_recording: 'Recording and AI assistance stop at once for every consultation, including ones with a consultation-only consent. Audio and transcripts already captured are NOT deleted or hidden by this: they stay with the consultation (what happens to them is the clinic’s decision, not yet defined).',
   thermal_imaging: 'No new thermal images can be added. Images already taken stay in the record.',
   device_monitoring: 'Device assignments of this patient end at once; readings are no longer accepted.',
   portal_access: 'The patient’s portal account is switched off at once, they are signed out, and unused activation codes stop working.',
@@ -200,7 +200,7 @@ export const CONSENT_WITHDRAWAL_EFFECTS: Record<ConsentType, string> = {
 /** The same effects, worded for the patient in the portal. */
 export const CONSENT_WITHDRAWAL_EFFECTS_FOR_PATIENT: Record<ConsentType, string> = {
   data_processing: 'Your withdrawal is recorded and the clinic is told. Your care records are still kept and used for your care; ask the clinic what this means for you.',
-  ai_recording: 'Your consultations are no longer recorded or drafted with AI, including any you agreed to for one consultation only.',
+  ai_recording: 'Your consultations are no longer recorded or drafted with AI, including any you agreed to for one consultation only. What was already recorded is not deleted by this: ask the clinic what happens to it.',
   thermal_imaging: 'No new thermal images are taken. Images already taken stay in your record for the care team.',
   device_monitoring: 'Readings from your devices stop being accepted at once.',
   portal_access: 'Your online access is switched off at once: you are signed out, and any unused activation codes stop working.',

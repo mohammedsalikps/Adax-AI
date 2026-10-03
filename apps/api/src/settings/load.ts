@@ -70,7 +70,7 @@ export class RoutingRulesSource {
 
 /**
  * Settings with the environment overrides applied (AI_NOTE_MODEL,
- * SPEECH_PROVIDER, SPEECH_URL). Contains no secrets.
+ * SPEECH_PROVIDER, SPEECH_URL, AI_EGRESS_HOSTED). Contains no secrets.
  */
 export function effectiveSettings(settings: AppSettings, config: Config): AppSettings {
   return {
@@ -78,6 +78,7 @@ export function effectiveSettings(settings: AppSettings, config: Config): AppSet
     ai: {
       ...settings.ai,
       llm: { ...settings.ai.llm, model: config.ai.noteModel ?? settings.ai.llm.model },
+      egress: { hostedProviders: config.ai.egressHosted ?? settings.ai.egress.hostedProviders },
       stt: {
         ...settings.ai.stt,
         url: (config.ai.speech.url ?? settings.ai.stt.url).replace(/\/+$/, ''),

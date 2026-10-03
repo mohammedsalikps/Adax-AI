@@ -50,7 +50,7 @@ def test_segments_are_mapped_ordered_and_scored_from_what_the_model_reported(mak
         ],
         Info("en", 0.99754, 7.725),
     )
-    out = make_engine(model).transcribe(b"audio")
+    out = make_engine(model).transcribe(silent_wav())
     assert [s["text"] for s in out["segments"]] == ["I have had a fever.", "I am allergic to penicillin."]
     first = out["segments"][0]
     assert (first["startMs"], first["endMs"]) == (0, 3110)
@@ -64,8 +64,8 @@ def test_segments_are_mapped_ordered_and_scored_from_what_the_model_reported(mak
 def test_the_task_is_always_transcribe_never_translate(make_engine):
     model = FakeModel([Seg(0, 1, "namaste", -0.3, 0.0)], Info("hi", 0.9, 1.0))
     engine = make_engine(model)
-    engine.transcribe(b"audio")
-    engine.transcribe(b"audio", "hi")
+    engine.transcribe(silent_wav())
+    engine.transcribe(silent_wav(), "hi")
     assert {c["task"] for c in model.calls} == {"transcribe"}
     assert model.calls[1]["language"] == "hi"
     # Nothing may carry the earlier chunk's words into the next one.
@@ -73,28 +73,28 @@ def test_the_task_is_always_transcribe_never_translate(make_engine):
 
 
 def test_a_language_hint_is_reported_as_a_hint_not_a_detection(make_engine):
-    out = make_engine(FakeModel([Seg(0, 1, "x", -0.1, 0.0)])).transcribe(b"a", "en")
+    out = make_engine(FakeModel([Seg(0, 1, "x", -0.1, 0.0)])).transcribe(silent_wav(), "en")
     assert out["languageSource"] == "hint"
 
 
 def test_confidence_stays_inside_zero_and_one(make_engine):
-    out = make_engine(FakeModel([Seg(0, 1, "x", 0.5, 0.0), Seg(1, 2, "y", -50.0, 0.0)])).transcribe(b"a")
+    out = make_engine(FakeModel([Seg(0, 1, "x", 0.5, 0.0), Seg(1, 2, "y", -50.0, 0.0)])).transcribe(silent_wav())
     assert [s["confidence"] for s in out["segments"]] == [1.0, 0.0]
 
 
 def test_an_unknown_language_and_undecodable_audio_are_told_apart(make_engine):
     with pytest.raises(InvalidLanguage):
-        make_engine(FakeModel(error=ValueError("'zz' is not a valid language code"))).transcribe(b"a", "zz")
+        make_engine(FakeModel(error=ValueError("'zz' is not a valid language code"))).transcribe(silent_wav(), "zz")
 
     class AvError(Exception):
         pass
 
     AvError.__module__ = "av.error"
     with pytest.raises(UndecodableAudio):
-        make_engine(FakeModel(error=AvError("bad data"))).transcribe(b"a")
+        make_engine(FakeModel(error=AvError("bad data"))).transcribe(silent_wav())
     # Anything else is not swallowed.
     with pytest.raises(KeyError):
-        make_engine(FakeModel(error=KeyError("other"))).transcribe(b"a")
+        make_engine(FakeModel(error=KeyError("other"))).transcribe(silent_wav())
 
 
 def test_transcribing_opens_no_network_connection(make_engine, monkeypatch):

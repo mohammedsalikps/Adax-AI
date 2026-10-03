@@ -81,7 +81,7 @@ describe('without configured providers', () => {
     const { e, doctor } = await openEncounter(noKeys)
     const status = (await call(noKeys.app, 'GET', '/api/ai/status', { cookie: doctor })).json()
     expect(status.llm).toMatchObject({ available: false, model: null })
-    expect(status.llm.reason).toMatch(/ANTHROPIC_API_KEY/)
+    expect(status.llm.reason).toMatch(/switched off on this server/)
     expect(status.stt).toMatchObject({ available: false, state: 'not_configured', local: true })
     expect(status.extraction).toMatchObject({ available: true, provider: 'adaxai-rules', local: true, languages: ['en'] })
 
@@ -206,7 +206,7 @@ describe('drafting and review', () => {
     await call(withAi.app, 'POST', `/api/encounters/${e.id}/ai-consent`, { cookie: doctor, body: { method: 'verbal' } })
     const bad = await upload(withAi, e.id, doctor, { name: 'x.txt', type: 'text/plain', data: Buffer.from('hi') })
     expect(bad.statusCode).toBe(400)
-    const res = await upload(withAi, e.id, doctor, { name: 'rec.webm', type: 'audio/webm', data: Buffer.from('fake-webm-bytes') }, { source: 'browser_recording' })
+    const res = await upload(withAi, e.id, doctor, { name: 'rec.webm', type: 'audio/webm', data: Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from('fake-webm-bytes')]) }, { source: 'browser_recording' })
     const ai = EncounterAi.parse(res.json())
     // The speech service identifies no speakers: nobody is labelled until the doctor assigns them.
     expect(ai.transcripts[0]).toMatchObject({ source: 'browser_recording', language: 'en', segments: [{ id: 'S1', speaker: null, text: 'What brings you in?', startMs: 0, endMs: 1800, speakerSource: 'none' }, { id: 'S2', speaker: null, startMs: 1800 }] })

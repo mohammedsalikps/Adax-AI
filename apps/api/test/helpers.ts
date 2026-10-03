@@ -24,7 +24,7 @@ export const testConfig: Config = {
   db: { ...base.db, name: base.db.testName },
   storageDir: `${base.storageDir}-test`,
   cookieSecure: false,
-  ai: { ...base.ai, anthropicApiKey: undefined, speech: { provider: 'none' as const, url: undefined, allowNonLoopback: false }, hostedSttKeyIgnored: false },
+  ai: { ...base.ai, anthropicApiKey: undefined, egressHosted: undefined, speech: { provider: 'none' as const, url: undefined, allowNonLoopback: false }, hostedSttKeyIgnored: false },
 }
 
 /** A localhost port with nothing listening on it (connections are refused). */

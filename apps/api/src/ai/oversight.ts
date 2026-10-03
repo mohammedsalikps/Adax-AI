@@ -61,7 +61,7 @@ async function reviewOutcomes(db: Db, facilityId: string) {
  * patient-level content. Clinical detail of rejected outputs is on the
  * doctors' review list (ai:use).
  */
-export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; providers: AiProviders; jobs: JobService }) {
+export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; providers: AiProviders; jobs: JobService; hostedKeyConfigured?: boolean }) {
   const { db, providers, jobs } = deps
 
   app.get('/api/ai-oversight/overview', { config: { permission: 'ai:oversight' } }, async (req) => {
@@ -84,6 +84,8 @@ export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; pr
       .limit(10)
     return {
       status: await aiStatus(providers),
+      // Only whether a hosted provider key is set on the server (never the key): administrators can see that a key sits unused while egress is off.
+      hostedKeyConfigured: deps.hostedKeyConfigured ?? false,
       settingsSha256: jobs.settingsSha256,
       jobs: jobCounts,
       failures,

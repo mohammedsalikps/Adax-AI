@@ -5,7 +5,8 @@ What this module guarantees, and tests check:
 * No network. The model is read from a directory on disk (never fetched), the
   hub is switched to offline mode before anything is imported, and nothing here
   opens a socket.
-* No audio on disk. The uploaded bytes are decoded from memory.
+* No audio on disk. The uploaded bytes are decoded from memory, by a decoder we pick for the sniffed container,
+  and never beyond a bounded length (app/media.py).
 * No translation. The task is always "transcribe": the words are what was said,
   in the language that was said.
 * No invented numbers. `avgLogprob` and `noSpeechProb` are what the model reports.
@@ -19,7 +20,6 @@ The service does not identify speakers: it has no diariser, and says so.
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import math
 import os
@@ -29,9 +29,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.media import AudioTooLong, UndecodableAudio, UnsupportedMedia, decode_bounded
+
 # Before any import that could reach the model hub.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+__all__ = [
+    "AudioTooLong",
+    "Engine",
+    "InvalidLanguage",
+    "ModelLoading",
+    "ModelUnavailable",
+    "UndecodableAudio",
+    "UnsupportedMedia",
+]
 
 MODEL_ID = "faster-whisper-small"
 CONFIDENCE_KIND = "mean_token_probability"
@@ -43,10 +55,6 @@ class ModelUnavailable(Exception):
 
 class ModelLoading(Exception):
     """The model is still being read from disk."""
-
-
-class UndecodableAudio(Exception):
-    """The bytes are not audio the decoder can read."""
 
 
 class InvalidLanguage(Exception):
@@ -135,8 +143,10 @@ class Engine:
         weights_sha256: str | None = None,
         model_id: str = MODEL_ID,
         lock_file: Path | None = None,
+        max_audio_seconds: float = 3600.0,
     ) -> None:
         self._lock_file = lock_file or LOCK_FILE
+        self._max_audio_seconds = max_audio_seconds
         self._dir = Path(model_dir) if model_dir else None
         self._compute = compute_type
         self._threads = cpu_threads
@@ -218,10 +228,13 @@ class Engine:
             raise ModelLoading
         if self._state != "ready":
             raise ModelUnavailable(self._reason or "The speech model is not available.")
+        # Decoded (and bounded) before the model is touched, and outside its lock: a refused upload never waits for,
+        # or delays, a transcription.
+        samples = decode_bounded(audio, self._max_audio_seconds)
         with self._lock:
             try:
                 segments_iter, info = self._model.transcribe(
-                    io.BytesIO(audio),
+                    samples,
                     task="transcribe",  # never "translate"
                     language=language,
                     beam_size=5,

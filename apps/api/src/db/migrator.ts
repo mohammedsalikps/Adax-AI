@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type pg from 'pg'
 import { API_ROOT } from '../config.ts'
+import { PREFLIGHTS } from './preflight.ts'
 
 export const MIGRATIONS_DIR = path.join(API_ROOT, 'drizzle')
 
@@ -15,6 +16,8 @@ export interface MigrateOptions {
   /** Role that receives read access to the ledger (the application role). */
   appRole?: string
   log?: (msg: string) => void
+  /** Remedies (flags of src/db/preflight.ts) the operator asked for by name: each is applied only if its migration's pre-flight check fails. */
+  resolve?: string[]
 }
 
 // Fixed key so two migration runs against one database never interleave.
@@ -70,6 +73,15 @@ export async function migrate(client: pg.Client, dir: string = MIGRATIONS_DIR, o
       if (done.has(m.name)) {
         result.skipped.push(m.name)
         continue
+      }
+      // Data conditions this migration needs: checked first, in words, so a database that does not meet one is told what to do instead of failing inside it.
+      for (const pre of PREFLIGHTS.filter((p) => p.migration === m.name)) {
+        let problem = await pre.check(client)
+        if (problem && opts.resolve?.includes(pre.flag)) {
+          log(`${pre.flag}: ${await pre.remedy(client)} row(s) changed`)
+          problem = await pre.check(client)
+        }
+        if (problem) throw new Error(`Migration ${m.name} cannot be applied yet: ${problem}`)
       }
       try {
         await client.query('BEGIN')

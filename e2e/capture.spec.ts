@@ -7,6 +7,17 @@ import { DEMO_PASSWORD, expectNoAxeViolations, expectNoHorizontalOverflow, nurse
 // model is measured separately (docs/safety/AI_MODELS.md). The patient is synthetic.
 
 const APP_ORIGIN = 'http://127.0.0.1:5273'
+const HOSTED_MOCK = 'http://127.0.0.1:4199'
+
+/** What the mock hosted provider has been sent (counts only). */
+async function hostedCalls() {
+  const r = await pwRequest.newContext()
+  try {
+    return (await (await r.get(`${HOSTED_MOCK}/__calls`)).json()) as { calls: number; fromCapture: number }
+  } finally {
+    await r.dispose()
+  }
+}
 
 async function startConsultation(page: Page, baseURL: string, opts: Parameters<typeof nurseHandsOverPatient>[1] = {}) {
   const p = await nurseHandsOverPatient(baseURL, opts)
@@ -186,6 +197,8 @@ test('record, pause, resume and stop with the browser microphone: timed lines, d
 
   // ---- privacy: the page talked only to this application, and no address carries speech ----
   expect(outside, 'requests to anything but the app').toEqual([])
+  // Hosted AI is allowed in this suite (to the loopback mock), yet nothing of this consultation's capture, transcript, speakers, points or note insertion was sent to it.
+  expect((await hostedCalls()).fromCapture, "requests to the hosted provider (mock) carrying this recording’s words").toBe(0)
   // The audio went to the local stand-in (it counted the parts) and the browser itself never reached it: it is not an address the page uses.
   const stand = await pwRequest.newContext()
   expect(((await (await stand.get('http://127.0.0.1:8199/__calls')).json()) as { calls: number }).calls).toBeGreaterThanOrEqual(2)
@@ -326,7 +339,7 @@ test('layout: capture, important points and the record sit side by side on a wor
   await first.getByRole('button', { name: 'Confirm', exact: true }).click()
   await expect(points.locator('[data-testid="important-point"][data-state="confirmed"]').first()).toBeVisible()
 
-  const sizes = isMobile ? [null] : [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]
+  const sizes = isMobile ? [null] : [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }, { width: 412, height: 915 }, { width: 390, height: 844 }]
   for (const size of sizes) {
     if (size) await page.setViewportSize(size)
     const w = size?.width ?? page.viewportSize()!.width
@@ -358,4 +371,100 @@ test('layout: capture, important points and the record sit side by side on a wor
   }
   await expectNoAxeViolations(page)
   expect(p.patientId).toBeTruthy()
+})
+
+test('the assistant says whether hosted AI is allowed and where text would go; with it off it says nothing leaves this computer and offers no drafting', async ({ browser, baseURL }) => {
+  // Allowed in this suite, on purpose and only to the loopback mock: the badge and the disclosure say where.
+  const on = await browser.newContext({ baseURL, serviceWorkers: 'block' })
+  const page = await on.newPage()
+  await startConsultation(page, baseURL!, { consents: ['ai_recording'] })
+  const panel = page.getByRole('region', { name: 'AI consultation assistant' })
+  await expect(panel.getByTestId('egress-badge')).toContainText('Hosted AI: allowed (to 127.0.0.1:4199)')
+  await expect(panel.getByTestId('external-disclosure')).toContainText('not on this computer')
+  await expect(panel.getByTestId('external-disclosure')).toContainText('Audio is never sent')
+  // The same screen when the server has egress off (the default): the status is read from the server, so it is set here the way the server would send it.
+  await page.route('**/api/encounters/*/ai', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json()
+    const reason = 'Hosted AI processing is switched off on this server, so no consultation text leaves this computer. Turning it on is a server setting (ai.egress.hostedProviders in config/adaxai.yaml, or AI_EGRESS_HOSTED), not something this screen can do.'
+    await route.fulfill({ response: res, json: { ...body, status: { ...body.status, egress: { hosted: false, destination: null }, llm: { available: false, provider: null, model: null, reason }, qa: { available: false, provider: null, model: null, reason }, vision: { available: false, provider: null, model: null, reason } } } })
+  })
+  await page.reload()
+  const off = page.getByRole('region', { name: 'AI consultation assistant' })
+  await expect(off.getByTestId('egress-badge')).toContainText('Hosted AI: off')
+  await expect(off.getByTestId('egress-off-note')).toContainText('Nothing leaves this computer')
+  await expect(off.getByTestId('egress-off-note')).toContainText('a server setting that this screen cannot change')
+  await expect(off.getByTestId('external-disclosure')).toHaveCount(0)
+  await expect(off.getByRole('button', { name: /Generate draft/ })).toHaveCount(0)
+  await expectNoAxeViolations(page)
+  await on.close()
+})
+
+test('states at five widths: consent needed, local transcription unavailable, and a microphone error each fit the screen and pass the accessibility check', async ({ browser, baseURL, isMobile }, testInfo) => {
+  test.skip(isMobile, 'Sets its own screen sizes (the 412 px Pixel 7 size is one of them)')
+  const widths = [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }, { width: 412, height: 915 }, { width: 390, height: 844 }]
+  const ctx = await browser.newContext({ baseURL, serviceWorkers: 'block', permissions: ['microphone'] })
+  const page = await ctx.newPage()
+  const unavailable = { available: false, reason: 'The local speech service is not running. Start it with "npm run dev:speech".' }
+  let speechDown = false
+  await page.route('**/api/encounters/*/ai', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json()
+    await route.fulfill({ response: res, json: speechDown ? { ...body, status: { ...body.status, stt: { ...body.status.stt, ...unavailable } } } : body })
+  })
+  // Recording consent is given from the screen: the answer to that request carries the state too.
+  await page.route('**/api/encounters/*/ai-consent', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json()
+    await route.fulfill({ response: res, json: speechDown ? { ...body, status: { ...body.status, stt: { ...body.status.stt, ...unavailable } } } : body })
+  })
+  await page.route('**/api/encounters/*/capture', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json()
+    await route.fulfill({ response: res, json: speechDown ? { ...body, canRecord: false, blockedReason: unavailable.reason, speech: { ...body.speech, ...unavailable } } : body })
+  })
+  await page.addInitScript(() => {
+    // Only when a test sets window.name (it survives a reload): the browser refuses the microphone.
+    const original = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices)
+    if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = (c) => (window.name === 'deny-mic' ? Promise.reject(new DOMException('Permission denied', 'NotAllowedError')) : original!(c))
+  })
+  const fit = async (label: string) => {
+    for (const size of widths) {
+      await page.setViewportSize(size)
+      await page.waitForTimeout(200)
+      await expectNoHorizontalOverflow(page)
+      await page.getByRole('region', { name: 'Live transcription' }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: testInfo.outputPath(`${label.replace(/\W+/g, '-')}-${size.width}.png`) })
+      for (const name of ['Live transcription', 'Important points']) {
+        const box = await page.getByRole('region', { name }).boundingBox()
+        expect(box, `${label}: ${name} at ${size.width}px`).toBeTruthy()
+        expect(box!.x + box!.width, `${label}: ${name} at ${size.width}px`).toBeLessThanOrEqual(size.width + 0.5)
+      }
+    }
+    // From the top of the page: a control the page header covers because of where the page happens to be scrolled is not a state of the page.
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await expectNoAxeViolations(page).catch((e: Error) => {
+      throw new Error(`[${label}] ${e.message}`)
+    })
+  }
+  // 1. Consent needed.
+  const first = await nurseHandsOverPatient(baseURL!)
+  await signIn(page, 'dr.meera')
+  await page.getByRole('listitem').filter({ hasText: first.name }).getByRole('button', { name: 'Start consultation' }).click()
+  const live = page.getByRole('region', { name: 'Live transcription' })
+  await expect(live.getByTestId('recording-consent')).toContainText('The patient’s consent to recording is needed')
+  await fit('consent needed')
+  // 2. Consent recorded, local transcription unavailable.
+  speechDown = true
+  await live.getByRole('button', { name: 'Patient agrees (verbal)' }).click()
+  await expect(live.getByRole('status').filter({ hasText: 'Local transcription unavailable' })).toBeVisible()
+  await fit('local transcription unavailable')
+  // 3. Service back, the microphone refused: the error is told in words.
+  speechDown = false
+  await page.evaluate(() => (window.name = 'deny-mic'))
+  await page.reload()
+  await page.getByRole('region', { name: 'Live transcription' }).getByRole('button', { name: 'Start recording' }).click()
+  await expect(page.getByRole('region', { name: 'Live transcription' }).getByRole('alert').filter({ hasText: 'Microphone access was denied' })).toBeVisible()
+  await fit('microphone error')
+  await ctx.close()
 })

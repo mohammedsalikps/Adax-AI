@@ -27,6 +27,9 @@ export const AppSettings = z
         stt: z
           .object({ provider: z.enum(['none', 'local']), url: z.url(), liveChunkSeconds: z.number().int().min(5).max(120), languageHint: z.string().regex(/^[a-z]{2,3}$/).nullable() })
           .strict(),
+        // Whether consultation text may leave this computer for a hosted AI provider. False unless someone says otherwise on purpose: a provider key
+        // in .env does not change it. (Audio never leaves: there is no hosted speech provider.)
+        egress: z.object({ hostedProviders: z.boolean() }).strict(),
         // The "important points" extractor: fixed rules in this process (default), or the hosted language model when someone chooses it.
         extraction: z.object({ provider: z.enum(['rules', 'llm']) }).strict(),
         context: z.object({ priorEncounters: z.number().int().min(0).max(20), observationDays: z.number().int().min(1).max(365) }).strict(),
@@ -48,6 +51,8 @@ export const AppSettings = z
             activationPerIp: LimitRule,
             passwordChangePerUser: LimitRule,
             deviceIngestPerToken: LimitRule,
+            aiAudioPerUser: LimitRule,
+            aiStepPerUser: LimitRule,
           })
           .strict(),
       })

@@ -90,7 +90,9 @@ export const isLikelyNonSpeech = (x: { noSpeechProb: number | null; confidence: 
 
 export class LocalSpeechTranscriber implements Transcriber {
   readonly provider = 'local-speech'
-  readonly local = true as const
+  /** On this machine, unless the operator pointed it at another host on purpose (SPEECH_ALLOW_NON_LOOPBACK): then the screens say where it is. */
+  readonly local: boolean
+  readonly host: string
   /** The model the service reported most recently; "faster-whisper-small" until it has answered. */
   model = 'local speech model'
   private readonly url: string
@@ -100,6 +102,8 @@ export class LocalSpeechTranscriber implements Transcriber {
     const problem = speechUrlProblem(cfg.url, cfg.allowNonLoopback ?? false)
     if (problem) throw new Error(problem)
     this.url = cfg.url.replace(/\/+$/, '')
+    this.local = speechUrlProblem(cfg.url, false) === null
+    this.host = new URL(cfg.url).host
   }
 
   async transcribe(audio: Buffer, mimeType: string, filename: string, opts: { language?: string | null } = {}): Promise<SpeechResult> {
@@ -117,6 +121,8 @@ export class LocalSpeechTranscriber implements Transcriber {
     }
     if (res.status === 503) throw new AiProviderError('stt_unavailable', 'The local speech service is not ready yet (its model is still loading or missing).', true)
     if (res.status === 413) throw new AiProviderError('too_large', 'The recording is too large for the local speech service.')
+    if (res.status === 415) throw new AiProviderError('unsupported_media', 'The local speech service does not read this kind of file as audio.')
+    if (res.status === 429) throw new AiProviderError('busy', 'The local speech service is busy with other recordings. Try again in a moment.', true)
     if (res.status === 422) throw new AiProviderError('undecodable_audio', 'The recording could not be read as audio.')
     if (res.status === 400) throw new AiProviderError('invalid_language', 'The local speech model does not know that language.')
     if (!res.ok) throw new AiProviderError(`api_${res.status}`, 'The local speech service returned an error.', res.status >= 500)

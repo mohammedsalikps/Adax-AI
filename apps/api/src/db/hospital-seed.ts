@@ -44,6 +44,40 @@ async function withClockAt<T>(at: Date, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Holds the clock for everything in this process until the returned function is called (the seed is the only thing running). */
+function holdClock(at: Date): () => void {
+  const RealDate = globalThis.Date
+  const fixed = at.getTime()
+  globalThis.Date = new Proxy(RealDate, {
+    construct: (target, args) => (args.length ? Reflect.construct(target, args) : new target(fixed)),
+    get: (target, prop, receiver) => (prop === 'now' ? () => fixed : Reflect.get(target, prop, receiver)),
+  })
+  return () => {
+    globalThis.Date = RealDate
+  }
+}
+
+/** The instant at which the clinic's wall clock reads `minute` minutes after midnight on `date` (YYYY-MM-DD) in `timeZone`. */
+export function clinicInstant(date: string, minute: number, timeZone: string): Date {
+  const guess = new Date(Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10), 0, minute))
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(guess)
+  const get = (t: string) => Number(parts.find((x) => x.type === t)!.value)
+  const shown = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'))
+  return new Date(guess.getTime() - (shown - guess.getTime()))
+}
+
+/**
+ * Today's appointments sit at offsets from the clinic's time of day: down to 150 minutes ago and up to 90 minutes ahead, 15 minutes each, one
+ * doctor at a time. Before EARLIEST_CLINIC_MINUTE there is not enough of the day behind to hold the past ones, and after LATEST_CLINIC_MINUTE
+ * there is not enough of it ahead for the bookings (they would pile up at the same minutes, which one doctor cannot have, or land on the wrong
+ * side of "now"). Outside that range the schedule is made as if it were midday: the clock the API reads is held there while today's activity is
+ * made, and the data reads as a normal working day.
+ */
+export const EARLIEST_CLINIC_MINUTE = 160
+/** The latest "now" with room after it, within the same day, for the furthest booking (90 minutes ahead; the last slot of the day is 23:55). */
+export const LATEST_CLINIC_MINUTE = 23 * 60 + 55 - 90
+export const MIDDAY_MINUTE = 12 * 60
+
 export interface SeedResult {
   created: number
   /** Patients that already existed and had steps of their history completed. */
@@ -52,7 +86,20 @@ export interface SeedResult {
   newStaff: number
 }
 
-export async function seedHospital(opts: { config?: Config; password?: string; patients?: PatientSpec[]; log?: (m: string) => void } = {}): Promise<SeedResult> {
+export async function seedHospital(
+  opts: {
+    config?: Config
+    password?: string
+    patients?: PatientSpec[]
+    log?: (m: string) => void
+    /**
+     * Treat the clinic's time of day as this many minutes after midnight (today's date), whatever the real clock says. Without it the real clock
+     * is used, except in the first hours and the last hours of the day (see EARLIEST_CLINIC_MINUTE and LATEST_CLINIC_MINUTE). Tests pass it so
+     * that the seed does not depend on when it runs. A time with no room for the schedule is refused when a slot cannot be placed.
+     */
+    clinicMinute?: number
+  } = {},
+): Promise<SeedResult> {
   const log = opts.log ?? ((m: string) => console.log(`[hospital-seed] ${m}`))
   if (!opts.config) loadDotEnv()
   const config = opts.config ?? loadConfig()
@@ -67,6 +114,7 @@ export async function seedHospital(opts: { config?: Config; password?: string; p
   const db = createDb(pool)
   const admin = createAdminClient(config.db)
   await admin.connect()
+  let releaseClock: (() => void) | null = null
   try {
     // --- where it is allowed to write ----------------------------------------------------------------------------------
     const facility = await db.query.facilities.findFirst({ where: eq(facilities.code, 'DEMO-OPD-01') })
@@ -95,11 +143,30 @@ export async function seedHospital(opts: { config?: Config; password?: string; p
       if (!u || u.facilityId !== facility.id) throw new Error(`Refusing: ${username} is not an account of the synthetic facility.`)
     }
 
+    // --- the clock ---------------------------------------------------------------------------------------------------
+    // Today's schedule is made at the clinic's time of day. In the first hours of the day (or when a caller asks) the whole run is made as
+    // if it were that time, so that the schedule, the queue and every check the API makes agree; otherwise the real clock is used as it is.
+    const minuteAt = (at: Date) => {
+      const parts = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: facility.timezone }).formatToParts(at)
+      return Number(parts.find((x) => x.type === 'hour')!.value) * 60 + Number(parts.find((x) => x.type === 'minute')!.value)
+    }
+    const startedAt = new Date()
+    const realMinute = minuteAt(startedAt)
+    const clinicMinute = opts.clinicMinute ?? (realMinute >= EARLIEST_CLINIC_MINUTE && realMinute <= LATEST_CLINIC_MINUTE ? realMinute : MIDDAY_MINUTE)
+    if (clinicMinute !== realMinute) {
+      const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: facility.timezone }).format(startedAt)
+      releaseClock = holdClock(clinicInstant(localDate, clinicMinute, facility.timezone))
+    }
+
     // --- sessions --------------------------------------------------------------------------------------------------
     async function session(username: string) {
       const res = await app.inject({ method: 'POST', url: '/api/auth/login', headers: { 'x-adaxai-csrf': '1' }, payload: { username, password } })
       if (res.statusCode !== 200) throw new Error(`sign-in as ${username} failed (${res.statusCode}). Run npm run db:seed first.`)
       const cookie = res.cookies.find((c) => c.name === 'adaxai_session')!
+      // While the clock is held away from the real time, the session starts at the held time (the one the API will check it against); otherwise
+      // a session made at 01:00 for a run held at midday would look idle for eleven hours. Done here, by the seed, so nothing in the application's
+      // sign-in changes for the sake of this tool.
+      if (releaseClock) await admin.query('UPDATE sessions SET last_seen_at = $1 WHERE token_hash = $2', [new Date(), crypto.createHash('sha256').update(cookie.value).digest('hex')])
       return async (method: InjectOptions['method'], url: string, payload?: unknown) => {
         const r = await app.inject({ method, url, headers: { cookie: `adaxai_session=${cookie.value}`, 'x-adaxai-csrf': '1' }, ...(payload !== undefined && { payload: payload as InjectOptions['payload'] }) })
         if (r.statusCode >= 400) throw new Error(`${method} ${url}: ${r.statusCode} ${r.body.slice(0, 300)}`)
@@ -178,15 +245,25 @@ export async function seedHospital(opts: { config?: Config; password?: string; p
       if (t.state === 'completed') await doctor('POST', `/api/encounters/${e.id}/sign`, { version: saved.version, attestation: true })
     }
 
-    // The clinic's time of day now, in minutes; appointment times are offsets from it (so the schedule is plausible at any hour).
-    const parts = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: options.timezone }).formatToParts(new Date())
-    const nowMin = Number(parts.find((x) => x.type === 'hour')!.value) * 60 + Number(parts.find((x) => x.type === 'minute')!.value)
+    // The clinic's time of day now, in minutes; appointment times are offsets from it (so the schedule is plausible at any hour). It was fixed at the start of the run.
+    const nowMin = clinicMinute
     const takenByDoctor = new Map<string, Set<number>>()
+    /**
+     * A 15-minute slot for one doctor near `now + offset`: the wanted time if it is free, else the nearest free one (earlier first) on the same
+     * side of now, so a past appointment stays past and a booking stays to come. One doctor never has two appointments that overlap (the
+     * database refuses them).
+     */
     const slotFor = (department: string, offset: number) => {
       const taken = takenByDoctor.get(department) ?? new Set<number>()
       takenByDoctor.set(department, taken)
-      let m = Math.min(23 * 60 + 55, Math.max(5, Math.floor((nowMin + offset) / 5) * 5))
-      while (taken.has(m) && m > 20) m -= 15
+      const want = Math.min(23 * 60 + 55, Math.max(5, Math.floor((nowMin + offset) / 5) * 5))
+      const past = offset <= 0
+      const free = (x: number) => x >= 5 && x <= 23 * 60 + 55 && ![...taken].some((t) => Math.abs(t - x) < 15)
+      const sideOk = (x: number) => (past ? x <= nowMin : x > nowMin)
+      const candidates = Array.from({ length: 24 * 12 + 1 }, (_, i) => i * 5).flatMap((d) => [want - d, want + d])
+      // A slot on the wrong side of "now" would make a booking that has already started, or a no-show that has not: that is refused, never made.
+      const m = candidates.find((x) => free(x) && sideOk(x))
+      if (m === undefined) throw new Error(`No free appointment slot ${past ? 'before' : 'after'} the clinic time (${Math.floor(nowMin / 60)}:${String(nowMin % 60).padStart(2, '0')}) is left for this doctor. The schedule can be made between ${Math.floor(EARLIEST_CLINIC_MINUTE / 60)}:${String(EARLIEST_CLINIC_MINUTE % 60).padStart(2, '0')} and ${Math.floor(LATEST_CLINIC_MINUTE / 60)}:${String(LATEST_CLINIC_MINUTE % 60).padStart(2, '0')}.`)
       taken.add(m)
       return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
     }
@@ -209,8 +286,8 @@ export async function seedHospital(opts: { config?: Config; password?: string; p
       try {
         await adminTx(async () => {
           await admin.query(
-            `UPDATE appointments a SET scheduled_at = (((now() at time zone f.timezone)::date + $2::time)::timestamp at time zone f.timezone) FROM facilities f WHERE f.id = a.facility_id AND a.id = $1`,
-            [appt.id, time],
+            `UPDATE appointments a SET scheduled_at = (($3::date + $2::time)::timestamp at time zone f.timezone) FROM facilities f WHERE f.id = a.facility_id AND a.id = $1`,
+            [appt.id, time, today],
           )
         })
       } catch (e) {
@@ -341,6 +418,7 @@ export async function seedHospital(opts: { config?: Config; password?: string; p
     log(`Staff: ${HOSPITAL_STAFF.map((s) => s.username).join(', ')} (and dr.meera, dr.rahul, nurse.anil, admin) use the demo password from .env.`)
     return { created, completed, activity, newStaff }
   } finally {
+    releaseClock?.()
     await admin.end()
     await app.close()
     await pool.end()

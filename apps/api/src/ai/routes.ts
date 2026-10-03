@@ -42,9 +42,10 @@ import {
   visits,
 } from '../db/schema.ts'
 import { assertWithDoctor, getEncounterOr404 } from '../encounters/service.ts'
-import { readStoredBytes, storeBytes } from '../files/storage.ts'
+import { discardStoredBytes, readStoredBytes, storeBytes } from '../files/storage.ts'
 import { readUpload } from '../files/upload.ts'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../http/errors.ts'
+import { enforceLimit, type RateLimiter } from '../http/rate-limit.ts'
 import { parse } from '../http/validate.ts'
 import { currentConsent, grantConsent, requireConsent as requireConsentFor } from '../consents/service.ts'
 import type { RoutingRulesSource } from '../settings/load.ts'
@@ -55,6 +56,7 @@ import { type JobService, loadJobs, sha256, toRun } from './jobs.ts'
 import { type AiProviders, aiStatus } from './providers.ts'
 import { loadEvidence, reviewSubject } from './review.ts'
 import { SAFETY_RULES_VERSION, safetyChecks } from './safety.ts'
+import { CONTAINER_OF_MIME, sniffAudio } from './audio-sniff.ts'
 import { isLikelyNonSpeech } from './stt.ts'
 import { formatTranscript } from './anthropic.ts'
 import { appendSegments, loadSegments, segmentIdsByLabel } from './transcripts.ts'
@@ -86,12 +88,15 @@ export interface AiRouteDeps {
   jobs: JobService
   /** Executors by job kind, shared with other modules (images) for retries. */
   executors: Map<string, JobExecutor>
+  /** The process-wide rate limiter (per-user limits on audio and on the costly steps). */
+  limiter: RateLimiter
 }
 
 const evidenceValues = (subjectType: string, subjectId: string, ev: EvidenceOut[]) => ev.map((e) => ({ subjectType, subjectId, relation: e.relation, sourceType: e.sourceType, sourceId: e.sourceId, sourceRef: e.sourceRef, provenance: e.provenance, excerpt: e.excerpt.slice(0, 2000), note: e.note }))
 
 export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
-  const { db, config, providers, settings, routing, jobs, executors } = deps
+  const { db, config, providers, settings, routing, jobs, executors, limiter } = deps
+  const limits = settings.security.rateLimits
 
   /** The encounter, if the caller may use AI on it: the authoring doctor, before signing. */
   async function editableEncounter(me: SessionUser, id: string) {
@@ -335,7 +340,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     })
     const { e, t, file, data } = ready
     const offsetMs = input.offsetMs ?? 0
-    const runMeta = (r?: SpeechResult) => ({ kind: 'stt', provider: t.provider, model: r?.model.id ?? t.model, capability: 'stt' as const, promptVersion: null, inputSha256: file.sha256, locality: 'local' as const, runtime: r?.model.runtime ?? null, weightsSha256: r?.model.weightsSha256 ?? null })
+    const runMeta = (r?: SpeechResult) => ({ kind: 'stt', provider: t.provider, model: r?.model.id ?? t.model, capability: 'stt' as const, promptVersion: null, inputSha256: file.sha256, locality: t.local ? ('local' as const) : ('external' as const), runtime: r?.model.runtime ?? null, weightsSha256: r?.model.weightsSha256 ?? null })
     try {
       return await jobs.attempt(
         req,
@@ -656,6 +661,8 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     const ext = AUDIO_EXT[mime]
     if (!ext || !settings.uploads.audio.types.includes(mime)) throw badRequest('Unsupported audio format', [{ path: 'file', message: 'Use WebM, OGG, MP3, M4A or WAV audio' }])
     if (up.data.length > settings.uploads.audio.maxMb * 1024 * 1024) throw new HttpError(413, 'too_large', `Audio is larger than ${settings.uploads.audio.maxMb} MB`)
+    // What the bytes are, not what the name or the declared type says: a file that is not audio of the declared kind is refused before it is stored.
+    if (sniffAudio(up.data) !== CONTAINER_OF_MIME[mime]) throw new HttpError(415, 'unsupported_media', 'The file is not audio of the kind it says it is. Use a WebM, OGG, MP3, M4A or WAV recording.')
     return { up, mime, ext }
   }
 
@@ -670,6 +677,9 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
 
   async function storeAudio(req: FastifyRequest, me: SessionUser, e: { id: string; patientId: string }, nameFor: (ext: string, original: string | undefined, field: (n: string) => string | undefined) => string) {
     const a = await readAudio(req)
+    // The upload took time to arrive (up to the size limit over a slow link): consent is checked again just before anything is stored, so a
+    // patient who withdrew while it was arriving does not have it stored.
+    await requireConsent(req, e.patientId, e.id)
     const originalName = nameFor(a.ext, a.up.filename, (n) => a.up.fields[n])
     return persistAudio(me, e, a, originalName)
   }
@@ -684,6 +694,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   /** Stores consultation audio; transcribes it when speech-to-text is configured. */
   app.post('/api/encounters/:id/audio', { config: { permission: 'ai:use' } }, async (req, reply) => {
     const me = currentUser(req)
+    await enforceLimit(db, limiter, req, reply, 'ai-audio', me.id, limits.aiAudioPerUser)
     const { id } = parse(IdParams, req.params)
     const e = await editableEncounter(me, id)
     await assertWithDoctor(db, e)
@@ -734,7 +745,19 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     }
     let t: { id: string }
     try {
-      ;[t] = (await db.insert(transcripts).values({ encounterId: id, source: 'browser_recording', status: 'live', createdBy: me.id }).returning({ id: transcripts.id })) as [{ id: string }]
+      // The consent is read again, and locked against a withdrawal, in the step that creates the recording: a withdrawal that committed while the
+      // speech service was being asked is seen here, and one that commits after this step ends this recording itself (it waits for this step).
+      const created = await db.transaction(async (tx) => {
+        if (!(await currentConsent(tx, e.patientId, 'ai_recording', id, true))) return null
+        const [row] = await tx.insert(transcripts).values({ encounterId: id, source: 'browser_recording', status: 'live', createdBy: me.id }).returning({ id: transcripts.id })
+        return row!
+      })
+      if (!created) {
+        // Audited and refused with the consent's own wording (withdrawn or not recorded).
+        await requireConsent(req, e.patientId, id)
+        throw new HttpError(409, 'consent_withdrawn', 'The patient has withdrawn consent to recording.')
+      }
+      t = created
     } catch (err) {
       if ((err as { code?: string }).code === '23505' || (err as { cause?: { code?: string } }).cause?.code === '23505') throw conflict('A recording is already running for this consultation (another tab or window). Stop it there first.', 'recording_in_progress')
       throw err
@@ -745,6 +768,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
 
   app.post('/api/transcripts/:id/chunks', { config: { permission: 'ai:use' } }, async (req, reply) => {
     const me = currentUser(req)
+    await enforceLimit(db, limiter, req, reply, 'ai-audio', me.id, limits.aiAudioPerUser)
     const { id } = parse(IdParams, req.params)
     const t = await transcriptOr404(me, id)
     const e = await editableEncounter(me, t.encounterId)
@@ -773,12 +797,38 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
     if (earlier && fields.offsetMs < earlier.offset) throw badRequest('Some fields are invalid', [{ path: 'offsetMs', message: 'The part starts before the part that precedes it' }])
     const dup = await db.query.transcriptChunks.findFirst({ where: and(eq(transcriptChunks.transcriptId, id), eq(transcriptChunks.chunkIndex, fields.chunkIndex)) })
     if (dup) throw conflict('This part of the recording was already received', 'chunk_already_received')
-    const file = await persistAudio(me, e, a, `live-chunk-${fields.chunkIndex}${a.ext}`)
-    const [chunk] = await db.insert(transcriptChunks).values({ transcriptId: id, chunkIndex: fields.chunkIndex, fileId: file.id, offsetMs: fields.offsetMs }).onConflictDoNothing().returning({ id: transcriptChunks.id })
-    if (!chunk) throw conflict('This part of the recording was already received', 'chunk_already_received')
-    await audit(db, req, { action: 'ai.audio_chunk', entityType: 'file', entityId: file.id, patientId: e.patientId, details: { transcriptId: id, chunkIndex: fields.chunkIndex } })
+    // The bytes are written first. The rows that make them part of the recording are written in one step that checks, under a lock, that the
+    // recording is still live and the consent still holds: a withdrawal that is ending this recording right now either waits for this step (and
+    // then ends the recording, part included) or has already ended it (and this part is refused). Refused bytes are removed again.
+    const stored = await storeBytes(config.storageDir, a.up.data, a.ext)
+    let saved: { fileId: string; chunkId: string } | null
     try {
-      await startJob(req, me, { kind: 'transcription', patientId: e.patientId, encounterId: e.id, input: { fileId: file.id, transcriptId: id, chunkIndex: fields.chunkIndex, chunkId: chunk.id, offsetMs: fields.offsetMs, source: 'browser_recording' } })
+      saved = await db.transaction(async (tx) => {
+        const [live] = await tx.select({ id: transcripts.id }).from(transcripts).where(and(eq(transcripts.id, id), eq(transcripts.status, 'live'))).for('share')
+        if (!live) throw conflict('This recording has ended', 'transcript_not_live')
+        if (!(await currentConsent(tx, e.patientId, 'ai_recording', e.id, true))) return null
+        const [row] = await tx
+          .insert(files)
+          .values({ facilityId: me.facilityId, patientId: e.patientId, encounterId: e.id, kind: 'consultation_audio', storageKey: stored.storageKey, originalName: `live-chunk-${fields.chunkIndex}${a.ext}`, mimeType: a.mime, sizeBytes: stored.sizeBytes, sha256: stored.sha256, uploadedBy: me.id })
+          .returning({ id: files.id })
+        const [part] = await tx.insert(transcriptChunks).values({ transcriptId: id, chunkIndex: fields.chunkIndex, fileId: row!.id, offsetMs: fields.offsetMs }).onConflictDoNothing().returning({ id: transcriptChunks.id })
+        if (!part) throw conflict('This part of the recording was already received', 'chunk_already_received')
+        await audit(tx, req, { action: 'ai.audio_chunk', entityType: 'file', entityId: row!.id, patientId: e.patientId, details: { transcriptId: id, chunkIndex: fields.chunkIndex } })
+        return { fileId: row!.id, chunkId: part.id }
+      })
+    } catch (err) {
+      await discardStoredBytes(config.storageDir, stored.storageKey)
+      throw err
+    }
+    if (!saved) {
+      await discardStoredBytes(config.storageDir, stored.storageKey)
+      await endLive(req, id, e, 'consent_withdrawn')
+      // Audited and refused with the consent's own wording.
+      await requireConsent(req, e.patientId, e.id)
+      throw new HttpError(409, 'consent_withdrawn', 'The patient has withdrawn consent to recording.')
+    }
+    try {
+      await startJob(req, me, { kind: 'transcription', patientId: e.patientId, encounterId: e.id, input: { fileId: saved.fileId, transcriptId: id, chunkIndex: fields.chunkIndex, chunkId: saved.chunkId, offsetMs: fields.offsetMs, source: 'browser_recording' } })
       return reply.code(201).send(await loadAi(me, e.id))
     } catch (err) {
       if (!(err instanceof HttpError)) throw err
@@ -866,6 +916,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   /** Generates a structured note draft from a transcript. Output is stored as pending suggestions only. */
   app.post('/api/transcripts/:id/drafts', { config: { permission: 'ai:use' } }, async (req, reply) => {
     const me = currentUser(req)
+    await enforceLimit(db, limiter, req, reply, 'ai-step', me.id, limits.aiStepPerUser)
     const { id } = parse(IdParams, req.params)
     const { idempotencyKey } = parse(JobRequest, req.body ?? {})
     const t = await transcriptOr404(me, id)
@@ -880,6 +931,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
   /** Extracts structured facts (with transcript evidence and record comparison). */
   app.post('/api/transcripts/:id/extract', { config: { permission: 'ai:use' } }, async (req, reply) => {
     const me = currentUser(req)
+    await enforceLimit(db, limiter, req, reply, 'ai-step', me.id, limits.aiStepPerUser)
     const { id } = parse(IdParams, req.params)
     const { idempotencyKey } = parse(JobRequest, req.body ?? {})
     const t = await transcriptOr404(me, id)
@@ -897,6 +949,7 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
    */
   app.post('/api/encounters/:id/recommendations', { config: { permission: 'ai:use' } }, async (req, reply) => {
     const me = currentUser(req)
+    await enforceLimit(db, limiter, req, reply, 'ai-step', me.id, limits.aiStepPerUser)
     const { id } = parse(IdParams, req.params)
     const body = parse(z.object({ includeLlm: z.boolean().default(true), idempotencyKey: z.uuid().optional() }), req.body ?? {})
     const e = await editableEncounter(me, id)

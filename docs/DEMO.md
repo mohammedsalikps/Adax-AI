@@ -57,9 +57,10 @@ Use two browser windows (or one normal and one private) to switch roles quickly.
 
 **With or without AI keys.** Without keys (the default), the AI steps show a clear “unavailable”
 state, and everything else works, including the rule-based safety checks and routing. With
-`ANTHROPIC_API_KEY` in `.env`, restart `npm run dev` to also show drafting, AI recommendations
-and photo description. Only do that with synthetic data and after checking your provider
-agreement. **Live transcription needs no key**: after the one-time `npm run speech:model`
+`ANTHROPIC_API_KEY` **and `AI_EGRESS_HOSTED=true`** in `.env` (a key alone sends nothing: hosted AI egress is off by
+default), restart `npm run dev` to also show drafting, AI recommendations, Mana summaries and photo
+description; the assistant panel then says where text would go. Only do that with synthetic data and after
+checking your provider agreement. **Live transcription needs no key**: after the one-time `npm run speech:model`
 download, `npm run dev` starts a local speech service and the consultation's *Live transcription*
 card records with the microphone, on this computer only. Without the download it says "Local
 transcription unavailable" and typed transcripts still work.
@@ -115,11 +116,11 @@ transcription unavailable" and typed transcripts still work.
    - the diagnoses on record.
 
    Open **Sources** under any statement to see the record item: field, date, status (signed,
-   draft, amended) and provenance, with **Open consultation**. Without a key the panel says *AI
-   summary unavailable* and why; nothing is invented.
+   draft, amended) and provenance, with **Open consultation**. Without a key, or with hosted AI
+   egress off (the default), the panel says *AI summary unavailable* and why; nothing is invented.
 3. Ask in your own words, e.g. *“Any mention of chest pain?”*. Mana searches this patient's record
    and quotes the matching items, or says nothing matches.
-4. With `ANTHROPIC_API_KEY` set (and the seeded consent), each answer also gets a separate
+4. With `ANTHROPIC_API_KEY` set **and `AI_EGRESS_HOSTED=true`** (and the seeded consent), each answer also gets a separate
    **AI-generated summary**:
    - it cites record items;
    - anything the server cannot tie to a record item is marked *Not supported by the record*;
@@ -144,12 +145,12 @@ Use the seeded **Ravi Demo-Synthetic-XXXX** for this part; he has history to com
    record until you **Confirm** or **Reject** them. “No, no allergies” is flagged **Conflicts
    with the existing record** (penicillin) and cannot be confirmed without ticking the
    confirmation. **Add to note** is a separate step. In the assistant card, **Generate draft**
-   says *unavailable* without a key (no placeholder text).
+   says *unavailable* without a key, or with hosted AI egress off, which is the default (no placeholder text).
 4. Prescription → **Add medicine** → *Amoxicillin*. Then **Get recommendations**:
    - rule-based (always): *Check Amoxicillin: recorded allergy to Penicillin* (configured,
      illustrative penicillin group), the *chest pain* red flag with its instruction (the negated
      *“no shortness of breath”* is not flagged), the raised temperature;
-   - with a key: AI suggestions with *Why*, cited record items and transcript lines, *Not found in
+   - with a key and hosted AI egress turned on: AI suggestions with *Why*, cited record items and transcript lines, *Not found in
      the data*, and model + prompt version; uncited ones are marked unsupported.
 5. Review each item: **Accept**, **Edit**, **Reject** or **Defer**. Accepting changes nothing in
    the note or prescription; use **Add to …** to copy text into the note yourself.

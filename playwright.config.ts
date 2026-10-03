@@ -65,6 +65,9 @@ export default defineConfig({
         // Points the real Anthropic SDK at the local mock; the key is a placeholder, not a credential.
         ANTHROPIC_API_KEY: 'e2e-placeholder-not-a-key',
         ANTHROPIC_BASE_URL: `http://127.0.0.1:${PORTS.mockAnthropic}`,
+        // Hosted AI egress is off unless allowed on purpose (a key alone enables nothing). Allowed here, only because the "hosted provider" is the
+        // loopback mock above; the capture specs assert that the mock is never called during capture.
+        AI_EGRESS_HOSTED: 'true',
         // Speech-to-text: the local service boundary, pointed at the loopback stand-in. There is no hosted provider to configure.
         SPEECH_PROVIDER: 'local',
         // Opt-in real-model run (e2e/capture-real.spec.ts): E2E_SPEECH_URL points at a running local speech service instead of the stand-in.

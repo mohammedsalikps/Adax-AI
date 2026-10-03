@@ -77,8 +77,8 @@ function ConsentLine({ encounter, ai }: { encounter: Encounter; ai: EncounterAi 
     <div className="rounded-lg border border-line p-3 text-sm" data-testid="recording-consent">
       <p className="font-medium">The patient’s consent to recording is needed</p>
       <p className="mt-1 text-ink-muted">
-        Ask the patient whether this consultation may be recorded. The audio is turned into text by a speech model that runs on this computer; it is not sent to any other service, and it is stored with the consultation.
-        {ai.status.llm.available ? ' Where AI drafting is switched on, the text (without name or contact details) may also go to that service to draft note suggestions.' : ''} Declining does not affect their care.
+        Ask the patient whether this consultation may be recorded. The audio is turned into text by a speech model that runs on {ai.status.stt.local ? 'this computer; it is not sent to any other service' : `${ai.status.stt.host ?? 'another computer'}, which is not this one (the clinic’s own setting); it is not sent to a hosted service`}, and it is stored with the consultation.
+        {ai.status.egress.destination ? ` Hosted AI is switched on for this server: text from the consultation (without name or contact details) may also go to ${ai.status.egress.destination}, which is not on this computer, for the AI steps the doctor chooses. The audio never does.` : ''} Declining does not affect their care.
       </p>
       {consent.isError && (
         <Alert tone="error" className="mt-2">
@@ -148,11 +148,11 @@ function LiveTranscriptionCard({ encounter, ai, highlight }: { encounter: Encoun
         <div className="mt-3 space-y-2">
           {stt.available ? (
             <p className="flex flex-wrap items-center gap-1.5 text-xs text-ink-muted" data-testid="speech-status">
-              <Badge tone="ok" dot>
-                Local
+              <Badge tone={stt.local ? 'ok' : 'notice'} dot>
+                {stt.local ? 'Local' : 'Another computer'}
               </Badge>
               <span>
-                Speech-to-text runs on this computer ({stt.model}). Audio is sent to no other service. Not clinically validated.
+                {stt.local ? `Speech-to-text runs on this computer (${stt.model}). Audio is sent to no other service.` : `Speech-to-text runs on ${stt.host ?? 'another computer'} (${stt.model}), which is not this computer: audio goes there. It is never sent to a hosted service.`} Not clinically validated.
               </span>
             </p>
           ) : (
@@ -208,7 +208,7 @@ function LiveTranscriptionCard({ encounter, ai, highlight }: { encounter: Encoun
           <div className="space-y-3 border-t border-line p-3">
             <label className="inline-flex cursor-pointer items-center gap-2 font-medium text-brand-strong underline underline-offset-2">
               <FileAudio aria-hidden="true" className="size-4" />
-              Upload an audio file (transcribed on this computer)
+              Upload an audio file ({stt.local ? 'transcribed on this computer' : `transcribed on ${stt.host ?? 'another computer'}`})
               <input
                 type="file"
                 accept="audio/*"

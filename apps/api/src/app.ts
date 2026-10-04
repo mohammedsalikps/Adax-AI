@@ -26,6 +26,8 @@ import { registerEncounterRoutes } from './encounters/routes.ts'
 import { registerInsertionRoutes } from './encounters/insertions.ts'
 import { registerConsultationRoutes } from './consult/routes.ts'
 import { ConsultationService, editableEncounterFor } from './consult/service.ts'
+import { registerManaAssistantRoutes } from './mana/assistant/routes.ts'
+import { ManaAssistantService } from './mana/assistant/service.ts'
 import { registerManaRoutes } from './mana/routes.ts'
 import { registerHistoryRoutes } from './history/routes.ts'
 import { registerPatientRoutes } from './patients/routes.ts'
@@ -57,6 +59,8 @@ export interface AppDeps {
   notificationChannel?: NotificationChannel
   /** false: no logging (tests). A stream: the API's own log settings, written to that stream (tests of log content). */
   logger?: false | { stream: NodeJS.WritableStream }
+  /** Longest one of Mana's two model calls may take, in milliseconds (default: the AI timeout setting, at most six minutes). Tests set a short one. */
+  manaCallTimeoutMs?: number
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
@@ -107,31 +111,51 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const jobs = new JobService({ db, dataOrigin: deps.config.dataOrigin, aiSettings: { ai: settings.ai, uploads: settings.uploads, safety: settings.safety, mana: settings.mana } })
   const executors = new Map<string, JobExecutor>()
   // Local AI consultation intelligence (V3): drafts are made in the background by the one local model, which answers one request at a time.
+  const reasoningConfig = { mode: providers.reasoning?.mode ?? 'none', model: providers.reasoner ?? null, reason: providers.reasoning?.reason ?? null, egress: providers.egress ?? { hosted: false, destination: null } }
+  // One model on this computer answers one request at a time: the consultation drafts and Mana's answers wait for it in the same line.
+  const modelGate = new Gate(1, settings.ai.reasoning.maxWaiting)
   const consult = new ConsultationService({
     db,
     jobs,
-    reasoning: { mode: providers.reasoning?.mode ?? 'none', model: providers.reasoner ?? null, reason: providers.reasoning?.reason ?? null, egress: providers.egress ?? { hosted: false, destination: null } },
-    gate: new Gate(1, settings.ai.reasoning.maxWaiting),
+    reasoning: reasoningConfig,
+    gate: modelGate,
     settings,
     editableEncounter: editableEncounterFor(db),
   })
+  // Mana AI (V4): the doctor's assistant over the clinic's records; read-only, answers made in the background by the same local model.
+  const manaAssistant = new ManaAssistantService({ db, jobs, reasoning: reasoningConfig, gate: modelGate, settings, dataOrigin: deps.config.dataOrigin, ...(deps.manaCallTimeoutMs !== undefined && { callTimeoutMs: deps.manaCallTimeoutMs }) })
   // A step that was running when the system stopped will never finish: fail it (retryable) so its doctor is not left waiting on it.
   app.addHook('onReady', async () => {
+    // Each sweep on its own: one that fails does not keep the others from running. Not worth stopping the server for: a sweep runs again at the next start.
     try {
       const n = await jobs.sweepInterrupted()
       if (n) app.log.warn({ jobs: n }, 'AI steps left running by a stop were marked failed (retryable)')
+    } catch {
+      // see above
+    }
+    try {
       const drafts = await consult.sweepInterrupted()
       if (drafts) app.log.warn({ drafts }, 'Consultation drafts left running by a stop were marked failed (retryable)')
     } catch {
-      // Not worth stopping the server for: the sweep runs again at the next start.
+      // see above
+    }
+    try {
+      const answers = await manaAssistant.sweepInterrupted()
+      if (answers) app.log.warn({ answers }, 'Mana answers left running by a stop were marked failed (retryable)')
+    } catch {
+      // see above
     }
   })
   // Closing the server stops any model call in progress.
-  app.addHook('onClose', async () => consult.abortAll())
+  app.addHook('onClose', async () => {
+    consult.abortAll()
+    manaAssistant.abortAll()
+  })
   const thermal = deps.thermal ?? httpThermalService(deps.config.thermalUrl, fetchImpl)
   registerAiRoutes(app, { db, config: deps.config, providers, settings, routing, jobs, executors, limiter })
   registerManaRoutes(app, { db, providers, settings, jobs, executors, dataOrigin: deps.config.dataOrigin })
   registerConsultationRoutes(app, { db, service: consult, limiter, settings })
+  registerManaAssistantRoutes(app, { db, service: manaAssistant, limiter, settings })
   registerImageRoutes(app, { db, config: deps.config, settings, providers, thermal, jobs, executors })
   registerThermalRoutes(app, { db, config: deps.config, thermal })
   registerThermalDatasetRoutes(app, { db, config: deps.config, thermal })

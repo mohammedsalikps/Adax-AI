@@ -44,8 +44,8 @@ export async function currentConsent(db: DbOrTx, patientId: string, type: Consen
 }
 
 /** granted (current wording) / outdated (earlier wording) / withdrawn / not_recorded. */
-export async function consentState(db: DbOrTx, patientId: string, type: ConsentType, encounterId?: string): Promise<{ state: ConsentState; consent: ConsentRow | null }> {
-  const c = await currentConsent(db, patientId, type, encounterId)
+export async function consentState(db: DbOrTx, patientId: string, type: ConsentType, encounterId?: string, lock = false): Promise<{ state: ConsentState; consent: ConsentRow | null }> {
+  const c = await currentConsent(db, patientId, type, encounterId, lock)
   if (c) return { state: c.version === CONSENT_VERSIONS[type] ? 'granted' : 'outdated', consent: c }
   // The latest decision, ignoring active consultation-only grants (they do not undo an ongoing withdrawal).
   const [last] = await db

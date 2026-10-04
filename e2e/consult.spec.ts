@@ -1,5 +1,5 @@
 import { expect, type Page, request as pwRequest, test } from '@playwright/test'
-import { expectNoAxeViolations, expectNoHorizontalOverflow, nurseHandsOverPatient, signIn } from './support.ts'
+import { expectNoAxeViolations, expectNoHorizontalOverflow, llmExclusive, nurseHandsOverPatient, signIn } from './support.ts'
 
 // Local AI consultation intelligence (V3) in a real browser: the draft is made in the background by "the local model" (the labelled stand-in in
 // e2e/mock-llm.mjs, which answers from the record items it is shown: no model runs in this suite), arrives as statements with sources and a support
@@ -26,6 +26,7 @@ async function llmCalls(prompts = false) {
 
 // The tests share one stand-in model server and flip its mode, and several set their own viewports: they run on the desktop project only (the phone widths are checked below).
 test.skip(({ isMobile }) => isMobile, 'desktop project only (shared model stand-in)')
+llmExclusive(test)
 
 test.beforeEach(async () => llm('ok'))
 test.afterEach(async () => llm('ok'))

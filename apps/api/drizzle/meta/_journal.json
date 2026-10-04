@@ -190,6 +190,20 @@
       "when": 1791063327167,
       "tag": "0026_consultation_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1791082340563,
+      "tag": "0027_mana_assistant",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791085940563,
+      "tag": "0028_mana_append_only_policy",
+      "breakpoints": true
     }
   ]
 }

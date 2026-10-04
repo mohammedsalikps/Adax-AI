@@ -12,10 +12,11 @@ const TONES: Record<Tone, { cls: string; Icon: typeof Info }> = {
   error: { cls: 'border-down/20 bg-down-soft text-down', Icon: CircleAlert },
 }
 
-export function Alert({ tone = 'info', title, children, className = '' }: { tone?: Tone; title?: ReactNode; children?: ReactNode; className?: string }) {
+/** `live={false}`: no live-region role, for a message that sits in a log whose own live region says what arrived (so that a screen reader does not say it twice). */
+export function Alert({ tone = 'info', title, children, className = '', live = true }: { tone?: Tone; title?: ReactNode; children?: ReactNode; className?: string; live?: boolean }) {
   const { cls, Icon } = TONES[tone]
   return (
-    <div role={tone === 'error' ? 'alert' : 'status'} className={`flex gap-2 rounded-lg border px-3 py-2 text-sm ${cls} ${className}`}>
+    <div role={live ? (tone === 'error' ? 'alert' : 'status') : undefined} className={`flex gap-2 rounded-lg border px-3 py-2 text-sm ${cls} ${className}`}>
       <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0">
         {title && <p className="font-semibold">{title}</p>}

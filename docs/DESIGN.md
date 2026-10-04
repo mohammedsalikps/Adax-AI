@@ -199,6 +199,27 @@ The reference is a clinical workstation: dense, calm, one patient in focus. Thes
 
 **Not built:** streaming text, side-by-side diff against the note, a way to correct the AI's *reason*, a comparison of drafts.
 
+## 4e. Mana AI (slice V4): a conversation with the clinic's records, closed until opened
+
+`components/mana/ManaAssistant.tsx`, mounted in the consultation's side column (under the consultation draft card) and as the companion card of the patient's record. It replaces the slice-1 "Mana questions" card on the screen. The header reads **MANA AI — Doctor's Clinical Assistant** (the same violet as every AI surface) with one button, **Open**. **It is closed until the doctor opens it and nothing is asked of the server before**: opening it opens (or continues) the doctor's conversation for this consultation or patient, and closing it discards what the browser loaded.
+
+| State | When | What the panel shows |
+| --- | --- | --- |
+| **Closed** | Default | The header and **Open** |
+| **Open** | The doctor opened it | A line saying whom it is about (for a consultation: name, MRN, age and sex), suggested questions as buttons (*Brief me on this patient*, *Allergies on record*, *Last prescription and medicines*, *Vital signs compared with earlier*, *What changed since the last visit*, *Visits of this patient*, *My queue today*, *My appointments today*, *My consultations today*), the input (**"Ask Mana about this patient, today's queue, or hospital records..."**), **Send**, **New conversation**, and the footer "Mana AI is a doctor-facing AI assistant; its outputs require clinician review. It only reads records you can already see, and cannot prescribe, sign or change anything." |
+| **Generating** | A question is being answered | The phase in words (*Waiting for the local model*, *Working out what to look up*, *Reading the records you may see*, *Writing the answer*, *Checking the answer against the records*) and **Stop** in place of Send |
+| **Answer** | Finished | **About <name> · MRN · age and sex** (written by the server from the records that were read); the statements, with the patients' names put back for their handles; under each statement its **source chips** in words ("Allergy · 1 Sep 2026"), a mark when it rests on records that disagree, only on old records, goes a little beyond its sources, or also rests on another record; then the findings found by rule (*Records disagree*, *Possibly outdated*, *Not in the records*, *Unusual text, not used*), how many statements were removed, **Records read for this answer**, and **How this was made** |
+| **Source opened** | A chip was pressed | The record: its kind, its date, its state, the words of the record, and a link to the consultation or the patient record |
+| **Choice of patient** | A name fits several patients | "I found multiple matching patients. Please select one." and up to five buttons (name, MRN, age and sex, last visit); nothing clinical is shown until one is chosen |
+| **Refusal** | A request to change something, a general medical question, or more than a doctor's work needs | The fixed words, nothing else |
+| **Could not verify** | Every statement the model wrote was removed, or one of them was a link, a claimed action or an unknown handle | "Mana could not safely verify that response.", what the rules found, and the records that were read; none of the model's words |
+| **Error** | The model failed, timed out or answered in the wrong form, a patient's consent changed meanwhile, or the doctor's access changed | The reason in words and, when trying again can help, **Ask again** |
+| **Unavailable** | The local model is not running | **"Mana is currently unavailable."**, why, **Check again**; the input and Send are disabled; the panel looks again every few seconds and comes back by itself; nothing is stored or made up |
+
+**How it is built for the doctor.** The panel polls while an answer is being made. One status region tells assistive technology what arrived (*Mana answered.*, *Mana did not do that.*, *Mana could not safely verify that response.*, *Mana needs you to choose or to say more.*), not the whole answer: each answer that arrives, once, also when two in a row are worded the same (the line is replaced), and not the answers that were already there when the panel was opened; the messages inside the log carry no live-region role of their own, so nothing is said twice. The conversation is a labelled scrollable group; after Send, Stop, a suggestion, a choice or *Ask again* focus is in the question box (the button that was pressed has left the screen or been replaced). A choice between patients can be made only while it is the last thing said; after the next answer its buttons are disabled. Enter sends, Shift+Enter writes a new line, Stop ends a question. Every control is a real button or native control, sources are native `details`, nothing is conveyed by colour alone, and at 1440, 1280, 1024, 412 and 390 px the panel stays inside its column and the page does not scroll sideways (checked by the end-to-end tests with axe in each state, and by looking at the screenshots: see [STATUS.md](STATUS.md)).
+
+**Not built:** streaming text, a way to put an answer into the note (a doctor copies what they choose), a separate Mana page, voice.
+
 ## 5. Rules the screens follow
 
 - **No fake controls.** A control appears only if the product can do it.

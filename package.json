@@ -23,6 +23,7 @@
     "llm:status": "node scripts/llm.mjs status",
     "llm:verify": "node scripts/llm.mjs verify",
     "eval:consult": "npm run eval:consult --workspace @adaxai/api --",
+    "eval:mana": "npm run eval:mana --workspace @adaxai/api --",
     "speech:setup": "node scripts/speech.mjs venv",
     "speech:model": "node scripts/speech.mjs model",
     "db:init": "node scripts/db.mjs init",

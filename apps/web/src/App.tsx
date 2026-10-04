@@ -40,7 +40,7 @@ import { AuscultationCard } from './components/clinical/AuscultationCard.tsx'
 import { PortalConsentsPage, PortalHomePage, PortalProfilePage, PortalRecordPage, PortalRecordsPage, PortalVisitsPage, PortalVitalsPage } from './pages/patient/PortalPages.tsx'
 import { ClinicalImagesCard } from './components/clinical/ClinicalImagesCard.tsx'
 import { ConsultationIntelligence } from './components/ai/ConsultationIntelligence.tsx'
-import { ManaPanel } from './components/mana/ManaPanel.tsx'
+import { ManaAssistant } from './components/mana/ManaAssistant.tsx'
 
 const portal = (role: Role) => (
   <RequireAuth roles={[role]}>
@@ -57,7 +57,7 @@ const profileExtra = (p: PatientDetail) => (
 )
 const profile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={profileExtra} />
 /** Doctors also get Mana AI on the patient record. */
-const doctorProfile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={profileExtra} companion={(p) => <ManaPanel patientId={p.id} />} />
+const doctorProfile = <PatientProfilePage visitAction={(v) => <ConsultationLink visit={v} />} timeline={(id) => <Timeline patientId={id} />} extra={profileExtra} companion={(p) => <ManaAssistant patientId={p.id} />} />
 
 const router = createBrowserRouter([
   {
@@ -120,7 +120,7 @@ const router = createBrowserRouter([
             sidePanel={(e, inserter) => (
               <>
                 <ConsultationIntelligence encounterId={e.id} inserter={inserter} />
-                <ManaPanel patientId={e.patient.id} encounterId={e.id} inserter={inserter} />
+                <ManaAssistant patientId={e.patient.id} encounterId={e.id} />
                 <AiAssistantPanel encounter={e} inserter={inserter} />
               </>
             )}

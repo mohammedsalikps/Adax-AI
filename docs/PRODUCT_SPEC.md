@@ -10,13 +10,15 @@ ADAXAI is a connected outpatient platform. It links four applications through on
 - the doctor app;
 - the admin console.
 
-The doctor works with **Mana AI**, a companion for the patient's record and the consultation. Mana's design rules:
+The doctor works with **Mana AI**, the doctor's clinical assistant over the clinic's own records: a doctor-facing AI assistant whose outputs require clinician review ([ADR 0017](adr/0017-mana-ai-doctor-assistant.md)). Mana's design rules:
 
-1. **Record first.** Every Mana answer starts from what the patient's record documents. Explicit, versioned rules read it (`mana-record-v1`), and each statement cites the exact record item it comes from: record type, consultation, date, field and status.
-2. **Generated text is labelled and checked.** When an AI provider is configured *and* the patient has consented, Mana adds an AI-generated summary. It is always shown apart from the record answer, and labelled with provider, model and prompt version (`mana-qa-v1`). Its citations are verified on the server; anything it cannot tie to a record item is flagged "Not supported by the record".
-3. **Absence, conflict and age are stated.** Missing information is stated, never guessed. Conflicting records are flagged; so are records that are possibly outdated or amended.
-4. **Nothing reaches the note without the doctor.** AI text enters a note only by an explicit doctor action. The server records that action with a reference to the AI artifact, and the signed record keeps the reference. For reviewed suggestions only the reviewed text can be inserted. Mana text the doctor edits is labelled as such.
-5. **Unavailable, never fake.** Without a provider, Mana says so and still answers from the record.
+1. **Read-only.** Mana cannot prescribe, sign, change, add, delete, book or cancel anything. No tool writes; a request to is refused in fixed words and nothing is read. Nothing reaches a note or a prescription from Mana.
+2. **Authorised before retrieved.** Every question is planned as calls to registered tools; each tool checks the doctor's permissions first and reads only the doctor's own clinic. The language model never queries the database and never sees a patient's name, MRN or telephone number from a record (it works with handles such as P1).
+3. **Record first, tied to sources.** Every statement shown rests on records the tools returned and the doctor can open: record type, date, status and the record's own words, with a link. A statement the checks cannot tie to its sources is not shown.
+4. **Absence, conflict and age are stated by rules, not by the model.** What is not recorded, records that disagree and records that are possibly outdated come from the fixed rules (`mana-record-v1`) and are shown whatever the model wrote. A name that fits several patients is asked about, never guessed.
+5. **A local model writes, code checks.** Plans and answers are written by the language model on this computer; explicit rules remove what they cannot verify and empty an answer that was steered (a link, a claimed action, an identifier nobody gave).
+6. **Unavailable, never fake.** With the model not running Mana says **"Mana is currently unavailable."** and nothing else; nothing falls back to a hosted model.
+7. **No clinical claim.** Mana gives no advice and no general medical knowledge (no governed source exists), and nothing about it is clinically validated.
 
 ## 2. Users and applications
 
@@ -83,6 +85,21 @@ A doctor can ask for an **AI-generated consultation draft** while the consultati
 - **Audit.** Every draft stores the prompt, schema and rules versions, the model, runtime, weights SHA-256 and whether it ran locally, a hash and manifest of what it was made from, the validation counts, who asked and when; each decision records who and when; the finished draft reaching the doctor's screen is recorded once per doctor and draft (ids and counts, never the words).
 - **Not built here:** streaming text, automatic regeneration, other languages, a hosted run of this feature, any route from a draft to the diagnoses, the prescription or an order, patient-facing output, clinical validation, retention or erasure rules for drafts.
 
+### Mana AI, the doctor's assistant (slice V4)
+
+A doctor opens **MANA AI — Doctor's Clinical Assistant** in the consultation workspace or on a patient's record and asks in their own words ([ADR 0017](adr/0017-mana-ai-doctor-assistant.md)). Behaviour, as built:
+
+- **Who and where.** Doctors only (`ai:use`); a conversation belongs to the doctor who opened it and to their clinic. It is opened for a consultation, a patient's record or the clinic in general; "this patient" means the patient of the consultation or record. The panel is **closed until opened** and asks the server nothing before that.
+- **Per question.** (1) The local model **plans** what to look up: it sees the doctor's words, the date, patient handles and the last three questions, never a record. (2) The server **validates the plan** and runs **registered read-only tools** (the patient's record by topic, visits, a signed consultation, finding a patient, today's queue, recent check-ins, appointments, the doctor's own consultations, the clinic) after checking the doctor's permissions, scoped to the clinic, and (for a patient) the patient's consent to AI help. (3) The model **writes the answer** from the facts the tools returned. (4) **Code checks** every statement against the facts it cites and removes what it cannot tie to them. (5) The server shows the findings of the fixed rules whatever the model wrote.
+- **What a doctor can ask.** About the patient of the open consultation or a named patient: briefing, history, allergies, medicines and the last prescription, vital signs compared with earlier readings, diagnoses, investigations, what changed, a word search, visits, a signed consultation. About the clinic: today's queue (waiting, in triage, ready, with a doctor, done), who checked in in a window, appointments (today, the next hour, tomorrow, a date), the doctor's own consultations, the clinic and its departments. Follow-ups ("and her medicines?") and switching patients work; each handle means one patient in one conversation.
+- **Names.** A name that fits several patients is never guessed: up to five candidates are shown with name, MRN, age and sex and the last visit, and the doctor chooses. If the doctor's words name a patient (every word of the name, as written: Rahul Sharma is not Rahul Verma) and the plan is about another, nothing is read and the doctor is asked which they mean. Patients of other clinics are "not found", and the attempt is audited.
+- **Sources and uncertainty.** Statements carry source chips in words that open to the record, its status and its words, with a link to the consultation or patient. Findings are labelled *Records disagree*, *Possibly outdated*, *Not in the records* or *Unusual text, not used*; a statement resting on disagreeing or only old records is marked; a statement whose wording goes beyond its sources is marked; statements that could not be verified are counted and not shown. "That information is not established in the available records." when nothing answers the question; **"Mana could not safely verify that response."** when what the model wrote could not be kept.
+- **Refusals, in fixed words.** A request to write (read-only); a general medical question (no governed source); a request for more than a doctor's work needs (every patient, other clinics, the audit log, passwords).
+- **Time and state.** 78 seconds at the median on this CPU, up to about three minutes in the evaluation (suggested-question buttons skip the planning call). The panel shows the phase in words, **Stop** ends a question, one answer is made at a time per conversation, **New conversation** starts clean, a failed answer says why and can be asked again, and the same idempotency key never makes two answers.
+- **No model, no answer.** **"Mana is currently unavailable."**; the question is not stored; the panel looks for the model again by itself.
+- **Audit and storage.** Conversations, messages, tool calls and the records an answer rests on are stored append-only; the audit log holds ids, tool names, outcomes and counts, never a question, an answer or a record; the model, prompts, tools and checks versions are stored with each answer. **No retention period is set for conversations** (decision needed).
+- **Not built here:** any tool that writes, chaining, clinical search across all patients, streaming text, general medical knowledge, insertion into the note, other languages, a hosted run, a retention schedule, clinical validation.
+
 ## 4. State machines
 
 **Appointment** (implemented, [ADR 0010](adr/0010-appointments-visit-linkage-and-notification-outbox.md)): `booked → checked_in → completed`.
@@ -130,7 +147,13 @@ A doctor can ask for an **AI-generated consultation draft** while the consultati
 - `superseded` applies when a newer run replaces the item.
 - Flagged items need explicit confirmation before they can be accepted.
 
-**Mana answer:**
+**Mana question and answer (slice V4):**
+- A question stores two rows: what the doctor asked (always `ready`) and the answer, which starts `pending` with a phase (`queued` → `planning` → `retrieving` → `writing` → `verifying`).
+- The answer ends exactly once, as `ready` (answered, not established, a choice of patient, or a question back), `refused` (read-only, no knowledge source, beyond a doctor's work, or consent), `unverified` (nothing the model wrote could be kept), `failed` (retryable or not), `unavailable` (the model is not there) or `cancelled` (the doctor stopped it, or consent changed while it was made).
+- One answer can be `pending` per conversation. Answers `pending` when the server stopped become `failed` (`interrupted`).
+- A finished answer, its sources and its tool calls cannot be changed or deleted (database triggers).
+
+**Mana answer (slice 1, API only since V4):**
 - The record answer is written once and never changes.
 - The AI part moves from `pending` to `succeeded` or `failed`. Only `failed` can be retried.
 - `unavailable`, `consent_required` and `not_requested` are final.
@@ -156,7 +179,9 @@ A doctor can ask for an **AI-generated consultation draft** while the consultati
 - Every change is an appended `alert_event`.
 - Rules are versioned. Thresholds are **synthetic demo values only**, until a qualified clinical owner supplies approved values.
 
-## 5. Mana AI (implemented in this session)
+## 5. Mana AI: the record layer (slice 1) and the screen (V4)
+
+The retrieval layer, the record answers and the rules below were built in slice 1 and are **reused by the V4 assistant's tools** (the assistant calls the same loader and the same rules, and shows their findings). The slice-1 questions API and its stored answers remain; **its screen was replaced** by the assistant's panel in V4.
 
 ### Retrieval layer
 
@@ -205,17 +230,13 @@ The rules flag:
 - **Review:** the reviewed flag and note insertions are appended to `ai_review_actions` and `note_insertions`.
 - **Audit:** `mana.ask`, `mana.read`, `mana.review`, `ai.job_create`, `ai.patient_qa`, `encounter.ai_insert`.
 
-### User interface
+### User interface (V4)
 
-- **Placement:** a Mana panel on the doctor's patient record, and in the right-hand panel of the consultation workspace.
-- **Asking:** suggested questions, or free text.
-- **Answers:**
-  - statements grouped by section;
-  - kind badges: not in record, conflict, possibly outdated;
-  - expandable sources with field, date, status and provenance, plus a link to the consultation;
-  - a separately labelled AI summary.
-- **Actions:** Mark reviewed; Insert into note, which records the AI provenance; Retry for a failed summary.
-- **Visibility of insertions:** shown under the note section, in the sign dialog, and on the signed record.
+- **Placement:** the right-hand column of the consultation workspace (from 1400 px; stacked below the left column at 1280 px; stacked below that on narrow screens) and on the doctor's patient record. Header **MANA AI — Doctor's Clinical Assistant**; closed until opened.
+- **Open:** whom it is about (name, MRN, age and sex) or that it is about the clinic; the conversation; suggested-question buttons (brief me on this patient, allergies, last prescription and medicines, vital signs compared, what changed, visits, my queue, my appointments, my consultations today); the input ("Ask Mana about this patient, today's queue, or hospital records..."); **Send** / **Stop**; **New conversation**; and a footer saying it is a doctor-facing AI assistant whose outputs require clinician review and that it cannot prescribe, sign or change anything.
+- **An answer:** statements (patients shown by name), source chips that open to the record, findings with labels, how many statements were removed, "Records read for this answer" (including what was read and not used) and "How this was made" (model, whether it runs on this computer, prompt and tool versions, what was looked up).
+- **States:** closed, open, working (the phase in words and **Stop**), answer, source opened, a choice of patient, a question back, refusal, failed (with **Ask again**), "could not safely verify", and **"Mana is currently unavailable."** (disabled input, looks again every few seconds).
+- **Not there:** insertion into the note, marking an answer reviewed (the slice-1 actions remain in the API only).
 
 ## 6. Acceptance criteria and their tests
 
@@ -230,7 +251,7 @@ The rules flag:
 | AI summary is consent-gated, pseudonymised, citation-verified and provenance-recorded | `mana.test.ts` › "needs the patient's consent, sends only this patient's pseudonymised items…" |
 | Failure keeps the record answer; retry works | `mana.test.ts` › "a failed summary keeps the record answer…" |
 | AI text enters the note only by recorded insertion of reviewed output; duplicates, stale versions and other doctors are refused; signed snapshot keeps references; append-only | `mana.test.ts` › "only by explicit insertion of reviewed output…" |
-| Browser: briefing with sources, labelled AI summary, follow-up question, insertion with provenance through signing, answers on the profile, axe and mobile layout | `e2e/mana.spec.ts` (desktop and mobile) |
+| Browser (slice 1; **replaced in V4**: the panel it tested no longer exists, see the V4 rows below) | the slice-1 `e2e/mana.spec.ts` is gone; `e2e/mana.spec.ts` now tests the V4 assistant |
 | Unsigned drafts from any day listed for their author only, in their facility; list reads audited with patient ids | `lifecycle.test.ts` › "lists only the doctor’s own drafts…", "is for doctors only…" |
 | Concurrent starts create one consultation; a paused draft is not editable or signable until its author continues it | `lifecycle.test.ts` › "concurrent starts…", "a draft whose visit is back in the queue is paused…" |
 | The database allows exactly the contract's visit transitions; open consultations block cancel and no-show; refused manual status changes audited | `lifecycle.test.ts` › "the database allows exactly the transitions…", "cannot cancel or mark as no-show…" |
@@ -269,6 +290,19 @@ The rules flag:
 | V3 Local by default; hosted only with egress and a key and only when set; none; a down local model is never replaced by a hosted one; no hosted request is made | `egress.test.ts` › "consultation drafts (V3)…" |
 | V3 The evaluation harness and its case file | `consult-eval.test.ts` |
 | V3 Browser: consent, generating, cancel, ready, review, add to note, stale, unavailable, failed, five widths and axe, against a labelled stand-in server | `e2e/consult.spec.ts` (desktop) |
+
+| **V4** A doctor opens Mana in the consultation, asks about the patient of the open consultation, and gets statements with sources that open to the record, under an "About <name> · MRN" line written by the server; the model is given the patient as a handle, not a name, an MRN or a telephone number | `mana-assistant.test.ts` › "answers about the patient of the open consultation from the record…", "tells the planner the situation in handles…"; `e2e/mana.spec.ts` › "Mana is closed until the doctor opens it…" |
+| V4 Questions about the clinic's day are answered from the queue and the schedule; follow-ups keep the patient; switching patients leaves the first behind | `mana-assistant.test.ts` › "answers a question about the clinic’s day…", "answers about appointments…", "follows a follow-up…" |
+| V4 A name that fits several patients is asked about, then the chosen one is used without asking the model again; a question that names another patient than the plan is about reads nothing | `mana-assistant.test.ts` › "does not guess between patients who share a name…", "stops a question that names another patient…"; `e2e/mana.spec.ts` › "questions about the clinic’s day…" |
+| V4 Missing is not a fact; conflicts, old records and instruction-like record text are shown by rule, whatever the model wrote | `mana-assistant.test.ts` › "does not say "no allergies" when nothing is recorded…", "shows records that disagree and records that are old…", "keeps an instruction written into a signed note away from the model…" |
+| V4 Doctors only; a conversation belongs to its doctor; another clinic's consultation, patient, MRN and data are unreachable and the attempt is audited; a handle means one patient in one conversation; at most two patients per question | `mana-assistant.test.ts` › "who may ask, and about whom" (6 tests); `mana-tools.test.ts` (19: permissions before retrieval, clinic scope, consent, ambiguity, malformed calls) |
+| V4 Read-only: a request to write is refused in fixed words, nothing is read and nothing changes, even when the planner and the writer go along; no general medical advice; nothing beyond a doctor's work | `mana-assistant.test.ts` › "what Mana will not do" (9 tests); `e2e/mana.spec.ts` › "Mana does not write…" |
+| V4 Steered answers are not shown: a link, a claimed action, a handle or identifier nobody gave empty the answer; unsupported statements are removed and counted; source ids cannot be forged | `mana-assistant.test.ts` › "text in a record or in a question that tries to give orders" (5 tests); `mana-answer.test.ts` (34: every check as a rule) |
+| V4 "Mana is currently unavailable." and nothing stored when the model is not there (also with none configured or hosted refused); a model that goes away, or is too slow, mid-answer; stop; one answer at a time; one question per idempotency key; restarts | `mana-assistant.test.ts` › "when the model is not there" (6 tests), "restarts"; `e2e/mana.spec.ts` › "when the model is not there…" |
+| V4 What is kept: conversation, tool calls, sources, model, prompts; finished rows immutable; audit holds ids and counts only; the server log holds no question, answer or record text; no key, address or secret reaches the browser | `mana-assistant.test.ts` › "what is kept, and what is not shown anywhere else" (4 tests) |
+| V4 The plan and its checks as rules | `mana-answer.test.ts` › "the plan the model wrote is made safe to run" |
+| V4 The evaluation (through the real local model, opt-in) and its scoring | `mana-eval.real.test.ts` (opt-in, `MANA_EVAL=1`), `apps/api/src/eval/mana.ts`; results in `data/eval/results/mana-v1.md` |
+| V4 Browser: closed, open, generating, answer, a source opened, a choice of patient, refusal, error, unavailable, "could not verify", five widths and axe, against a labelled stand-in server; and (opt-in) against the real local model | `e2e/mana.spec.ts` (desktop), `e2e/mana-real.spec.ts` (opt-in) |
 
 Acceptance criteria for the planned slices are written in [AUDIT.md](AUDIT.md) §7 and will move here as each slice lands.
 

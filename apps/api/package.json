@@ -15,6 +15,7 @@
     "user:reset-password": "tsx src/reset-password-cli.ts",
     "audit:verify": "tsx src/audit/verify-cli.ts",
     "eval:consult": "tsx src/eval/consult-cli.ts",
+    "eval:mana": "tsx src/eval/mana-cli.ts",
     "generate": "drizzle-kit generate",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"

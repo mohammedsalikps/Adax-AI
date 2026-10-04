@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { neutralise } from '../ai/llm/neutralise.ts'
 import { CONSULT_DRAFT_PROMPT } from '../ai/prompts.ts'
 import type { SourceItem } from './inputs.ts'
 
@@ -51,25 +52,9 @@ export type ConsultOutput = z.infer<typeof ConsultOutput>
 export type FactStatement = z.infer<typeof FactStatement>
 export type SuggestionStatement = z.infer<typeof SuggestionStatement>
 
-/** Characters that could let a source line pass for another source or for an instruction, or that carry no meaning for a model. */
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/g
-
 /** One source as the model sees it: one line, brackets turned into parentheses so a source cannot forge another source's id. */
 export function sourceLine(i: Pick<SourceItem, 'ref' | 'date' | 'field' | 'status' | 'provenance' | 'text'>): string {
-  // The model's chat template marks its turns with strings such as <|im_start|>, and the runtime reads them as markers even inside a message (probed
-  // against the real server: the token count of a message that carries them is that of markers, not of text). Text that carries one could close the
-  // record's turn and open another. They are written apart, so that they are only text.
-  const clean = (s: string) =>
-    s
-      .replace(CONTROL, ' ')
-      .replace(/[\r\n]+/g, ' ')
-      .replace(/<\|/g, '< |')
-      .replace(/\|>/g, '| >')
-      .replace(/<(\/?(?:think|tool_call|tools|tool_response|function)\b)/gi, '< $1')
-      .replace(/[[\]]/g, (c) => (c === '[' ? '(' : ')'))
-      .replace(/\s+/g, ' ')
-      .trim()
+  const clean = neutralise
   return `[${i.ref}] ${i.date ? i.date.slice(0, 10) : 'undated'} | ${clean(i.field)} | ${clean(i.status)} | ${clean(i.provenance)}: ${clean(i.text)}`
 }
 

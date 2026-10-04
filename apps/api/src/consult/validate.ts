@@ -47,7 +47,7 @@ const TAGS = /<\/?[a-z][^>]*>/gi
 const MAX_STATEMENT = 360
 const MAX_RATIONALE = 240
 const MAX_UNCERTAINTY = 200
-const URLS = /\b(?:https?:\/\/|www\.)\S+/i
+export const URLS = /\b(?:https?:\/\/|www\.)\S+/i
 const REF_MARKS = /[[(]\s*[A-Z]{1,2}\d{1,3}(?:\s*[,;/]\s*[A-Z]{1,2}\d{1,3})*\s*[\])]/g
 
 /**
@@ -144,13 +144,13 @@ export function figuresIn(text: string, patientLine: string, knownRefs?: Readonl
 }
 
 /** "No allergies" in any of its short forms. */
-const NO_ALLERGIES = /\b(?:(?:no|none|nil|denies|denied)\s+(?:known\s+)?(?:history\s+of\s+)?(?:drug\s+|food\s+|medicine\s+)?(?:or\s+(?:drug|food|medicine)\s+)?allerg(?:y|ies)|nkda|nka|allerg(?:y|ies)\s*(?:status)?\s*[:-]?\s*(?:nil|none|negative))\b/i
+export const NO_ALLERGIES = /\b(?:(?:no|none|nil|denies|denied)\s+(?:known\s+)?(?:history\s+of\s+)?(?:drug\s+|food\s+|medicine\s+)?(?:or\s+(?:drug|food|medicine)\s+)?allerg(?:y|ies)|nkda|nka|allerg(?:y|ies)\s*(?:status)?\s*[:-]?\s*(?:nil|none|negative))\b/i
 /** "Not allergic to X": a claim about one substance. */
-const NOT_ALLERGIC_TO = /\b(?:not|never)\s+allergic\s+to\s+([a-z-]{4,})/i
+export const NOT_ALLERGIC_TO = /\b(?:not|never)\s+allergic\s+to\s+([a-z-]{4,})/i
 
 /** Doses, strengths and regimens: never in a suggestion unless the cited record has the same words. */
-const DOSE = /\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|ug|g|kg|ml|mL|l|iu|units?|tablets?|tabs?|caps?|capsules?|drops?|puffs?|sachets?|%|mmol|meq|grams?|milligrams?|micrograms?|millilit(?:re|er)s?|lit(?:re|er)s?|teaspoons?|tablespoons?|ampoules?|patch(?:es)?|sprays?|lozenges?)\b/i
-const REGIMEN = /\b(?:once|twice|thrice)\s+(?:a\s+|per\s+)?(?:daily|day|week)\b|\b(?:od|bd|bid|tds|tid|qid|qds|prn|stat|nocte|mane)\b|\bevery\s+\d+\s*(?:hours?|hrs?|days?|weeks?)\b|\b\d+\s*times?\s+(?:a|per)\s+day\b|\bfor\s+\d+\s*(?:days?|weeks?|months?)\b/i
+export const DOSE = /\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|ug|g|kg|ml|mL|l|iu|units?|tablets?|tabs?|caps?|capsules?|drops?|puffs?|sachets?|%|mmol|meq|grams?|milligrams?|micrograms?|millilit(?:re|er)s?|lit(?:re|er)s?|teaspoons?|tablespoons?|ampoules?|patch(?:es)?|sprays?|lozenges?)\b/i
+export const REGIMEN = /\b(?:once|twice|thrice)\s+(?:a\s+|per\s+)?(?:daily|day|week)\b|\b(?:od|bd|bid|tds|tid|qid|qds|prn|stat|nocte|mane)\b|\bevery\s+\d+\s*(?:hours?|hrs?|days?|weeks?)\b|\b\d+\s*times?\s+(?:a|per)\s+day\b|\bfor\s+\d+\s*(?:days?|weeks?|months?)\b/i
 /** What only a suggestion is held to: any way of saying how much, how often or for how long, in words as well as figures. */
 const SUGGESTED_REGIMEN = /\b(?:daily|nightly|weekly|hourly|at\s+(?:bed\s?time|night)|every\s+(?:\w+\s+){0,2}(?:day|night|morning|evening|week|hour)s?|(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+times|for\s+(?:a|an|one|two|three|four|five|six|seven|\d+)\s+(?:day|week|month)s?|(?:morning|evening)\s+and\s+(?:morning|evening|night))\b/i
 export const hasDoseOrRegimen = (t: string, strict = false): boolean => DOSE.test(t) || REGIMEN.test(t) || (strict && SUGGESTED_REGIMEN.test(t))
@@ -179,7 +179,7 @@ const POSTPOSED_CUE = new Set(['nil', 'none', 'negative', 'absent'])
 const STOP = new Set('the and for with that this from have has had was were are been being his her their its into onto over than then also but not any all one two per for due'.split(' '))
 
 /** "isn't" and "doesn't" are "is not" and "does not", whatever kind of apostrophe was typed. */
-const spellNegations = (text: string): string => text.toLowerCase().replace(/[’‘`]/g, "'").replace(/\b(\w+?)n't\b/g, '$1 not').replace(/\bcannot\b/g, 'can not')
+export const spellNegations = (text: string): string => text.toLowerCase().replace(/[’‘`]/g, "'").replace(/\b(\w+?)n't\b/g, '$1 not').replace(/\bcannot\b/g, 'can not')
 
 /** Words of a text that sit inside the reach of a "no", "not", "denies" or "without": the things the text says are NOT so. */
 export function negatedTerms(text: string): Set<string> {
@@ -209,13 +209,13 @@ export function negatedTerms(text: string): Set<string> {
   return out
 }
 
-const contentWords = (t: string): string[] => (t.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !STOP.has(w))
+export const contentWords = (t: string): string[] => (t.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !STOP.has(w))
 
 /**
  * Words that make no claim of their own, so they are not looked for in the items a statement cites: the patient and the record themselves, the
  * ways a statement says where it comes from, number words and units of time (the figure checks see the numbers), and plain function words.
  */
-const GLUE = new Set(
+export const GLUE = new Set(
   ('patient patients presents presenting presented history record recorded records documented noted reported reports states stated shows showing today visit current currently consultation doctor ' +
     'draft drafted listed including includes included according taking taken takes prescribed prescription measured staff during while about after before when where which what there these ' +
     'those them they will would could should might must does done same still again further details detail information ' +
@@ -230,7 +230,7 @@ const stemOf = (w: string): string => {
   return w
 }
 /** The same word, allowing for endings (cough, coughing, coughs; breathless, breathlessness). A long stem is also matched on its first six letters. */
-const sameWord = (a: string, b: string): boolean => {
+export const sameWord = (a: string, b: string): boolean => {
   if (a === b) return true
   const x = stemOf(a)
   const y = stemOf(b)
@@ -244,7 +244,7 @@ export function wordsNotIn(text: string, source: string): string[] {
 }
 
 /** True when `term` occurs in `text` with a negation cue within the three words before it. */
-function negatedIn(term: string, text: string): boolean {
+export function negatedIn(term: string, text: string): boolean {
   const words = spellNegations(text).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean)
   return words.some((w, i) => w === term && words.slice(Math.max(0, i - 3), i).some((p) => NEGATION_CUE.test(p)))
 }
@@ -279,7 +279,7 @@ const ABSENCE_CONCEPTS: [RegExp, RegExp][] = [
 ]
 
 /** An item that itself says the thing is not recorded cannot contradict a statement that it is not recorded. */
-const REPORTS_ABSENCE = /\b(?:not recorded|not documented|none recorded|no [a-z ]{1,30} recorded)\b/i
+export const REPORTS_ABSENCE = /\b(?:not recorded|not documented|none recorded|no [a-z ]{1,30} recorded)\b/i
 /** A sentence that says something is not on record (and not a negative finding such as "no cough") has absence wording and a word about the record. */
 const DOCUMENTATION_VERB = /\b(?:recorded|documented|stated|mentioned|available|specified|provided|noted)\b/i
 const sentencesOf = (text: string): string[] => text.split(/(?<=[.!?])\s+/).filter(Boolean)
@@ -289,7 +289,7 @@ const ABSENCE_FILLER = new Set('documented recorded record noted information mis
 /** Generic nouns of such a statement: what is left of it, once these go too, is what it names (the fever, the sore throat, the blood pressure). */
 const ABSENCE_GENERIC = new Set('duration onset started long main symptom symptoms problem complaint illness condition patient current reading readings value measurement result status level vital signs sign'.split(' '))
 
-const ASSERTIVE = /\b(?:diagnos(?:is|ed)\s+(?:is|with|of)|has\s+been\s+diagnosed|is\s+suffering\s+from|confirmed\s+(?:case|diagnosis)|definitely|certainly|without\s+(?:a\s+)?doubt|proves?|must\s+be|is\s+caused\s+by|clearly\s+has|has\s+(?:a\s+)?(?:pneumonia|infection|cancer|diabetes|asthma|tuberculosis|malaria|dengue|covid))\b/i
+export const ASSERTIVE = /\b(?:diagnos(?:is|ed)\s+(?:is|with|of)|has\s+been\s+diagnosed|is\s+suffering\s+from|confirmed\s+(?:case|diagnosis)|definitely|certainly|without\s+(?:a\s+)?doubt|proves?|must\s+be|is\s+caused\s+by|clearly\s+has|has\s+(?:a\s+)?(?:pneumonia|infection|cancer|diabetes|asthma|tuberculosis|malaria|dengue|covid))\b/i
 const CONFLICT_WORDS = /\b(?:conflict\w*|disagree\w*|contradict\w*|inconsisten\w*|discrepan\w*)\b/i
 
 // --- the validator -------------------------------------------------------------------------------------------------------------------------

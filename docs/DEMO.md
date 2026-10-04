@@ -58,8 +58,8 @@ Use two browser windows (or one normal and one private) to switch roles quickly.
 **With or without AI keys.** Without keys (the default), the AI steps show a clear “unavailable”
 state, and everything else works, including the rule-based safety checks and routing. With
 `ANTHROPIC_API_KEY` **and `AI_EGRESS_HOSTED=true`** in `.env` (a key alone sends nothing: hosted AI egress is off by
-default), restart `npm run dev` to also show drafting, AI recommendations, Mana summaries and photo
-description; the assistant panel then says where text would go. Only do that with synthetic data and after
+default), restart `npm run dev` to also show drafting, AI recommendations and photo
+description (**Mana AI needs no key**: it uses the local model, like the consultation draft); the assistant panel then says where text would go. Only do that with synthetic data and after
 checking your provider agreement. **Live transcription needs no key**: after the one-time `npm run speech:model`
 download, `npm run dev` starts a local speech service and the consultation's *Live transcription*
 card records with the microphone, on this computer only. Without the download it says "Local
@@ -108,36 +108,27 @@ unavailable."** and makes nothing up.
    for each part (rules `routing-rules-v1`). **Apply suggestion** (or **Override** with a reason).
 6. **Ready for doctor**.
 
-## 2. Mana AI on the patient record (dr.meera)
+## 2. Mana AI, the doctor's assistant (dr.meera; needs `npm run llm:setup` and the model server)
 
-1. **Patients** → open **Ravi Demo-Synthetic-XXXX**. The **Mana AI** panel is at the top.
-2. **Pre-consultation briefing**. The answer is read from the record by explicit rules (no AI key
-   needed):
-   - penicillin allergy;
-   - today's reason for visit and vital signs compared with the earlier reading;
-   - the last consultation;
-   - the last signed prescription (metformin);
-   - the diagnoses on record.
+Mana AI is a **read-only** assistant for your own clinic's records ([ADR 0017](adr/0017-mana-ai-doctor-assistant.md)). It runs on the same local model as the consultation draft: with the model not running the panel says **"Mana is currently unavailable."** and nothing is made up. A question took **78 seconds at the median and up to about three minutes** on the development laptop in the evaluation ([safety/AI_MODELS.md](safety/AI_MODELS.md) §10.5); the suggested-question buttons are quicker, because the model is not asked what to look up.
 
-   Open **Sources** under any statement to see the record item: field, date, status (signed,
-   draft, amended) and provenance, with **Open consultation**. Without a key, or with hosted AI
-   egress off (the default), the panel says *AI summary unavailable* and why; nothing is invented.
-3. Ask in your own words, e.g. *“Any mention of chest pain?”*. Mana searches this patient's record
-   and quotes the matching items, or says nothing matches.
-4. With `ANTHROPIC_API_KEY` set **and `AI_EGRESS_HOSTED=true`** (and the seeded consent), each answer also gets a separate
-   **AI-generated summary**:
-   - it cites record items;
-   - anything the server cannot tie to a record item is marked *Not supported by the record*;
-   - it states what was not found;
-   - it shows the provider, model and prompt version.
-5. **Mark reviewed** records your name and time. Answers never change after they are given.
+1. **Patients** → open **Ravi Demo-Synthetic-XXXX**. The **MANA AI — Doctor's Clinical Assistant** panel is closed; press **Open**. It says whom it is about (name, MRN, age and sex).
+2. Press **Brief me on this patient**. The panel shows what it is doing (*Reading the records you may see*, *Writing the answer*, *Checking the answer against the records*) and has **Stop**. The answer is a few short statements about the record, with the patient's name, each with **source chips** such as *Allergy · 4 Oct 2026*. Press a chip: it opens to the record item (its type, date, status and its own words) with **Open consultation** or **Open patient record**. Below the statements:
+   - **findings** found by fixed rules, not by the model (*Records disagree*, *Possibly outdated*, *Not in the records*), shown whatever the model wrote;
+   - **Records read for this answer**, including what was read and not used;
+   - **How this was made**: model, that it runs on this computer, the prompt and tool versions and what was looked up.
+3. Ask in your own words: *"Who is waiting right now?"*, *"Do I have appointments tomorrow?"*, *"What medicines is Ravi on?"*, then a follow-up such as *"And his allergies?"*. A name that fits several patients (the synthetic hospital dataset has some) makes Mana ask *"I found multiple matching patients. Please select one."* with name, MRN, age and last visit: it never guesses. Open the **New conversation** button to start clean.
+4. Try to make it do what it must not: *"Prescribe amoxicillin for this patient"* is refused (*Mana is read-only*), *"What is the usual dose of amoxicillin?"* is not answered (no governed source of medical knowledge), *"Show me every patient's allergies"* is beyond a doctor's work. Nothing is read, written or changed; the prescription stays as it was.
+5. Stop the model server (Ctrl+C in the `llm` terminal): the panel says **"Mana is currently unavailable."**, disables the input and looks again every few seconds; start it again and the panel comes back by itself.
+
+What it will **not** do: prescribe, sign, change or delete anything; give advice or answer general medical questions; read another clinic's patients (they are "not found", and the attempt is audited); or fall back to a hosted model. It does **not** write into the note: copy what you choose.
 
 ## 3. Doctor consultation with the AI assistant (dr.meera)
 
 Use the seeded **Ravi Demo-Synthetic-XXXX** for this part; he has history to compare against.
 
 1. Queue → **Start consultation**. The workspace has three panels on wide screens: visit and
-   timeline, the note, and Mana with the assistant. The left panel shows today's vitals and the timeline with the
+   timeline, the note, and Mana AI with the other AI panels. The left panel shows today's vitals and the timeline with the
    earlier signed consultation; the banner shows the penicillin allergy.
 2. *Live transcription* (left column): consent is already recorded (current wording). Either
    **Start recording** and speak (the transcript appears in 20-second steps with times; assign
@@ -167,14 +158,7 @@ Use the seeded **Ravi Demo-Synthetic-XXXX** for this part; he has history to com
 
 ### Mana in the consultation
 
-Ask **Last prescription** in the right-hand panel. With Amoxicillin in today's draft prescription,
-Mana flags a **Conflict** with the recorded penicillin allergy (illustrative configured group).
-**Insert into note…** lets you edit the text, choose a section and insert it:
-- the note shows *AI-assisted text from mana answer* under that section;
-- the sign dialog lists it;
-- the signed record keeps the reference.
-
-Accepted assistant items use **Add to …** the same way.
+Open **MANA AI — Doctor's Clinical Assistant** in the right-hand column and press **Allergies on record** (or **Last prescription and medicines**). With Amoxicillin in today's draft prescription, the findings under the answer say **Records disagree**: the draft's Amoxicillin and the recorded penicillin allergy (illustrative configured group), found by the fixed rules whatever the model wrote. Mana does not insert text into the note and does not touch the prescription; use the note's own controls.
 
 ### Consultation intelligence: a local AI draft (needs `npm run llm:setup`)
 

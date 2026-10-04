@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, type Page, request as pwRequest } from '@playwright/test'
@@ -67,15 +68,51 @@ export async function signOut(page: Page) {
   await expect(page).toHaveURL(/\/login$/)
 }
 
+/**
+ * The stand-in for the local model (e2e/mock-llm.mjs) is one process with one mode and one call log. Spec files that flip its mode or read its calls take
+ * turns: each holds a lock (a directory, made atomically) from its first test to its last, so that workers running other files at the same time never see
+ * its mode. A lock left by a worker that died is taken over after twenty minutes.
+ */
+export function llmExclusive(test: { beforeAll: (fn: () => Promise<void>) => void; afterAll: (fn: () => Promise<void>) => void; setTimeout: (ms: number) => void }) {
+  const dir = path.join(os.tmpdir(), 'adaxai-e2e-llm.lock')
+  const me = `${process.pid}-${Date.now()}`
+  test.beforeAll(async () => {
+    test.setTimeout(1_500_000)
+    for (;;) {
+      try {
+        fs.mkdirSync(dir)
+        fs.writeFileSync(path.join(dir, 'owner'), me)
+        return
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+        try {
+          if (Date.now() - fs.statSync(dir).mtimeMs > 20 * 60_000) fs.rmSync(dir, { recursive: true, force: true })
+        } catch {
+          // The holder released it just now.
+        }
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+  })
+  test.afterAll(async () => {
+    try {
+      if (fs.readFileSync(path.join(dir, 'owner'), 'utf8') === me) fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // Already gone.
+    }
+  })
+}
+
 /** A unique suffix so tests can run repeatedly against the same dev database. */
 export const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
 
 /** Nurse side via the API (its UI is covered by nurse-workflow.spec): register, check in, vitals, ready. */
-export async function nurseHandsOverPatient(baseURL: string, opts: { allergies?: string[]; consents?: string[] } = {}) {
+export async function nurseHandsOverPatient(baseURL: string, opts: { allergies?: string[]; consents?: string[]; name?: { given: string; family: string } } = {}) {
   const api = await pwRequest.newContext({ baseURL, extraHTTPHeaders: { 'x-adaxai-csrf': '1' } })
   expect((await api.post('/api/auth/login', { data: { username: 'nurse.anil', password: DEMO_PASSWORD } })).ok()).toBe(true)
-  const given = `Meena${uniq()}`
-  const patient = await (await api.post('/api/patients', { data: { givenName: given, familyName: 'Synthetic', dateOfBirth: '1984-02-11', sex: 'female', phone: `7${String(Date.now()).slice(-9)}` } })).json()
+  const given = opts.name?.given ?? `Meena${uniq()}`
+  const family = opts.name?.family ?? 'Synthetic'
+  const patient = await (await api.post('/api/patients', { data: { givenName: given, familyName: family, dateOfBirth: '1984-02-11', sex: 'female', phone: `7${String(Date.now()).slice(-9)}` } })).json()
   for (const substance of opts.allergies ?? []) await api.post(`/api/patients/${patient.id}/allergies`, { data: { substance, severity: 'moderate' } })
   for (const type of opts.consents ?? []) await api.post(`/api/patients/${patient.id}/consents`, { data: { type, method: 'verbal' } })
   const depts = (await (await api.get('/api/departments')).json()).departments
@@ -83,6 +120,6 @@ export async function nurseHandsOverPatient(baseURL: string, opts: { allergies?:
   await api.post(`/api/visits/${visit.id}/observations`, { data: { items: [{ kind: 'temperature', value: 38.2 }, { kind: 'heart_rate', value: 92 }] } })
   await api.post(`/api/visits/${visit.id}/status`, { data: { status: 'ready' } })
   await api.dispose()
-  return { name: `${given} Synthetic`, patientId: patient.id as string, mrn: patient.mrn as string }
+  return { name: `${given} ${family}`, given, patientId: patient.id as string, mrn: patient.mrn as string }
 }
 

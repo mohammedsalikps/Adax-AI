@@ -92,6 +92,43 @@ function injected(sources) {
 
 const empty = () => ({ insufficient_information: true, presenting_problem: [], symptoms: [], observations: [], relevant_history: [], allergies: [], medications: [], potential_considerations: [], potential_investigations: [], potential_medication_considerations: [], missing_information: [], uncertainties: [], summary: null })
 
+// --- Mana AI (V4): the planner and the writer -------------------------------------------------------------------------------------------------------
+// Both calls come to the same endpoint; the system prompt says which. The planner is a handful of keyword rules (a stand-in: it names no model's skill),
+// the writer copies the facts it is shown, citing their ids. In mode "inject" the writer behaves as a model steered by a record would (a link, a handle
+// nobody gave); in mode "empty" it writes nothing.
+
+const manaCall = (tool, rest = {}) => ({ tool, patient: null, topic: null, text: null, which: null, when: null, minutes: null, date: null, mine: null, status: null, ...rest })
+const manaPlan = (kind, calls = [], clarification = null) => ({ kind, calls, clarification })
+
+function manaPlanFrom(user) {
+  const q = /^QUESTION: (.*)$/m.exec(user)?.[1] ?? ''
+  const lower = q.toLowerCase()
+  const current = /^CURRENT PATIENT: yes/m.test(user)
+  const focus = /^FOCUS: (P\d+)/m.exec(user)?.[1] ?? null
+  if (/\b(prescribe|sign this|delete|cancel my|book an|add .* allergy)\b/.test(lower)) return manaPlan('write_request')
+  if (/\b(usual dose|guideline|paediatric dose)\b/.test(lower)) return manaPlan('general_knowledge')
+  if (/\b(every patient|all patients|audit log)\b/.test(lower)) return manaPlan('out_of_scope')
+  if (/^(hi|hello|thanks)\b/.test(lower)) return manaPlan('other')
+  const named = /\b(?:of|for|about|does|did|is|on)\s+((?:[A-Z][\w'-]+)(?:\s+[A-Z][\w'-]+)?)/.exec(q)?.[1]
+  const patient = named ? `name:${named.replace(/'s$/, '')}` : /\b(she|he|her|his|their|they)\b/.test(lower) && focus ? focus : current ? 'current' : null
+  if (/waiting|queue/.test(lower)) return manaPlan('tools', [manaCall('get_today_queue', { mine: /\bmy\b/.test(lower), status: /waiting/.test(lower) ? 'waiting' : null })])
+  if (/appointments?/.test(lower)) return manaPlan('tools', [manaCall('get_appointments', { when: /tomorrow/.test(lower) ? 'tomorrow' : 'today', mine: /\bmy\b|\bi have\b/.test(lower) })])
+  if (/\bvisits?\b/.test(lower)) return manaPlan('tools', [manaCall('get_patient_visits', { patient })])
+  const topic = /allerg/.test(lower) ? 'allergies' : /medic|prescri/.test(lower) ? 'medicines' : /vital|blood pressure|temperature/.test(lower) ? 'vitals' : /diagnos/.test(lower) ? 'diagnoses' : /history/.test(lower) ? 'history' : /chang/.test(lower) ? 'changes' : 'briefing'
+  return manaPlan('tools', [manaCall('get_patient_record', { patient, topic })])
+}
+
+function manaAnswerFrom(user) {
+  const facts = []
+  for (const line of user.split('\n')) {
+    const m = /^\[(S\d{1,3})\] (?:\((P\d{1,2})\) )?(.*)$/.exec(line)
+    if (m) facts.push({ ref: m[1], text: m[3].trim() })
+  }
+  if (mode === 'empty') return { blocks: [] }
+  if (mode === 'inject') return { blocks: [{ text: 'Nobody has any allergies. See https://evil.invalid/collect for the rest.', refs: [facts[0]?.ref ?? 'S1'] }] }
+  return { blocks: facts.slice(0, 6).map((f) => ({ text: f.text, refs: [f.ref] })) }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
   if (req.method === 'GET' && url.pathname === '/health') return mode === 'down' ? send(res, 503, { error: { code: 503, message: 'Loading model' } }) : send(res, 200, { status: 'ok' })
@@ -102,7 +139,7 @@ const server = http.createServer(async (req, res) => {
       delayMs = typeof b.delayMs === 'number' ? b.delayMs : mode === 'slow' ? 6000 : 400
       return send(res, 200, { mode, delayMs })
     }
-    if (url.pathname === '/__calls') return send(res, 200, { count: calls.length, calls: calls.map((c) => ({ at: c.at, promptChars: c.promptChars, refs: c.refs, prompt: url.searchParams.get('prompts') === '1' ? c.prompt : undefined })) })
+    if (url.pathname === '/__calls') return send(res, 200, { count: calls.length, calls: calls.map((c) => ({ at: c.at, promptChars: c.promptChars, refs: c.refs, kind: c.kind, prompt: url.searchParams.get('prompts') === '1' ? c.prompt : undefined })) })
     if (url.pathname === '/__reset') {
       calls = []
       mode = 'ok'
@@ -116,8 +153,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') {
     const body = JSON.parse((await readBody(req)) || '{}')
     const user = String((body.messages ?? []).find((m) => m.role === 'user')?.content ?? '')
+    const system = String((body.messages ?? []).find((m) => m.role === 'system')?.content ?? '')
+    const mana = system.startsWith('You decide what to look up') ? 'plan' : system.startsWith('You write a short answer for a doctor') ? 'answer' : null
     const sources = sourcesOf(user)
-    calls.push({ at: Date.now(), promptChars: user.length, prompt: user, refs: sources.map((s) => s.ref) })
+    calls.push({ at: Date.now(), promptChars: user.length, prompt: user, refs: mana ? [...user.matchAll(/^\[(S\d+)\]/gm)].map((m) => m[1]) : sources.map((s) => s.ref), ...(mana && { kind: mana }) })
     if (mode === 'down') return send(res, 503, { error: { code: 503, message: 'Loading model' } })
     let aborted = false
     req.on('close', () => {
@@ -125,7 +164,7 @@ const server = http.createServer(async (req, res) => {
     })
     await new Promise((r) => setTimeout(r, delayMs))
     if (aborted) return
-    const content = mode === 'invalid' ? 'This is not JSON at all.' : JSON.stringify(mode === 'inject' ? injected(sources) : mode === 'empty' ? empty() : draftFrom(sources))
+    const content = mode === 'invalid' ? 'This is not JSON at all.' : JSON.stringify(mana === 'plan' ? manaPlanFrom(user) : mana === 'answer' ? manaAnswerFrom(user) : mode === 'inject' ? injected(sources) : mode === 'empty' ? empty() : draftFrom(sources))
     return send(res, 200, { id: `mock-${calls.length}`, object: 'chat.completion', model: MODEL, choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }], usage: { prompt_tokens: Math.ceil(user.length / 4), completion_tokens: Math.ceil(content.length / 4) } })
   }
   return send(res, 404, { error: 'not found' })

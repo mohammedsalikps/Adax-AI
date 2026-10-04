@@ -1805,3 +1805,145 @@ export const consultationDraftItems = pgTable(
     check('consultation_draft_items_text_check', sql`length(btrim(${t.text})) between 1 and 400`),
   ],
 )
+
+// ---------------------------------------------------------------------------
+// Mana AI conversations (slice V4). A conversation belongs to one doctor of one clinic. Each question and each answer is a message; the answer
+// is made in the background (planning, reading, writing, checking), and once it has ended nothing in it changes. Nothing here is ever deleted.
+// ---------------------------------------------------------------------------
+
+export const manaConversations = pgTable(
+  'mana_conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    doctorId: uuid('doctor_id')
+      .notNull()
+      .references(() => users.id),
+    /** The consultation (and its patient) the conversation was opened in: "this patient" means that patient. */
+    encounterId: uuid('encounter_id').references(() => encounters.id),
+    patientId: uuid('patient_id').references(() => patients.id),
+    /** [{ alias, patientId }]: the patients shown in this conversation, by the handle the model uses (P1, P2 ...). The model never sees their names. */
+    entities: jsonb('entities').notNull().default(sql`'[]'::jsonb`),
+    /** The handle of the patient most recently discussed (what "their" means). */
+    focus: text('focus'),
+    dataOrigin: text('data_origin').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('mana_conversations_doctor_idx').on(t.doctorId, t.encounterId, t.updatedAt), index('mana_conversations_facility_idx').on(t.facilityId)],
+)
+
+export const manaMessages = pgTable(
+  'mana_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => manaConversations.id),
+    seq: integer('seq').notNull(),
+    /** doctor (a question, or the choice of one patient) | mana (the answer to it) */
+    role: text('role').notNull(),
+    /** What the doctor asked. */
+    text: text('text'),
+    /** The doctor's message this answers. */
+    parentId: uuid('parent_id').references((): AnyPgColumn => manaMessages.id),
+    askedBy: uuid('asked_by')
+      .notNull()
+      .references(() => users.id),
+    idempotencyKey: text('idempotency_key'),
+    /** pending | ready | refused | unverified | failed | unavailable | cancelled. A doctor's message is always ready. */
+    status: text('status').notNull().default('ready'),
+    /** While pending: queued | planning | retrieving | writing | verifying. */
+    phase: text('phase'),
+    /** The validated plan (tool calls the model chose), and, for a question that needs the doctor to choose a patient, what remains to be run. */
+    plan: jsonb('plan'),
+    /** The validated answer as the screen shows it (ManaAnswerBody). */
+    answer: jsonb('answer'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    retryable: boolean('retryable').notNull().default(false),
+    provider: text('provider'),
+    model: text('model'),
+    runtime: text('runtime'),
+    weightsSha256: text('weights_sha256'),
+    locality: text('locality'),
+    planPromptId: text('plan_prompt_id'),
+    answerPromptId: text('answer_prompt_id'),
+    schemaVersion: text('schema_version'),
+    checksVersion: text('checks_version'),
+    toolsVersion: text('tools_version'),
+    /** Counts of what the checks removed, by reason. No text. */
+    validation: jsonb('validation'),
+    jobId: uuid('job_id').references(() => aiJobs.id),
+    planRunId: uuid('plan_run_id').references(() => aiRuns.id),
+    answerRunId: uuid('answer_run_id').references(() => aiRuns.id),
+    latencyMs: integer('latency_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('mana_messages_seq_uq').on(t.conversationId, t.seq),
+    uniqueIndex('mana_messages_one_pending_uq')
+      .on(t.conversationId)
+      .where(sql`role = 'mana' and status = 'pending'`),
+    uniqueIndex('mana_messages_idempotency_uq')
+      .on(t.askedBy, t.idempotencyKey)
+      .where(sql`idempotency_key is not null`),
+    index('mana_messages_conversation_idx').on(t.conversationId, t.seq),
+    check('mana_messages_role_check', sql`${t.role} in ('doctor', 'mana')`),
+    check('mana_messages_status_check', sql`${t.status} in ('pending', 'ready', 'refused', 'unverified', 'failed', 'unavailable', 'cancelled')`),
+    check('mana_messages_text_check', sql`${t.text} is null or length(btrim(${t.text})) between 1 and 500`),
+  ],
+)
+
+/** The tools a question ran, in order: what was asked of each, and how it ended (no clinical text). */
+export const manaToolCalls = pgTable(
+  'mana_tool_calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => manaMessages.id),
+    position: integer('position').notNull(),
+    tool: text('tool').notNull(),
+    /**
+     * The validated call: handles, topics, windows and short search words. A patient the doctor named is `name:<what the doctor wrote>` or `mrn:<what the doctor
+     * wrote>` (the call as it was run), so this column can hold a name or an MRN the doctor typed: it is patient data, kept as long as the database (see the
+     * retention note in ADR 0017 §2.8).
+     */
+    args: jsonb('args').notNull(),
+    /** ok | empty | not_found | ambiguous | refused | invalid | error */
+    status: text('status').notNull(),
+    detail: text('detail').notNull().default(''),
+    patientId: uuid('patient_id').references(() => patients.id),
+    sourceCount: integer('source_count').notNull().default(0),
+    durationMs: integer('duration_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('mana_tool_calls_message_idx').on(t.messageId, t.position)],
+)
+
+/** The records an answer rests on, as they read when the answer was made (an excerpt copied from the record, like every other AI evidence row). */
+export const manaMessageSources = pgTable(
+  'mana_message_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => manaMessages.id),
+    ref: text('ref').notNull(),
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    /** The statement the tools made, as the model was shown it. */
+    text: text('text').notNull(),
+    patientId: uuid('patient_id').references(() => patients.id),
+    /** [{ kind, label, date, status, excerpt, link }]: the records it rests on, copied as they read. */
+    items: jsonb('items').notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('mana_message_sources_uq').on(t.messageId, t.ref)],
+)

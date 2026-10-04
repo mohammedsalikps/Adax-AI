@@ -34,7 +34,7 @@ interface Overview {
   evaluations: { id: string; createdAt: string; createdByName: string | null; pipelineVersion: string; nonClinical: boolean; metrics: { statements: string[] } }[]
 }
 
-const SUBJECT: Record<string, string> = { fact: 'Extracted facts', recommendation: 'Recommendations', draft_item: 'Note suggestions', image_analysis: 'Image descriptions' }
+const SUBJECT: Record<string, string> = { fact: 'Extracted facts', recommendation: 'Recommendations', draft_item: 'Note suggestions', image_analysis: 'Image descriptions', consultation_item: 'Consultation draft statements' }
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`)
 
 function ProviderRow({ label, p }: { label: string; p: AiStatus['llm'] }) {
@@ -68,6 +68,7 @@ export function AdminAiOperationsPage() {
           <Card title="Providers">
             <ul className="space-y-2">
               <ProviderRow label="Language model" p={o.status.llm} />
+              <ProviderRow label="Consultation intelligence (reasoning model)" p={o.status.reasoning} />
               <ProviderRow label="Speech-to-text" p={o.status.stt} />
               <ProviderRow label="Image description" p={o.status.vision} />
             </ul>

@@ -40,6 +40,8 @@ export const JOB_LABEL: Record<string, string> = {
   safety_check: 'Safety rules',
   recommendations: 'AI recommendations',
   image_analysis: 'Image description',
+  patient_qa: 'Mana summary',
+  consultation_draft: 'Consultation draft (local AI)',
 }
 
 /** A fresh key per user action, so a double click or resend runs the job once. */

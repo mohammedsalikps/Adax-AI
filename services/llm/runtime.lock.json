@@ -1,0 +1,17 @@
+{
+  "name": "llama.cpp",
+  "release": "b11379",
+  "commit": "1537a0a8b2f8711d840878b0a0677ab2213c882c",
+  "license": "MIT",
+  "source": "https://github.com/ggml-org/llama.cpp/releases/tag/b11379",
+  "assets": {
+    "win32-x64": {
+      "name": "llama-b11379-bin-win-cpu-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11379/llama-b11379-bin-win-cpu-x64.zip",
+      "bytes": 19352297,
+      "sha256": "ec014c2c2a27b18786d24eba3e8650d4e68b9003ca6cf91714125b71975eb7ea",
+      "server": "llama-server.exe"
+    }
+  },
+  "note": "The size and SHA-256 are the ones GitHub publishes for this release asset (release API, 'digest'); the downloader refuses and deletes a file that does not match. Only the Windows x64 CPU build is pinned: another platform needs its own asset added here after its hash is checked against the release page."
+}

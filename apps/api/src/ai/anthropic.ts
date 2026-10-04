@@ -3,6 +3,7 @@ import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod'
 import { AI_SECTIONS, type TranscriptSegment, VitalKind } from '@adaxai/contracts'
 import { z } from 'zod'
 import type { AppSettings } from '../settings/schema.ts'
+import { HostedReasoner } from './llm/hosted.ts'
 import { EXTRACTION_PROMPT, IMAGE_PROMPT, MANA_QA_PROMPT, NOTE_PROMPT, type PromptDef, RECOMMENDATION_PROMPT } from './prompts.ts'
 import { AiProviderError, type CallMeta, type ExtractedFact, type FactExtractor, type ImageDescriber, type ImageDescription, type NoteDrafter, type NoteDraftResult, type RecommendationInput, type RecommendationOut, type Recommender, type RecordQuestionAnswerer, type RecordQuestionInput } from './providers.ts'
 
@@ -75,18 +76,21 @@ class AnthropicStructured {
     private readonly maxTokens: number,
   ) {}
 
-  async call<T extends z.ZodType>(prompt: PromptDef, schema: T, content: Content): Promise<CallMeta & { output: z.infer<T> }> {
+  async call<T extends z.ZodType>(prompt: PromptDef, schema: T, content: Content, signal?: AbortSignal): Promise<CallMeta & { output: z.infer<T> }> {
     try {
-      const res = await this.client.beta.messages.parse({
-        model: this.model,
-        max_tokens: this.maxTokens,
-        // Re-run declined requests on Anthropic's recommended fallback model instead of failing.
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
-        output_config: { effort: this.effort, format: betaZodOutputFormat(schema) },
-        system: prompt.text,
-        messages: [{ role: 'user', content }],
-      })
+      const res = await this.client.beta.messages.parse(
+        {
+          model: this.model,
+          max_tokens: this.maxTokens,
+          // Re-run declined requests on Anthropic's recommended fallback model instead of failing.
+          betas: ['server-side-fallback-2026-07-01'],
+          fallbacks: 'default',
+          output_config: { effort: this.effort, format: betaZodOutputFormat(schema) },
+          system: prompt.text,
+          messages: [{ role: 'user', content }],
+        },
+        signal ? { signal } : undefined,
+      )
       if (res.stop_reason === 'refusal') throw new AiProviderError('refusal', 'The AI service declined this request. Continue without AI assistance.')
       if (res.stop_reason === 'max_tokens') throw new AiProviderError('truncated', 'The AI response was cut off. Try again with less input.', true)
       if (!res.parsed_output) throw new AiProviderError('invalid_output', 'The AI response could not be read. Try again.', true)
@@ -199,7 +203,13 @@ export function createAnthropicProviders(apiKey: string, llm: AppSettings['ai'][
   const c = client(apiKey, llm.timeoutSeconds, baseURL)
   const text = new AnthropicStructured(c, llm.model, llm.effort, llm.maxOutputTokens)
   const img = new AnthropicStructured(c, vision.model, vision.effort, Math.min(llm.maxOutputTokens, 8000))
-  return { drafter: new AnthropicNoteDrafter(text), extractor: new AnthropicFactExtractor(text), recommender: new AnthropicRecommender(text), describer: new AnthropicImageDescriber(img), qa: new AnthropicRecordQa(text) }
+  // The reasoning model when the server is set to `hosted` (ai.reasoning.provider). Built here, with the others, so that it exists only if egress is
+  // allowed AND a key is set; the local model being down never makes it the answer.
+  const reasoner = new HostedReasoner(text.model, async (req) => {
+    const r = await text.call(req.prompt, req.schema, req.user, req.signal)
+    return { output: r.output, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, requestId: r.requestId }
+  })
+  return { drafter: new AnthropicNoteDrafter(text), extractor: new AnthropicFactExtractor(text), recommender: new AnthropicRecommender(text), describer: new AnthropicImageDescriber(img), qa: new AnthropicRecordQa(text), reasoner }
 }
 
 /** Drafter only (kept for tests that exercise the SDK path against a local HTTP stub). */

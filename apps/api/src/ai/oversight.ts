@@ -39,7 +39,11 @@ async function reviewOutcomes(db: Db, facilityId: string) {
     union all
     select 'image_analysis', r.provider, r.model, r.prompt_version, a.status, j.data_origin, count(*)::int
       from image_analyses a join ai_runs r on r.id = a.run_id join ai_jobs j on j.id = a.job_id
-      where j.facility_id = ${facilityId} group by 1, 2, 3, 4, 5, 6`)
+      where j.facility_id = ${facilityId} group by 1, 2, 3, 4, 5, 6
+    union all
+    select 'consultation_item', d.provider, d.model, d.prompt_id, i.decision, j.data_origin, count(*)::int
+      from consultation_draft_items i join consultation_drafts d on d.id = i.draft_id left join ai_jobs j on j.id = d.job_id
+      where d.facility_id = ${facilityId} and d.provider is not null group by 1, 2, 3, 4, 5, 6`)
   const groups = new Map<string, { subject: string; provider: string; model: string; version: string | null; counts: Record<string, number>; dataOrigins: Record<string, number> }>()
   for (const r of rows) {
     const key = `${r.subject}|${r.provider}|${r.model}|${r.version}`
@@ -122,8 +126,8 @@ export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; pr
     const { rows } = await db.execute<Record<string, unknown>>(sql`
       select a.id, a.subject_type, a.subject_id, a.action, a.text as final_text, a.reason, a.created_at, u.full_name as reviewer,
              p.id as patient_id, p.given_name, p.family_name, p.mrn, a.encounter_id,
-             coalesce(f.text, r.text, i.text, ia.result->>'summary') as original_text,
-             coalesce(f.category, r.kind, i.section, 'image') as category,
+             coalesce(f.text, r.text, i.text, ci.text, ia.result->>'summary') as original_text,
+             coalesce(f.category, r.kind, i.section, ci.section, 'image') as category,
              run.provider, run.model, run.prompt_version
         from ai_review_actions a
         join patients p on p.id = a.patient_id
@@ -132,9 +136,12 @@ export function registerOversightRoutes(app: FastifyInstance, deps: { db: Db; pr
         left join ai_recommendations r on a.subject_type = 'recommendation' and r.id = a.subject_id
         left join ai_draft_items i on a.subject_type = 'draft_item' and i.id = a.subject_id
         left join ai_drafts d on d.id = i.draft_id
+        left join consultation_draft_items ci on a.subject_type = 'consultation_item' and ci.id = a.subject_id
+        left join consultation_drafts cd on cd.id = ci.draft_id
         left join image_analyses ia on a.subject_type = 'image_analysis' and ia.id = a.subject_id
-        left join ai_runs run on run.id = coalesce(f.run_id, r.run_id, d.run_id, ia.run_id)
+        left join ai_runs run on run.id = coalesce(f.run_id, r.run_id, d.run_id, cd.run_id, ia.run_id)
        where p.facility_id = ${me.facilityId} and a.action = ${q.decision} and a.subject_type <> 'routing_suggestion'
+         and (a.subject_type <> 'consultation_item' or a.actor_id = ${me.id})
        order by a.created_at desc limit 100`)
     await audit(db, req, { action: 'ai.review_outcomes_read', details: { decision: q.decision, count: rows.length, patientIds: [...new Set(rows.map((r) => String(r.patient_id)))] } })
     return {

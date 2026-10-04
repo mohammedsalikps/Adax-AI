@@ -23,7 +23,7 @@ export type SpeechStatus = z.infer<typeof SpeechStatus>
 /** The "important points" extractor: fixed, versioned rules that run in this process. */
 export const ExtractionStatus = z.object({ available: z.boolean(), provider: z.string(), version: z.string(), local: z.boolean(), languages: z.array(z.string()), reason: z.string().nullable() })
 export type ExtractionStatus = z.infer<typeof ExtractionStatus>
-export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean() })
+export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean(), consultationDraft: z.boolean() })
 /**
  * Whether consultation text may go to a hosted AI provider (a server setting; a provider key alone never allows it) and, if so, to which host. It
  * carries no key and no way to change it: the screen can only show it.
@@ -31,7 +31,26 @@ export const AiFeatures = z.object({ noteDraft: z.boolean(), extraction: z.boole
 export const AiEgress = z.object({ hosted: z.boolean(), destination: z.string().nullable() })
 export type AiEgress = z.infer<typeof AiEgress>
 /** `qa`: Mana AI summaries of the patient record. */
-export const AiStatus = z.object({ llm: ProviderStatus, stt: SpeechStatus, extraction: ExtractionStatus, vision: ProviderStatus, qa: ProviderStatus, features: AiFeatures, liveChunkSeconds: z.number(), egress: AiEgress })
+/**
+ * The language model that writes consultation drafts and answers (V3, V4), as its server said just now: a local open-weight model by default, a hosted
+ * one only behind the egress policy, or none. Never a guess from configuration alone, and never a fallback from one to another.
+ */
+export const ReasoningStatus = z.object({
+  available: z.boolean(),
+  mode: z.enum(['local', 'hosted', 'none']),
+  provider: z.string().nullable(),
+  model: z.string().nullable(),
+  state: z.enum(['ready', 'loading', 'unavailable', 'not_configured']),
+  /** True when the model runs on this computer. */
+  local: z.boolean(),
+  runtime: z.string().nullable(),
+  /** SHA-256 of the weights, known only when the running model is the pinned one. */
+  weightsSha256: z.string().nullable(),
+  reason: z.string().nullable(),
+})
+export type ReasoningStatus = z.infer<typeof ReasoningStatus>
+
+export const AiStatus = z.object({ llm: ProviderStatus, stt: SpeechStatus, extraction: ExtractionStatus, vision: ProviderStatus, qa: ProviderStatus, reasoning: ReasoningStatus, features: AiFeatures, liveChunkSeconds: z.number(), egress: AiEgress })
 export type AiStatus = z.infer<typeof AiStatus>
 
 export const TranscriptSource = z.enum(['typed', 'pasted', 'audio_upload', 'browser_recording'])
@@ -196,7 +215,7 @@ export const AiConsentRequest = z.object({ method: z.enum(['verbal', 'written'])
 // review actions. Everything here is a draft until a doctor acts on it.
 // ---------------------------------------------------------------------------
 
-export const AI_JOB_KINDS = ['transcription', 'note_draft', 'extraction', 'safety_check', 'recommendations', 'image_analysis', 'patient_qa'] as const
+export const AI_JOB_KINDS = ['transcription', 'note_draft', 'extraction', 'safety_check', 'recommendations', 'image_analysis', 'patient_qa', 'consultation_draft'] as const
 export const AiJobKind = z.enum(AI_JOB_KINDS)
 export type AiJobKind = z.infer<typeof AiJobKind>
 

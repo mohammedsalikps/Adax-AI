@@ -1,8 +1,13 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import type { AiSection, AiStatus, SpeechStatus, TranscriptSegment, VitalKind } from '@adaxai/contracts'
-import type { Config } from '../config.ts'
+import { type Config, REPO_ROOT } from '../config.ts'
 import type { AppSettings } from '../settings/schema.ts'
 import { createAnthropicProviders } from './anthropic.ts'
 import { RuleFactExtractor } from './extract/rules.ts'
+import { LocalLlmClient, llmUrlProblem } from './llm/local.ts'
+import { reasoningStatus } from './llm/status.ts'
+import type { ReasoningModel } from './llm/types.ts'
 import { LocalSpeechTranscriber, speechUrlProblem } from './stt.ts'
 
 /**
@@ -172,7 +177,7 @@ export class AiProviderError extends Error {
 }
 
 export type AiFeatures = AppSettings['ai']['features']
-export const ALL_FEATURES: AiFeatures = { noteDraft: true, extraction: true, recommendations: true, imageAnalysis: true, liveTranscription: true, patientQa: true }
+export const ALL_FEATURES: AiFeatures = { noteDraft: true, extraction: true, recommendations: true, imageAnalysis: true, liveTranscription: true, patientQa: true, consultationDraft: true }
 
 export interface AiProviders {
   drafter: NoteDrafter | null
@@ -181,6 +186,10 @@ export interface AiProviders {
   recommender?: Recommender | null
   describer?: ImageDescriber | null
   qa?: RecordQuestionAnswerer | null
+  /** The model that writes consultation drafts (V3) and answers (V4): local by default, hosted only behind the egress policy, or none. */
+  reasoner?: ReasoningModel | null
+  /** What the server is set to use for it and, when there is none, why (shown instead of any placeholder output). */
+  reasoning?: { mode: 'local' | 'hosted' | 'none'; reason: string | null }
   /** Whether consultation text may go to a hosted provider, and where it would go. A key alone never allows it. */
   egress?: { hosted: boolean; destination: string | null }
   /** Why a provider is unavailable, shown to users instead of any fabricated output. */
@@ -197,6 +206,17 @@ const hostOf = (baseUrl: string | undefined): string => {
     return baseUrl ? new URL(baseUrl).host : 'api.anthropic.com'
   } catch {
     return 'api.anthropic.com'
+  }
+}
+
+/** The model and runtime this repository pins (services/llm/*.lock.json), so a run can name the exact weights; null if the lock files are not there. */
+export function pinnedLocalModel(): { alias: string; weightsSha256: string; runtime: string } | null {
+  try {
+    const model = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'services', 'llm', 'models.lock.json'), 'utf8')) as { alias: string; file: { sha256: string } }
+    const runtime = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'services', 'llm', 'runtime.lock.json'), 'utf8')) as { name: string; release: string }
+    return { alias: model.alias, weightsSha256: model.file.sha256, runtime: `${runtime.name} ${runtime.release}` }
+  } catch {
+    return null
   }
 }
 
@@ -222,6 +242,19 @@ export function providersFromConfig(config: Config, settings: AppSettings): AiPr
   const noKey = 'ANTHROPIC_API_KEY is not set on this server'
   // The reason shown when no hosted provider is used: egress off (the default) is not an error, and says nothing leaves this computer.
   const noLlm = !egressAllowed ? EGRESS_OFF : `AI drafting, extraction and recommendations are not configured: ${noKey}.`
+  // The reasoning model: one choice, made here from the settings, and never changed by what is or is not running (no fallback in either direction).
+  const rs = settings.ai.reasoning
+  let reasoner: ReasoningModel | null = null
+  let reasoningReason: string | null = null
+  if (!f.consultationDraft) reasoningReason = off('Consultation intelligence')
+  else if (rs.provider === 'local') {
+    const problem = llmUrlProblem(rs.url, config.ai.llm.allowNonLoopback)
+    if (problem) reasoningReason = `Local AI unavailable: ${problem}`
+    else reasoner = new LocalLlmClient({ url: rs.url, apiKey: config.ai.llm.apiKey ?? null, allowNonLoopback: config.ai.llm.allowNonLoopback, timeoutMs: rs.timeoutSeconds * 1000, pinned: pinnedLocalModel() })
+  } else if (rs.provider === 'hosted') {
+    reasoner = llm?.reasoner ?? null
+    if (!reasoner) reasoningReason = !egressAllowed ? EGRESS_OFF : `Hosted consultation intelligence is not configured: ${noKey}.`
+  } else reasoningReason = 'Local AI is switched off on this server (ai.reasoning.provider: none).'
   return {
     drafter: f.noteDraft ? (llm?.drafter ?? null) : null,
     extractor,
@@ -229,6 +262,8 @@ export function providersFromConfig(config: Config, settings: AppSettings): AiPr
     describer: f.imageAnalysis ? (llm?.describer ?? null) : null,
     qa: f.patientQa ? (llm?.qa ?? null) : null,
     transcriber,
+    reasoner,
+    reasoning: { mode: rs.provider, reason: reasoningReason },
     features: f,
     liveChunkSeconds: settings.ai.stt.liveChunkSeconds,
     egress: { hosted: egressAllowed, destination },
@@ -271,6 +306,7 @@ export async function aiStatus(p: AiProviders): Promise<AiStatus> {
       : { available: false, provider: 'none', version: '', local: true, languages: [], reason: p.reasons.llm ?? 'Extraction is switched off in config/adaxai.yaml.' },
     vision: providerStatus(p.describer, p.reasons.vision ?? p.reasons.llm),
     qa: providerStatus(p.qa, p.reasons.qa ?? p.reasons.llm),
+    reasoning: await reasoningStatus({ mode: p.reasoning?.mode ?? 'none', model: p.reasoner ?? null, reason: p.reasoning?.reason ?? null }),
     features: p.features ?? ALL_FEATURES,
     liveChunkSeconds: p.liveChunkSeconds ?? 20,
     egress: { hosted: p.egress?.hosted ?? false, destination: p.egress?.destination ?? null },

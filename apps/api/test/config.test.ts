@@ -35,6 +35,21 @@ describe('loadConfig', () => {
   })
 })
 
+describe('the local language model settings', () => {
+  const llm = (e: Record<string, string>) => loadConfig({ DB_APP_PASSWORD: 'x', ...e }).ai.llm
+  it('are off the loopback only when an operator says so on purpose, in either spelling of yes (the launcher accepts the same two)', () => {
+    expect(llm({}).allowNonLoopback).toBe(false)
+    for (const yes of ['true', '1']) expect(llm({ LLM_ALLOW_NON_LOOPBACK: yes }).allowNonLoopback, yes).toBe(true)
+    for (const no of ['false', '0']) expect(llm({ LLM_ALLOW_NON_LOOPBACK: no }).allowNonLoopback, no).toBe(false)
+    expect(() => llm({ LLM_ALLOW_NON_LOOPBACK: 'yes' })).toThrow()
+  })
+  it('take the provider and the address from the environment, and the secret from the environment or its file, never from anywhere a browser can read', () => {
+    expect(llm({ LLM_PROVIDER: 'none', LLM_URL: 'http://127.0.0.1:9000/' })).toMatchObject({ provider: 'none', url: 'http://127.0.0.1:9000' })
+    expect(llm({ LLM_API_KEY: 'a-secret-for-the-test' }).apiKey).toBe('a-secret-for-the-test')
+    expect(() => llm({ LLM_PROVIDER: 'everything' })).toThrow()
+  })
+})
+
 describe('test isolation from real AI providers', () => {
   it('the test configuration never carries provider keys, whatever .env contains', async () => {
     const { testConfig, createTestApp } = await import('./helpers.ts')

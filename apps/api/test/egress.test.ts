@@ -227,6 +227,76 @@ describe('speech never falls back to a hosted service', () => {
   })
 })
 
+describe('consultation drafts (V3): the local model is the only one used, unless the server is set to hosted on purpose', () => {
+  const settingsWith = (reasoning: Partial<AppSettings['ai']['reasoning']>): AppSettings => {
+    const f = loadAppSettings()
+    return { ...f, ai: { ...f.ai, reasoning: { ...f.ai.reasoning, ...reasoning } } }
+  }
+  // The test configuration forces the reasoning model off (so no test can reach a model server that happens to run on this machine). Here the
+  // settings file decides, as on a real server; the tests that make requests point the local model at a closed port.
+  const unforced = (c: Config): Config => ({ ...c, ai: { ...c.ai, llm: { ...c.ai.llm, provider: undefined, url: undefined } } })
+  const build = (egress: boolean | undefined, reasoning: Partial<AppSettings['ai']['reasoning']>, key = true) => {
+    const config: Config = unforced(key ? configWith(egress) : { ...testConfig, ai: { ...testConfig.ai, anthropicApiKey: undefined, egressHosted: egress } })
+    return providersFromConfig(config, effectiveSettings(settingsWith(reasoning), config))
+  }
+  async function draft(ctx: ReturnType<typeof appWith>, e: { id: string }, doctor: string) {
+    return call(ctx.app, 'POST', `/api/encounters/${e.id}/consultation-ai/drafts`, { cookie: doctor, body: { idempotencyKey: randomUUID() } })
+  }
+
+  it('is built from the settings alone: local by default whatever keys and egress say, hosted only with egress AND a key, none when switched off, and never a model on another computer unless allowed', () => {
+    for (const egress of [undefined, true]) for (const key of [true, false]) expect(build(egress, {}, key).reasoner, `local, egress ${egress}, key ${key}`).toMatchObject({ provider: 'llama.cpp', local: true })
+    expect(build(undefined, { provider: 'hosted' }).reasoner).toBeNull()
+    expect(build(undefined, { provider: 'hosted' }).reasoning?.reason).toBe(EGRESS_OFF)
+    expect(build(true, { provider: 'hosted' }, false).reasoner).toBeNull()
+    expect(build(true, { provider: 'hosted' }, false).reasoning?.reason).toMatch(/ANTHROPIC_API_KEY is not set/)
+    expect(build(true, { provider: 'hosted' }).reasoner).toMatchObject({ provider: 'anthropic', local: false })
+    expect(build(true, { provider: 'none' }).reasoner).toBeNull()
+    expect(build(true, { provider: 'none' }).reasoning).toMatchObject({ mode: 'none' })
+    const remote = build(undefined, { url: 'http://model.example.invalid:8081' })
+    expect(remote.reasoner).toBeNull()
+    expect(remote.reasoning?.reason).toMatch(/must point at this machine/)
+  })
+
+  it('with the local model down a draft is refused as "Local AI unavailable.", and nothing reaches the hosted provider, whether egress is off or on', async () => {
+    const down = await closedPort()
+    for (const egress of [undefined, true]) {
+      const ctx = appWith(unforced(configWith(egress)), settingsWith({ url: `http://127.0.0.1:${down}` }))
+      const { e, doctor } = await open(ctx)
+      const res = await draft(ctx, e, doctor)
+      expect(res.statusCode, `egress ${egress}`).toBe(503)
+      expect(res.json().message).toBe('Local AI unavailable.')
+      const state = (await call(ctx.app, 'GET', `/api/encounters/${e.id}/consultation-ai`, { cookie: doctor })).json()
+      expect(state.status).toMatchObject({ available: false, mode: 'local', local: true })
+      expect(state.draft).toBeNull()
+      expect(JSON.stringify(state)).not.toContain(KEY)
+      expect(stub.requests, `requests the hosted provider received, egress ${egress}`).toBe(0)
+    }
+  })
+
+  it('a server set to hosted with egress off makes no draft and contacts nothing; with egress on and a key it does reach the stand-in, and the draft says it was made by a hosted model', async () => {
+    const off = appWith(unforced(configWith(undefined)), settingsWith({ provider: 'hosted' }))
+    const a = await open(off)
+    const refused = await draft(off, a.e, a.doctor)
+    expect(refused.statusCode).toBe(503)
+    expect(refused.json().message).toBe(EGRESS_OFF)
+    expect(stub.requests).toBe(0)
+
+    const on = appWith(unforced(configWith(true)), settingsWith({ provider: 'hosted' }))
+    const b = await open(on)
+    expect((await draft(on, b.e, b.doctor)).statusCode).toBe(202)
+    // The stand-in answers with something that is not a draft, so the draft fails; what is checked is that the request went where the setting says.
+    let state: { draft: { status: string; model: { provider: string; local: boolean } | null } | null } = { draft: null }
+    for (let i = 0; i < 100 && (!state.draft || state.draft.status === 'generating'); i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      state = (await call(on.app, 'GET', `/api/encounters/${b.e.id}/consultation-ai`, { cookie: b.doctor })).json()
+    }
+    expect(stub.requests, 'the stand-in for the hosted provider would have been hit').toBeGreaterThan(0)
+    expect(stub.paths.every((p) => p.startsWith('/v1/messages'))).toBe(true)
+    expect(state.draft?.model).toMatchObject({ provider: 'anthropic', local: false })
+    expect(JSON.stringify(state)).not.toContain(KEY)
+  })
+})
+
 describe('the browser cannot turn egress on', () => {
   /** Every route the server registers, with its methods, read from the real route table (not guessed). */
   function registeredRoutes(app: ReturnType<typeof appWith>['app']): { path: string; methods: string[] }[] {

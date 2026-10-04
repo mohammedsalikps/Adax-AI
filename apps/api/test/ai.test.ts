@@ -223,6 +223,12 @@ describe('text helpers', () => {
     const out = pseudonymize([{ id: 'S1', speaker: null, text: 'राम कुमार (ADX-001234) called from 98400-12345; Ramesh is unrelated.' }], { givenName: 'राम', familyName: 'कुमार', mrn: 'ADX-001234', phone: '+919840012345' })
     expect(out[0]!.text).toBe('[PATIENT] [PATIENT] ([MRN]) called from [PHONE]; Ramesh is unrelated.')
   })
+  it('also finds the parts of a name of several words, phone numbers written with brackets or dots, and an MRN without its dash (still best effort)', () => {
+    const patient = { givenName: 'Mary Anne', familyName: 'Van Der Berg', mrn: 'ADX-000123', phone: '9876543210' }
+    const [out] = pseudonymize([{ id: 'S1', speaker: null, text: 'Anne came with Mary; Berg, ADX000123 or ADX 000123, phone (987) 654-3210 or 987.654.3210 or +91 98765 43210. Marian is a different person.' }], patient)
+    expect(out!.text).toBe('[PATIENT] came with [PATIENT]; [PATIENT], [MRN] or [MRN], phone [PHONE] or [PHONE] or +91 [PHONE]. Marian is a different person.')
+    expect(out!.text).not.toMatch(/Mary|Anne|Berg|ADX|987|654|3210/)
+  })
 })
 
 // --- Contract tests: the real adapters against local stand-ins for the provider HTTP APIs ---

@@ -30,7 +30,7 @@ export const MANA_SUGGESTIONS: { intent: ManaIntent; label: string; question: st
   { intent: 'changes_since_last', label: 'What changed', question: 'What changed since the previous visit?' },
 ]
 
-export const MANA_SOURCE_TYPES = ['patient', 'allergy', 'encounter_note', 'diagnosis', 'prescription_item', 'amendment', 'observation', 'visit', 'thermal_capture'] as const
+export const MANA_SOURCE_TYPES = ['patient', 'allergy', 'encounter_note', 'diagnosis', 'prescription_item', 'amendment', 'observation', 'visit', 'thermal_capture', 'patient_condition', 'patient_medication', 'investigation_result'] as const
 export const ManaSourceType = z.enum(MANA_SOURCE_TYPES)
 
 /** Record status of a source item, shown next to every citation. */
@@ -147,6 +147,7 @@ export const INSERTION_SUBJECTS = {
   recommendation: 'Recommendation',
   mana_answer: 'Mana answer',
   image_analysis: 'Photo description',
+  consultation_item: 'Consultation draft statement',
 } as const
 export type InsertionSubject = keyof typeof INSERTION_SUBJECTS
 export const InsertionSubject = z.enum(Object.keys(INSERTION_SUBJECTS) as [InsertionSubject, ...InsertionSubject[]])

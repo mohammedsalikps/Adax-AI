@@ -1,14 +1,15 @@
-import { CONFIRM_FLAGS, type Evidence, FACT_SECTION, type FactCategory, type ReviewRequest } from '@adaxai/contracts'
-import { and, asc, eq, inArray } from 'drizzle-orm'
+import { CONFIRM_FLAGS, CONSULT_NOTE_SECTION, type ConsultSection, type Evidence, FACT_SECTION, type FactCategory, LIVE_DRAFT_STATUSES, type ReviewRequest } from '@adaxai/contracts'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import type { FastifyRequest } from 'fastify'
 import { audit } from '../audit/audit.ts'
 import type { SessionUser } from '../auth/sessions.ts'
 import type { Db, DbOrTx } from '../db/client.ts'
-import { aiDraftItems, aiDrafts, aiEvidence, aiRecommendations, aiReviewActions, clinicalFacts, clinicalImages, encounters, imageAnalyses } from '../db/schema.ts'
+import { aiDraftItems, aiDrafts, aiEvidence, aiRecommendations, aiReviewActions, clinicalFacts, clinicalImages, consultationDraftItems, consultationDrafts, encounters, imageAnalyses } from '../db/schema.ts'
+import { confirmReasonFor } from '../consult/confirm.ts'
 import { badRequest, conflict, HttpError, notFound } from '../http/errors.ts'
 import { CLINICIAN_SIDE, loadSegments, PATIENT_SIDE } from './transcripts.ts'
 
-export type SubjectType = 'fact' | 'recommendation' | 'draft_item' | 'image_analysis'
+export type SubjectType = 'fact' | 'recommendation' | 'draft_item' | 'image_analysis' | 'consultation_item'
 
 export async function loadEvidence(db: DbOrTx, subjectIds: string[]): Promise<Map<string, Evidence[]>> {
   const out = new Map<string, Evidence[]>()
@@ -61,6 +62,15 @@ async function load(db: Db, type: SubjectType, id: string, facilityId: string): 
     if (!r || r.e.facilityId !== facilityId) throw notFound('Suggestion')
     return { status: r.i.decision, text: r.i.text, patientId: r.e.patientId, encounterId: r.e.id, confirmReason: r.i.unsupported ? 'This suggestion is not linked to any part of the transcript. Confirm that you have checked it before accepting.' : null, section: r.i.section }
   }
+  if (type === 'consultation_item') {
+    const [r] = await db.select({ i: consultationDraftItems, d: consultationDrafts }).from(consultationDraftItems).innerJoin(consultationDrafts, eq(consultationDrafts.id, consultationDraftItems.draftId)).where(eq(consultationDraftItems.id, id))
+    if (!r || r.d.facilityId !== facilityId) throw notFound('Statement')
+    // Only the newest draft of a consultation that is being made or has statements is reviewed: an older one was replaced by it. An attempt that
+    // failed or was cancelled replaces nothing.
+    const [newest] = await db.select({ v: sql<number>`max(${consultationDrafts.version})::int` }).from(consultationDrafts).where(and(eq(consultationDrafts.encounterId, r.d.encounterId), inArray(consultationDrafts.status, [...LIVE_DRAFT_STATUSES])))
+    const status = (newest?.v ?? r.d.version) > r.d.version ? 'superseded' : r.i.decision
+    return { status, text: r.i.text, patientId: r.d.patientId, encounterId: r.d.encounterId, confirmReason: confirmReasonFor(r.i), section: CONSULT_NOTE_SECTION[r.i.section as ConsultSection] }
+  }
   const [a] = await db.select({ a: imageAnalyses, img: clinicalImages }).from(imageAnalyses).innerJoin(clinicalImages, eq(clinicalImages.id, imageAnalyses.imageId)).where(eq(imageAnalyses.id, id))
   if (!a || a.img.facilityId !== facilityId) throw notFound('Image analysis')
   const result = a.a.result as { summary: string; quality: string }
@@ -111,14 +121,20 @@ export async function reviewSubject(
                 .set({ decision: body.action, finalText, ...decided })
                 .where(and(eq(aiDraftItems.id, id), inArray(aiDraftItems.decision, ['pending', 'deferred'])))
                 .returning({ id: aiDraftItems.id })
-            : await tx
-                .update(imageAnalyses)
-                .set({ status: body.action, finalText, ...decided })
-                .where(and(eq(imageAnalyses.id, id), inArray(imageAnalyses.status, ['pending', 'deferred'])))
-                .returning({ id: imageAnalyses.id })
+            : type === 'consultation_item'
+              ? await tx
+                  .update(consultationDraftItems)
+                  .set({ decision: body.action, finalText, ...decided })
+                  .where(and(eq(consultationDraftItems.id, id), inArray(consultationDraftItems.decision, ['pending', 'deferred'])))
+                  .returning({ id: consultationDraftItems.id })
+              : await tx
+                  .update(imageAnalyses)
+                  .set({ status: body.action, finalText, ...decided })
+                  .where(and(eq(imageAnalyses.id, id), inArray(imageAnalyses.status, ['pending', 'deferred'])))
+                  .returning({ id: imageAnalyses.id })
     if (!n.length) throw conflict('This item has already been reviewed', 'already_decided')
     await tx.insert(aiReviewActions).values({ subjectType: type, subjectId: id, action: body.action, text: finalText, reason: body.reason ?? null, patientId: s.patientId, encounterId: s.encounterId, actorId: me.id })
-    await audit(tx, req, { action: type === 'draft_item' ? 'ai.draft_decision' : 'ai.review', entityType: type === 'draft_item' ? 'ai_draft_item' : type, entityId: id, patientId: s.patientId, details: { decision: body.action, type, confirmed: !!body.confirmFlags, encounterId: s.encounterId } })
+    await audit(tx, req, { action: type === 'draft_item' ? 'ai.draft_decision' : type === 'consultation_item' ? 'ai.consultation_review' : 'ai.review', entityType: type === 'draft_item' ? 'ai_draft_item' : type, entityId: id, patientId: s.patientId, details: { decision: body.action, type, confirmed: !!body.confirmFlags, encounterId: s.encounterId } })
   })
   return { encounterId: s.encounterId, item: { id, type, section: body.action === 'accepted' || body.action === 'edited' ? s.section : null, finalText, action: body.action } }
 }

@@ -24,7 +24,8 @@ export const testConfig: Config = {
   db: { ...base.db, name: base.db.testName },
   storageDir: `${base.storageDir}-test`,
   cookieSecure: false,
-  ai: { ...base.ai, anthropicApiKey: undefined, egressHosted: undefined, speech: { provider: 'none' as const, url: undefined, allowNonLoopback: false }, hostedSttKeyIgnored: false },
+  // No reasoning model unless a test injects one: the test configuration never reaches a model server, whatever is running on this machine.
+  ai: { ...base.ai, anthropicApiKey: undefined, egressHosted: undefined, speech: { provider: 'none' as const, url: undefined, allowNonLoopback: false }, hostedSttKeyIgnored: false, llm: { provider: 'none' as const, url: undefined, allowNonLoopback: false, apiKey: undefined } },
 }
 
 /** A localhost port with nothing listening on it (connections are refused). */

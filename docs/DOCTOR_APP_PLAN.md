@@ -87,6 +87,8 @@ It is built as three increments, each demonstrable on its own and committed on i
 
 ### V3. Summarise, review, approve
 
+> **Status (4 Oct 2026): built as the owner's brief "V3: local AI consultation intelligence", with these differences from the plan below** ([STATUS.md](STATUS.md), [ADR 0016](adr/0016-local-ai-consultation-intelligence.md), [safety/AI_MODELS.md](safety/AI_MODELS.md)). (1) The model is a **local open-weight language model** (llama.cpp, Qwen3.5-4B Q4_K_M, owner-approved downloads, pinned and hash-checked) behind a **provider abstraction** (`local` / `hosted` behind the egress policy / `none`, no fallback). (2) The draft is **structured** (summary, problem, symptoms, observations, history, allergies, medicines, considerations, investigations, medication considerations, missing information, uncertainties), each statement with its sources and a **support state decided by code**, with **fixed-rule conflict detection**; it uses **confirmed points, the record and the doctor's notes, never the raw transcript**. (3) The right-hand panel is one **Consultation intelligence** card, not tabs; "Approve & add to note" is the existing two-step *Accept* then *Add to note*. (4) Not built: the full sign-in-to-patient-portal end-to-end test of this slice, and any clinical validation. (5) Measured with the real model on **12 synthetic cases** only. (6) A draft takes **minutes** on this CPU.
+
 *The doctor gets a sourced draft summary, edits or rejects it, approves it into the note, signs, and the patient sees the record.*
 
 - **Consultation summary capability** (structured output): patient context, current visit, an assessment draft and a suggested-plan draft (advice, tests to consider, medication *considerations*). Each statement cites transcript segments or record items; anything the evidence does not support is omitted or marked "not established". The deterministic allergy and interaction rules remain in front of it. **The AI never creates a diagnosis or a prescription row**; the doctor does.
@@ -120,6 +122,6 @@ It is built as three increments, each demonstrable on its own and committed on i
 
 ## 6. Open decisions for the owner
 
-1. **Install a local speech runtime and a local language model?** *Speech: answered and done in V2* (owner chose `faster-whisper` `small`: about 70 MB of packages and 486 MB of weights, both pinned and checksummed). *Language model: still open; needed for V3.* Each item is listed with its source and size before anything is downloaded.
-2. **Hosted keys in this machine's `.env`.** Once the local provider exists, hosted providers will be off unless selected on purpose; remove the keys if hosted use is not wanted.
+1. **Install a local speech runtime and a local language model?** *Speech: answered and done in V2* (owner chose `faster-whisper` `small`: about 70 MB of packages and 486 MB of weights, both pinned and checksummed). *Language model: answered and done in V3* (owner approved `Qwen3.5-4B` Q4_K_M, 2.74 GB, and `llama.cpp` b11379, 19 MB, both pinned and checksummed). Each item is listed with its source and size before anything is downloaded.
+2. **Hosted keys in this machine's `.env`.** Hosted providers are off unless selected on purpose (V2.1; the local reasoning model since V3 never falls back to them); remove the keys if hosted use is not wanted.
 3. **Nurses use the Doctor App's sign-in** (decision carried from slice 4a).

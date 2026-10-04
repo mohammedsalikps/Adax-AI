@@ -7,6 +7,7 @@
 Support a **licensed clinician** in an outpatient consultation by:
 - showing the clinician the patient's recorded history, allergies, medicines, results, vital signs and earlier consultations;
 - capturing the consultation as text (typed, or transcribed from audio) and proposing, **as drafts for the clinician to accept, edit or reject**, important points, a note summary and suggestions;
+- preparing, on request and **from a language model that runs on the same computer**, an **AI-generated draft** of what the record, the clinician's own notes and the clinician-confirmed points say, with what is missing, where the record disagrees with itself and considerations to weigh, every statement tied to the record items it rests on (slice V3, [ADR 0016](../adr/0016-local-ai-consultation-intelligence.md));
 - recording the clinician's decisions in a signed, tamper-evident, auditable record, and making permitted parts of it available to the patient.
 
 ## Intended users
@@ -20,13 +21,13 @@ Support a **licensed clinician** in an outpatient consultation by:
 
 ## What the software does not do
 
-- It does **not diagnose, prescribe, triage or decide**. Every AI output is a draft that a clinician must accept, edit or reject; nothing AI-generated is signed, prescribed or added to a record without a clinician's action.
+- It does **not diagnose, prescribe, triage or decide**. Every AI output is a draft that a clinician must accept, edit or reject; nothing AI-generated is signed, prescribed or added to a record without a clinician's action. The consultation draft's "considerations" are things to weigh, never orders, never doses, and there is no route from a draft to the diagnoses, the prescription or an order.
 - It does **not** provide a validated measurement. Device readings are stored as *unverified*; blood pressure is entered by a person; thermal flags are rule-based, not validated, and are not a diagnosis.
 - It is **not for emergencies, for unsupervised patient use, or for any use on real patients** until clinical, legal, regulatory and security validation has been done.
 
 ## System boundary
 
-Inside: the web applications (doctor, nurse, patient, admin), the API, the PostgreSQL database, the thermal-processing service, locally hosted AI model servers (planned, [ADR 0012](../adr/0012-local-first-ai-hosted-providers-opt-in.md)), file storage on the same machine.
+Inside: the web applications (doctor, nurse, patient, admin), the API, the PostgreSQL database, the thermal-processing service, locally hosted AI model servers (a speech model, [ADR 0014](../adr/0014-local-speech-service-and-capture-pipeline.md), and a language model, [ADR 0016](../adr/0016-local-ai-consultation-intelligence.md); both loopback only, both downloads approved by the owner), file storage on the same machine.
 
 Outside, and not controlled by ADAXAI: the operating system and network, the clinician's judgement, any wearable or stethoscope hardware (none is integrated today), and any hosted AI provider (off by default; if selected, patient-derived text or audio leaves the machine under the provider's terms).
 

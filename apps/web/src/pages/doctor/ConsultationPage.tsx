@@ -38,6 +38,7 @@ import { useMe, useStillSamePerson } from '../../lib/auth.tsx'
 import { usePortalBase } from '../../lib/clinical.ts'
 import { encounterKey, useEncounter, useStartConsultation } from '../../lib/encounters.ts'
 import { fmtDate, fmtDateTime, fmtTime } from '../../lib/format.ts'
+import { consultKey } from '../../lib/consult.ts'
 import type { NoteInserter } from '../../lib/insert.ts'
 import { useDocumentTitle } from '../../lib/useDocumentTitle.ts'
 
@@ -312,6 +313,8 @@ function ConsultationEditor({ initial, sidePanel, leftPanel, capturePanel }: { i
         setInsertions(e.aiInsertions)
         setSavedAt(new Date())
         void qc.invalidateQueries({ queryKey: ['my-consultations'] })
+        // The consultation intelligence panel compares its draft with the note: it looks again when the note has been saved.
+        void qc.invalidateQueries({ queryKey: consultKey(initial.id) })
         setSaveState(dirtyRef.current ? 'dirty' : 'saved')
       } catch (err) {
         if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
@@ -409,6 +412,7 @@ function ConsultationEditor({ initial, sidePanel, leftPanel, capturePanel }: { i
             setSavedAt(new Date())
             setSaveState(dirtyRef.current ? 'dirty' : 'saved')
             void qc.invalidateQueries({ queryKey: ['my-consultations'] })
+            void qc.invalidateQueries({ queryKey: consultKey(initial.id) })
           } catch (err) {
             if (err instanceof ApiError && err.code === 'version_conflict') setSaveState('conflict')
             else if (isTerminal(err)) block(err)

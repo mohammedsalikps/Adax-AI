@@ -20,6 +20,8 @@ ai:
     # Mana AI summaries of the patient record (answers read directly from the
     # record by explicit rules are always available and need no AI provider).
     patientQa: true
+    # Local AI consultation intelligence (V3): a draft for the doctor to review, made by the local model below.
+    consultationDraft: true
 
   # HOSTED AI EGRESS. May consultation text (pseudonymised, best effort) be sent to a hosted AI provider (Anthropic) for note drafts, recommendations,
   # Mana summaries and photo descriptions? `false`: never, and the features below say "unavailable" even if ANTHROPIC_API_KEY is set: a key in .env
@@ -27,6 +29,21 @@ ai:
   # (true/false) overrides this value. Audio never leaves this computer under either setting: there is no hosted speech provider.
   egress:
     hostedProviders: false
+
+  # THE REASONING MODEL (V3 consultation drafts, V4 Mana). `local`: an open-weight model served by llama.cpp on THIS computer (install it with
+  # `npm run llm:setup`, run it with `npm run dev:llm`); the patient's record goes to a loopback address and nowhere else. `none`: switched off.
+  # `hosted`: the hosted provider, only if hosted egress below is on AND a key is set; it is never used because the local model is down (nothing falls
+  # back). If the local model is not running the screens say "Local AI unavailable." and make no draft. Env LLM_PROVIDER / LLM_URL override these.
+  reasoning:
+    provider: local
+    url: http://127.0.0.1:8081
+    # A draft takes minutes on a laptop CPU; this is the longest one answer may take.
+    timeoutSeconds: 900
+    maxOutputTokens: 2600
+    # How much record text the model is shown (characters across all sources). Older items that do not fit are not shown, and the draft says how many.
+    maxContextChars: 14000
+    # How many other requests may wait for the one local model; more are refused.
+    maxWaiting: 3
 
   # Language model for drafting, extraction and recommendations.
   # Env AI_NOTE_MODEL overrides `model`. Key: ANTHROPIC_API_KEY.

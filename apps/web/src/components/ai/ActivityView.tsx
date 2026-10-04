@@ -8,7 +8,7 @@ import { Button } from '../ui/Button.tsx'
 import { Alert, Badge } from '../ui/Feedback.tsx'
 
 const ACTION_LABEL: Record<string, string> = { accepted: 'accepted', edited: 'edited and accepted', rejected: 'rejected', deferred: 'deferred' }
-const SUBJECT_LABEL: Record<string, string> = { fact: 'fact', recommendation: 'recommendation', draft_item: 'note suggestion', image_analysis: 'image description' }
+const SUBJECT_LABEL: Record<string, string> = { fact: 'fact', recommendation: 'recommendation', draft_item: 'note suggestion', image_analysis: 'image description', consultation_item: 'consultation draft statement' }
 
 /** What ran, with which model and prompt or rules version, who reviewed what, and the audit trail. */
 export function ActivityView({ ai, encounterId }: { ai: EncounterAi; encounterId: string }) {

@@ -87,6 +87,10 @@ class Ctx {
   get currentMeds() {
     return (this.r.current?.items ?? []).filter(isData('medication'))
   }
+  /** The medicines staff typed into the patient's record as current (the medicine list; not a prescription). */
+  get recordedMeds() {
+    return this.r.items.filter(isData('patient_medication')).filter((m) => m.data.status !== 'stopped')
+  }
   get currentDx() {
     return (this.r.current?.items ?? []).filter(isData('diagnosis'))
   }
@@ -114,11 +118,15 @@ function allergySection(c: Ctx): ManaSection {
   return { title: 'Allergies', statements: out }
 }
 
-/** Recorded allergy vs. today's draft prescription and the last signed prescription. */
+/** Recorded allergy vs. today's draft prescription, the last signed prescription and the medicine list staff typed in. */
 function allergyMedicationConflicts(c: Ctx): ManaStatement[] {
   const out: ManaStatement[] = []
   const last = c.lastPrescribed
-  const meds = [...c.currentMeds.map((m) => ({ m, where: 'today’s draft prescription' })), ...(last ? c.meds(last).map((m) => ({ m, where: `the prescription of ${c.date(last.date)}` })) : [])]
+  const meds = [
+    ...c.currentMeds.map((m) => ({ m, where: 'today’s draft prescription' })),
+    ...(last ? c.meds(last).map((m) => ({ m, where: `the prescription of ${c.date(last.date)}` })) : []),
+    ...c.recordedMeds.map((m) => ({ m, where: 'the medicine list in the record' })),
+  ]
   for (const a of c.allergies.filter((x) => x.data.active)) {
     for (const { m, where } of meds) {
       const group = sharedGroup(m.data.drugName, a.data.substance, c.s.safety.allergyGroups)
@@ -408,4 +416,67 @@ export function itemsForGeneration(intent: ManaIntent, record: PatientRecord, ci
     kept.push(i)
   }
   return kept.sort((a, b) => order.get(a.ref)! - order.get(b.ref)!)
+}
+
+// --- the record check (consultation draft, V3) -------------------------------------------------------------------------------------------
+
+/** Version of the explicit rules that find what is conflicting, old or missing in a record. Change it when the rules change. */
+export const RECORD_CHECK_VERSION = 'record-check-v1'
+
+export interface RecordFinding {
+  text: string
+  refs: string[]
+}
+
+/**
+ * What the record itself shows to be conflicting, old or missing, found by the same explicit rules as the answers above (no language model).
+ * The consultation draft shows these whether or not a model is available, and labels them as rules. Pure: same record, same findings.
+ */
+export function recordChecks(record: PatientRecord, settings: RuleSettings): { conflicts: RecordFinding[]; outdated: RecordFinding[]; missing: RecordFinding[] } {
+  const c = new Ctx(record, settings)
+  const conflicts: RecordFinding[] = []
+  const old: RecordFinding[] = []
+  const missing: RecordFinding[] = []
+  const active = c.allergies.filter((a) => a.data.active)
+
+  // Conflicts: an allergy against "no known allergies"; an allergy against a drafted or recent medicine of the same configured group; readings of one
+  // kind at this visit that disagree beyond the configured tolerance.
+  if (record.patient.noKnownAllergies && active.length) conflicts.push({ text: 'The record says “no known allergies” but also lists active allergies. Confirm with the patient.', refs: active.map((a) => a.ref) })
+  for (const s of allergyMedicationConflicts(c)) conflicts.push({ text: s.text, refs: s.refs })
+  const visitId = record.currentVisitId
+  const here = visitId ? c.observations.filter((o) => o.data.visitId === visitId) : []
+  for (const kind of VITAL_ORDER) {
+    const mine = here.filter((o) => o.data.kind === kind)
+    const cur = mine[0]
+    if (!cur) continue
+    const tol = settings.safety.vitalTolerance[kind]
+    const off = tol !== undefined ? mine.filter((o) => Math.abs(o.data.value - cur.data.value) > tol) : []
+    if (off.length) conflicts.push({ text: `${VITALS[kind].label} was recorded more than once at this visit with different values: ${[cur, ...off].map((o) => fmtV(kind, o.data.value)).join(' and ')}. Check which is correct.`, refs: [cur.ref, ...off.map((o) => o.ref)] })
+  }
+
+  // Outdated: the newest signed consultation and the last prescription are older than the configured age; an amendment may correct the prescription.
+  const latest = record.consultations[0]
+  if (latest) {
+    const age = c.daysAgo(latest.date)
+    if (age > settings.outdatedDays) old.push({ text: `The most recent signed consultation is ${age} days old (${c.date(latest.date)}).`, refs: latest.items.slice(0, 1).map((i) => i.ref) })
+  }
+  const last = c.lastPrescribed
+  if (last) {
+    const age = c.daysAgo(last.date)
+    if (age > settings.outdatedDays) old.push({ text: `The last prescription is ${age} days old; the patient’s current medicines may differ. Confirm what they take now.`, refs: c.meds(last).map((m) => m.ref) })
+    const am = c.amendments(last)
+    if (am.length) old.push({ text: `The consultation with that prescription was amended on ${am.map((a) => c.date(a.date)).join(', ')}; read the amendment, which may correct the prescription.`, refs: am.map((a) => a.ref) })
+  }
+
+  // Missing: what the record could hold and does not, for this visit.
+  const status = c.allergyStatus
+  if (!active.length && status && !status.data.noKnownAllergies) missing.push({ text: 'Allergy status is not recorded.', refs: [status.ref] })
+  if (visitId) {
+    if (!c.visitReason(visitId)) missing.push({ text: 'No reason for visit was recorded at check-in.', refs: [] })
+    if (!here.length) missing.push({ text: 'No vital signs are recorded at this visit.', refs: [] })
+  }
+  if (record.current && !c.note(record.current, 'chiefComplaint')) missing.push({ text: 'The chief complaint of today’s note is empty.', refs: [] })
+  const listedMedicines = record.items.some((i) => i.data.t === 'patient_medication' && i.data.status === 'current')
+  if (!listedMedicines && !c.currentMeds.length && !last) missing.push({ text: 'No current medicines are recorded.', refs: [] })
+  return { conflicts, outdated: old, missing }
 }

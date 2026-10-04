@@ -86,11 +86,15 @@ export function makeScrubber(p: PatientIdentifiers): (text: string) => string {
   }
   name(p.givenName, '[PATIENT]')
   name(p.familyName, '[PATIENT]')
+  // A name of several words ("Mary Anne", "Van Der Berg") is also written by its parts.
+  for (const full of [p.givenName, p.familyName ?? '']) for (const part of full.split(/[\s'’-]+/)) if (part.length >= 4) name(part, '[PATIENT]')
   for (const part of (p.emergencyContactName ?? '').split(/\s+/)) name(part, '[CONTACT]')
-  patterns.push([new RegExp(escapeRe(p.mrn), 'gi'), '[MRN]'])
+  // The MRN as issued, or with a space or no dash in it.
+  patterns.push([new RegExp(escapeRe(p.mrn).replace(/-/g, '[\\s-]?'), 'gi'), '[MRN]'])
   for (const phone of [p.phone, p.emergencyContactPhone ?? '']) {
     const digits = phone.replace(/\D/g, '').slice(-10)
-    if (digits.length === 10) patterns.push([new RegExp(digits.split('').join('[\\s-]?'), 'g'), '[PHONE]'])
+    // Written with spaces, dashes, dots or brackets between the digits.
+    if (digits.length === 10) patterns.push([new RegExp(`\\(?${digits.split('').join('[\\s\\-.()]*')}`, 'g'), '[PHONE]'])
   }
   return (text) => patterns.reduce((t, [re, rep]) => t.replace(re, rep), text)
 }

@@ -63,7 +63,11 @@ description; the assistant panel then says where text would go. Only do that wit
 checking your provider agreement. **Live transcription needs no key**: after the one-time `npm run speech:model`
 download, `npm run dev` starts a local speech service and the consultation's *Live transcription*
 card records with the microphone, on this computer only. Without the download it says "Local
-transcription unavailable" and typed transcripts still work.
+transcription unavailable" and typed transcripts still work. **The consultation draft needs no key
+either**: after the one-time `npm run llm:setup` download (about 2.74 GB; it asks first and checks every
+file), `npm run dev` starts a local language model on `127.0.0.1:8081`; a draft then takes **a few minutes**
+on a laptop CPU. Without the download the *Consultation intelligence* card says **"Local AI
+unavailable."** and makes nothing up.
 
 ## 0. The doctor's day and the patient's history (dr.meera)
 
@@ -171,6 +175,39 @@ Mana flags a **Conflict** with the recorded penicillin allergy (illustrative con
 - the signed record keeps the reference.
 
 Accepted assistant items use **Add to …** the same way.
+
+### Consultation intelligence: a local AI draft (needs `npm run llm:setup`)
+
+At the top of the right-hand column. Everything it shows is a draft marked **AI DRAFT · AI-GENERATED ·
+REQUIRES DOCTOR REVIEW**. Try it on Ravi (penicillin allergy, an earlier signed consultation) after
+confirming a few points from step 3 and, for a conflict to show, adding **Amoxicillin** to the prescription.
+
+1. With the model not running, the card says **"Local AI unavailable."** and shows the **record check**
+   (fixed rules, not AI): the Amoxicillin–penicillin conflict is there without any model. **Check again**
+   re-asks the model server.
+2. With the model running, **Generate draft**. The badge reads **GENERATING** with the time elapsed
+   ("it can take a few minutes on this computer": about one to four on the development laptop);
+   **Cancel** stops it. Do not expect seconds.
+3. **READY FOR REVIEW**: the draft is grouped (summary; current problem; relevant history; considerations;
+   investigations; medication considerations; missing information; conflicts and uncertainties). Each
+   statement has a **support badge** that the server chose (*supported by record*, *inferred*, *not found*,
+   *conflicting*, *outdated*), **Checks to make** where the system could not verify something, and
+   **Sources** that open to the exact record items it rests on. The Amoxicillin statements read
+   **CONFLICTING**, with the rule's own sentence under them.
+4. A marked statement shows **I have checked this against the record**; **Accept** stays disabled until
+   it is ticked. **Accept**, **Edit** and **Reject** change nothing in the note; **Add to note**, after
+   accepting, is a separate click that appends the reviewed text and shows **In the note**.
+5. Edit the note (or confirm another point) and the card shows **STALE** with what changed; **Generate a
+   new draft** makes version 2 and keeps version 1.
+6. Look at *How this draft was made*: model, runtime and weights hash, prompt and rules versions, how many
+   record items the model was shown and how many statements the checks removed.
+7. If a later attempt fails or you cancel it, the draft you already have **stays on screen** under a note,
+   **"The newest attempt did not finish"**; with no earlier draft the badge reads **FAILED** or **CANCELLED**
+   and offers **Try again**.
+
+What it will **not** do: diagnose, order, prescribe, write to the diagnoses or the prescription, use the
+transcript or anything you rejected, or fall back to a hosted model. If a model answer is made of
+statements the record does not support, they are removed and the draft says **PARTIALLY AVAILABLE**.
 
 ## 4. Signed record, drafts and integrity
 

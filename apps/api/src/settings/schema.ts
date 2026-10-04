@@ -11,7 +11,7 @@ export const AppSettings = z
     ai: z
       .object({
         features: z
-          .object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean() })
+          .object({ noteDraft: z.boolean(), extraction: z.boolean(), recommendations: z.boolean(), imageAnalysis: z.boolean(), liveTranscription: z.boolean(), patientQa: z.boolean(), consultationDraft: z.boolean() })
           .strict(),
         llm: z
           .object({
@@ -26,6 +26,22 @@ export const AppSettings = z
         // Speech-to-text is local only: "none" until the speech service is configured on purpose (SPEECH_PROVIDER=local). There is no hosted provider.
         stt: z
           .object({ provider: z.enum(['none', 'local']), url: z.url(), liveChunkSeconds: z.number().int().min(5).max(120), languageHint: z.string().regex(/^[a-z]{2,3}$/).nullable() })
+          .strict(),
+        // The language model that writes consultation drafts (V3) and answers (V4): a local open-weight model served by llama.cpp on this computer
+        // (scripts/llm.mjs), `hosted` only behind the egress policy below, or `none`. Nothing falls back from one to another. Env LLM_PROVIDER and
+        // LLM_URL override these; the per-install secret is LLM_API_KEY (or the file scripts/llm.mjs makes).
+        reasoning: z
+          .object({
+            provider: z.enum(['none', 'local', 'hosted']),
+            url: z.url(),
+            /** Longest one answer may take. A draft takes minutes on a laptop CPU. */
+            timeoutSeconds: z.number().int().min(30).max(3600),
+            maxOutputTokens: z.number().int().min(500).max(8000),
+            /** How much the model is sent (characters of the whole message, the sources and the words around them): nothing goes over it, this visit's items first. */
+            maxContextChars: z.number().int().min(2000).max(60_000),
+            /** How many requests may wait behind the one the model is answering; more are refused. */
+            maxWaiting: z.number().int().min(0).max(20),
+          })
           .strict(),
         // Whether consultation text may leave this computer for a hosted AI provider. False unless someone says otherwise on purpose: a provider key
         // in .env does not change it. (Audio never leaves: there is no hosted speech provider.)

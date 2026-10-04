@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { E2E_DB } from './e2e/db-names.ts'
 
@@ -6,8 +8,14 @@ import { E2E_DB } from './e2e/db-names.ts'
 // can run while `npm run dev` is up and never touches development data.
 // Importing db-names stops the run here, before any server starts, if the
 // database names are ambiguous (e.g. the e2e name equals the development one).
-const PORTS = { api: 4100, thermal: 8101, web: 5273, mockAnthropic: 4199, mockSpeech: 8199 }
+const PORTS = { api: 4100, thermal: 8101, web: 5273, mockAnthropic: 4199, mockSpeech: 8199, mockLlm: 8181 }
+// The secret the stand-in for the local model server checks (a placeholder for the test run, not a credential), and the one the API presents to it.
+const MOCK_LLM_KEY = 'e2e-llm-secret-not-a-key'
 const WEB = `http://127.0.0.1:${PORTS.web}`
+// Opt-in real-model run (e2e/consult-real.spec.ts): E2E_LLM_URL points the API at the running local model server instead of the stand-in. That server
+// checks a per-install secret (.data/llm/api-key, made by scripts/llm.mjs); it is read here, handed to the API through its environment, and never printed.
+const LLM_URL = process.env.E2E_LLM_URL ?? `http://127.0.0.1:${PORTS.mockLlm}`
+const LLM_KEY = process.env.E2E_LLM_URL ? fs.readFileSync(path.resolve(process.cwd(), '.data', 'llm', 'api-key'), 'utf8').trim() : MOCK_LLM_KEY
 
 export default defineConfig({
   testDir: 'e2e',
@@ -46,6 +54,14 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
+      // TEST-ONLY stand-in for the local language-model server (e2e/mock-llm.mjs): it answers from the record items it is shown, no model, loopback only.
+      command: 'node e2e/mock-llm.mjs',
+      url: `http://127.0.0.1:${PORTS.mockLlm}/health`,
+      env: { MOCK_LLM_PORT: String(PORTS.mockLlm), MOCK_LLM_KEY },
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
       // TEST-ONLY stand-in for the local speech service (e2e/mock-speech.mjs): a fixed synthetic script, no model, loopback only.
       command: 'node e2e/mock-speech.mjs',
       url: `http://127.0.0.1:${PORTS.mockSpeech}/health`,
@@ -68,6 +84,10 @@ export default defineConfig({
         // Hosted AI egress is off unless allowed on purpose (a key alone enables nothing). Allowed here, only because the "hosted provider" is the
         // loopback mock above; the capture specs assert that the mock is never called during capture.
         AI_EGRESS_HOSTED: 'true',
+        // Local AI consultation intelligence: the local model boundary, pointed at the loopback stand-in (a real model only in the opt-in run above).
+        LLM_PROVIDER: 'local',
+        LLM_URL,
+        LLM_API_KEY: LLM_KEY,
         // Speech-to-text: the local service boundary, pointed at the loopback stand-in. There is no hosted provider to configure.
         SPEECH_PROVIDER: 'local',
         // Opt-in real-model run (e2e/capture-real.spec.ts): E2E_SPEECH_URL points at a running local speech service instead of the stand-in.

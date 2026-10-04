@@ -1,8 +1,8 @@
 import { type ManaSource, type ManaSourceStatus, VITALS, type VitalKind } from '@adaxai/contracts'
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, lte, ne, sql } from 'drizzle-orm'
 import type { SessionUser } from '../auth/sessions.ts'
 import type { DbOrTx } from '../db/client.ts'
-import { allergies, diagnoses, encounterAmendments, encounters, facilities, observations, prescriptionItems, thermalCaptures, users, visits } from '../db/schema.ts'
+import { allergies, diagnoses, encounterAmendments, encounters, facilities, investigationResults, observations, patientConditions, patientMedications, prescriptionItems, thermalCaptures, users, visits } from '../db/schema.ts'
 import { makeScrubber } from '../ai/text.ts'
 import { notFound } from '../http/errors.ts'
 import { ageOn, facilityToday, getPatientOr404, type PatientRow } from '../patients/service.ts'
@@ -30,6 +30,9 @@ export type ItemData =
   | { t: 'observation'; kind: VitalKind; value: number; unit: string; source: string; validationStatus: string; visitId: string | null; measuredAt: Date }
   | { t: 'visit'; visitId: string; visitDate: string; reason: string }
   | { t: 'thermal'; region: string }
+  | { t: 'condition'; name: string; status: string }
+  | { t: 'patient_medication'; drugName: string; summary: string; status: string }
+  | { t: 'investigation'; testName: string; flag: string; collectedOn: string }
 
 export interface RecordItem extends ManaSource {
   data: ItemData
@@ -79,6 +82,8 @@ export interface RecordOptions {
   encounterId?: string | undefined
   maxEncounters: number
   observationDays: number
+  /** Also the history typed in by staff (slice V1): conditions, medicines and investigation results. Off for Mana's own answers; on for the consultation draft. */
+  includeHistory?: boolean | undefined
 }
 
 /** Readings kept per vital-sign kind and visit (the newest). */
@@ -251,6 +256,56 @@ export async function loadPatientRecord(db: DbOrTx, me: SessionUser, patientId: 
     const region = (t.protocol as { bodyRegion: string }).bodyRegion
     const pairs = (t.pairStats as { a: string; b: string; meanDiff: number | null }[]).map((p) => `${p.a} minus ${p.b} mean ${p.meanDiff ?? 'n/a'} °C`).join('; ')
     add('T', { sourceType: 'thermal_capture', sourceId: t.id, encounterId: null, date: t.createdAt.toISOString(), field: 'Thermal measurement', status: 'recorded', provenance: 'record', excerpt: `Approved thermal measurement, ${region}: ${pairs || 'no paired regions'} (measurement only, not validated)`, data: { t: 'thermal', region } })
+  }
+
+  // The history typed in by staff (conditions, the medicines list, results), when asked for. Entries marked as made in error are left out.
+  if (opts.includeHistory) {
+    const [conditions, medicines, results] = await Promise.all([
+      db.select().from(patientConditions).where(and(eq(patientConditions.patientId, patient.id), ne(patientConditions.status, 'entered_in_error'))).orderBy(desc(patientConditions.enteredAt)),
+      db.select().from(patientMedications).where(and(eq(patientMedications.patientId, patient.id), ne(patientMedications.status, 'entered_in_error'))).orderBy(desc(patientMedications.enteredAt)),
+      db.select().from(investigationResults).where(and(eq(investigationResults.patientId, patient.id), ne(investigationResults.status, 'entered_in_error'))).orderBy(desc(investigationResults.collectedOn)).limit(30),
+    ])
+    for (const c of conditions) {
+      add('H', {
+        sourceType: 'patient_condition',
+        sourceId: c.id,
+        encounterId: null,
+        date: c.enteredAt.toISOString(),
+        field: 'Known condition',
+        status: c.status === 'resolved' ? 'inactive' : 'active',
+        provenance: 'record',
+        excerpt: `Condition: ${scrub(c.name)}${c.code ? ` (${scrub(c.code)})` : ''}, since ${c.sinceMonth ? `${String(c.sinceMonth).padStart(2, '0')}/` : ''}${c.sinceYear}, ${c.status}${c.note ? `. Note: ${scrub(c.note)}` : ''}`,
+        data: { t: 'condition', name: c.name, status: c.status },
+      })
+    }
+    for (const m of medicines) {
+      const detail = [m.drugName, m.strength, m.form, `dose ${m.dose}`, m.route, m.frequency].filter(Boolean).join(', ')
+      add('U', {
+        sourceType: 'patient_medication',
+        sourceId: m.id,
+        encounterId: null,
+        date: m.enteredAt.toISOString(),
+        field: m.status === 'stopped' ? 'Stopped medicine' : 'Current medicine',
+        status: m.status === 'stopped' ? 'inactive' : 'active',
+        provenance: 'record',
+        excerpt: `${m.status === 'stopped' ? 'Stopped medicine' : 'Current medicine'}: ${scrub(detail)}${m.reason ? `; for ${scrub(m.reason)}` : ''}${m.startedOn ? `; started ${m.startedOn}` : ''}${m.stoppedOn ? `; stopped ${m.stoppedOn}` : ''}${m.status === 'stopped' && m.statusReason ? ` (${scrub(m.statusReason)})` : ''}`,
+        data: { t: 'patient_medication', drugName: m.drugName, summary: detail, status: m.status },
+      })
+    }
+    for (const r of results) {
+      const range = r.refText ? ` (reference ${r.refText})` : r.refLow !== null || r.refHigh !== null ? ` (reference ${r.refLow ?? ''} to ${r.refHigh ?? ''})` : ''
+      add('L', {
+        sourceType: 'investigation_result',
+        sourceId: r.id,
+        encounterId: null,
+        date: r.collectedOn,
+        field: 'Investigation result',
+        status: 'recorded',
+        provenance: 'record',
+        excerpt: `Result: ${scrub(r.testName)} ${scrub(r.valueText)}${r.unit ? ` ${scrub(r.unit)}` : ''}${scrub(range)}, flag ${r.flag}, collected ${r.collectedOn}${r.note ? `. ${scrub(r.note)}` : ''}`,
+        data: { t: 'investigation', testName: r.testName, flag: r.flag, collectedOn: r.collectedOn },
+      })
+    }
   }
 
   return {

@@ -28,6 +28,7 @@ decisions: [docs/adr/](docs/adr/) · what the Doctor App actually does today:
 | Mana AI (patient-record companion) | Doctor asks about one patient (suggested questions or free text): pre-consultation briefing, history summary, last prescription, vital signs compared with the previous reading, changes since the previous visit, allergies, diagnoses, record search. Answers come from the record by explicit versioned rules (`mana-record-v1`, no AI key needed): every statement cites the record item (type, consultation, date, field, status, provenance) with a link; absence, conflicts, outdated and amended records are flagged. Optional AI summary (`mana-qa-v1`) only with a provider key **and** the patient's `ai_record_assistant` consent, labelled AI-generated, citations verified on the server. Answers are immutable and audited; doctors mark them reviewed or insert them into the note |
 | AI text in notes | AI or rule output enters a note only through a server-recorded insertion of reviewed output, which keeps a reference to the AI artifact (provider, model, prompt or rules version); shown under the note section, in the sign dialog and on the signed record; listed in the signed snapshot |
 | Live consultation capture (V2) | Consent check, browser microphone recording (start, pause, resume, stop), **local speech-to-text** in 20-second parts (a speech model that runs on this computer; no hosted speech service exists in the product), a timestamped transcript with language, doctor-assigned speakers, **important points** proposed by fixed rules and confirmed or rejected by the doctor (raw transcript, extracted draft and doctor-confirmed are kept visibly apart). Needs the one-time `npm run speech:model` download; without it the screen says "Local transcription unavailable" |
+| Local AI consultation intelligence (V3) | A **language model that runs on this computer** (llama.cpp with Qwen3.5-4B; no key, nothing leaves it) reads the authorised record, the doctor's notes and **only the confirmed points** and writes an **AI-generated draft** for the doctor: summary, symptoms, observations, history, allergies, medicines, **potential considerations, investigations and medication considerations** (never orders or doses), **missing information** and **uncertainties**. Every statement cites the record items it rests on; **code, not the model, decides each statement's support state** (supported by record / inferred / not found / conflicting / outdated) and removes or marks what it cannot verify; conflicts come from fixed rules. The doctor accepts, edits or rejects each one; nothing reaches the note, diagnoses or prescription without a separate "Add to note". It takes **minutes** on a laptop CPU, can be cancelled, is versioned and audited, and goes **stale** when the record changes. Without the model the screen says **"Local AI unavailable."**; there is **no fallback to a hosted model**. Needs the one-time `npm run llm:setup` download (about 2.74 GB). Measured on 12 synthetic cases only: [docs/safety/AI_MODELS.md](docs/safety/AI_MODELS.md); [ADR 0016](docs/adr/0016-local-ai-consultation-intelligence.md) |
 | AI consultation assistant | Consent, note drafting, deterministic comparison with the record, evidence-backed fact review, (the transcript and important points are in the capture cards), deterministic comparison with the record, rule-based safety checks (no AI needed), history-aware recommendations citing record items, accept/edit/reject/defer for every AI output with confirmation gates, jobs with retry and idempotency, activity and audit trail. See [AI: what is and is not real](#ai-what-is-and-is-not-real) |
 | Clinical photographs | Consent-gated JPEG/PNG/WebP upload validated by the Python service (DICOM rejected), original kept unchanged, metadata-free preview, optional AI description marked unverified and reviewed before use |
 | FLIR thermal imaging | Consent-gated radiometric JPEG upload with capture protocol, per-pixel °C matrix via `flyr`, viewer, regions with statistics and paired differences, doctor approval (then frozen) |
@@ -134,6 +135,15 @@ decisions: [docs/adr/](docs/adr/) · what the Doctor App actually does today:
   486 MB model, from PyPI and Hugging Face; MIT-licensed): `npm run speech:setup` (done by
   `npm run setup`) then `npm run speech:model`. `npm run dev` starts the local speech service on
   `127.0.0.1:8002` and the API uses it when `SPEECH_PROVIDER=local` is in `.env`.
+- Optional, one-time **download** for the local consultation draft (a 19 MB llama.cpp runtime and a
+  2.74 GB Qwen3.5-4B model, from GitHub and Hugging Face; MIT and Apache-2.0; each file is checked
+  against the SHA-256 pinned in `services/llm/*.lock.json` and a mismatch is deleted): `npm run llm:setup`
+  (asks first). `npm run dev` then starts the model server on `127.0.0.1:8081` with a per-install secret
+  (`.data/llm/api-key`, never shown); without it the screen says "Local AI unavailable." and everything
+  else works. It runs on the CPU and needs about 4.5 GB of free memory while it answers (measured on the development
+  laptop: 2.2 GB committed and 4.2 to 4.5 GB resident at most, flat over many requests because the launcher
+  switches prompt caching off, so it keeps no copy of earlier prompts); a draft takes minutes (68 to 214 seconds
+  for the twelve evaluation cases on that laptop).
 
 ## Quick start
 
@@ -175,7 +185,8 @@ PostgreSQL keeps running after `npm run dev` exits; stop it with `npm run db:sto
 | Transcription of recorded or uploaded audio, live in 20-second parts | **Local speech service** (`faster-whisper` small, CPU) after `npm run speech:model`; no key, **no audio leaves this computer** (unless the clinic points `SPEECH_URL` at its own service on another computer on purpose, which the screens then say); finished text per part, no interim text; English is the supported language |
 | Important points | **Fixed rules on this computer** (`extract-rules-v1`, English only); no key. A hosted language-model extractor exists only if `ai.extraction.provider: llm` is set on purpose |
 | Speaker identification | **Not done by any model.** The doctor assigns Doctor / Patient / … line by line (kept as a review); typed “Doctor:” / “Patient:” labels are the typed text's own |
-| Clinical accuracy of any AI output | **Not evaluated.** Tested only against test doubles and a local mock of the provider API |
+| Consultation draft (summary, considerations, missing information, uncertainties) | **Local model on this computer** (llama.cpp, Qwen3.5-4B) after `npm run llm:setup`; no key, no text leaves the computer; a down model is "Local AI unavailable." and **never** replaced by a hosted one; every statement is checked against the record by code and is a draft until the doctor accepts it. Evaluated on 12 synthetic cases only |
+| Clinical accuracy of any AI output | **Not evaluated clinically.** The consultation draft was run with the real local model on 12 synthetic cases (counts, no accuracy figure: [docs/safety/AI_MODELS.md](docs/safety/AI_MODELS.md)); every other AI step was tested only against test doubles and a local mock of the provider API |
 
 - **Drafts only.** Nothing reaches the note until the doctor accepts or edits an item and adds
   it; the server records each insertion with a reference to the AI artifact, and the signed
@@ -188,8 +199,9 @@ PostgreSQL keeps running after `npm run dev` exits; stop it with `npm run db:sto
 - **Versions and logs.** Every job records provider, answering model, prompt or rules version,
   tokens, latency, errors, data origin and a hash of the non-secret AI settings. Prompt texts are
   checksummed: a changed prompt must get a new version id.
-- **Consent.** `ai_recording` (wording `2026-10-v2`) covers recording, drafting and record-aware
-  recommendations; Mana AI summaries need `ai_record_assistant` (Mana record answers do not);
+- **Consent.** `ai_recording` (wording `2026-10-v2`) covers recording, drafting, record-aware
+  recommendations and the local consultation draft (whether a local model needs its own consent is
+  a governance decision that was not made); Mana AI summaries need `ai_record_assistant` (Mana record answers do not);
   photographs need `clinical_photography`, their AI description `ai_image_analysis`.
 - **Privacy.** Registered names, MRN, phone numbers and emergency-contact details are replaced
   before text is sent; only age band and sex are sent; only a metadata-free photo preview. Other
@@ -235,6 +247,7 @@ All services listen on localhost only.
 | API | <http://127.0.0.1:4000/api/health> (proxied by the web app under `/api`) |
 | Python service | <http://127.0.0.1:8001/health> (OpenAPI docs at `/docs`) |
 | PostgreSQL | `127.0.0.1:5433` |
+| Local language model (optional) | `127.0.0.1:8081` (`/health` answers without the secret; everything else needs it) |
 
 ## Commands
 
@@ -245,6 +258,8 @@ All services listen on localhost only.
 | `npm run demo:seed` | Add the synthetic demo patient (idempotent) |
 | `npm run db:start` / `db:stop` / `db:status` | PostgreSQL lifecycle |
 | `npm run db:selftest` | Persistence check: write → clean stop → start → read, plus UTF-8 round-trip |
+| `npm run llm:setup` / `llm:status` / `llm:verify` / `dev:llm` | The local language model: download the pinned runtime and model after asking (hash-checked), show what is installed, re-check the model's SHA-256, run the server on loopback with the per-install secret |
+| `npm run eval:consult -- [--split dev\|test] [--replay]` | Run the consultation-draft evaluation with the real local model (minutes per case; not part of `npm test`) or re-score the recorded answers with the current checks |
 | `npm run db:migrate` | Apply migrations to the dev database (`-- --target test` or `e2e`). Also marks what the database is for (development, test or e2e) and refuses a database marked for something else |
 | `npm run db:seed` | Synthetic staff and departments (idempotent) |
 | `npm run db:generate` | Generate a new SQL migration from `apps/api/src/db/schema.ts` |
@@ -351,7 +366,7 @@ validated strictly at start-up:
 | --- | --- | --- |
 | [`config/adaxai.yaml`](config/adaxai.yaml) | AI features, models, effort, timeouts, live chunk length, context limits, Mana record window and outdated threshold, upload types and limits, retention, safety-rule groups and tolerances | **API restart** |
 | [`config/routing.yaml`](config/routing.yaml) | Routing rules, red-flag phrases and instructions, required intake | **At runtime** (re-read on change; an invalid edit keeps the last valid rules) |
-| `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `AI_EGRESS_HOSTED`, `SPEECH_PROVIDER`, `SPEECH_URL` (the old `AI_STT_*` settings are ignored) | **Restart** |
+| `.env` | Secrets, ports, `DATA_ORIGIN`, `AI_NOTE_MODEL`, `AI_EGRESS_HOSTED`, `SPEECH_PROVIDER`, `SPEECH_URL`, `LLM_PROVIDER`, `LLM_URL`, `LLM_PORT`, `LLM_CTX`, `LLM_THREADS` (the old `AI_STT_*` settings are ignored; the model server's secret is in `.data/llm/api-key`, not in `.env`) | **Restart** |
 
 `DATA_ORIGIN` (default `synthetic`) is recorded on AI jobs, photographs, stethoscope recordings
 and thermal images; set `clinical` only in a real clinical deployment.

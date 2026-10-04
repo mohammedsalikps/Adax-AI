@@ -39,6 +39,7 @@ import { AdminDevicesPage, StaffDevicesPage } from './pages/DevicesPages.tsx'
 import { AuscultationCard } from './components/clinical/AuscultationCard.tsx'
 import { PortalConsentsPage, PortalHomePage, PortalProfilePage, PortalRecordPage, PortalRecordsPage, PortalVisitsPage, PortalVitalsPage } from './pages/patient/PortalPages.tsx'
 import { ClinicalImagesCard } from './components/clinical/ClinicalImagesCard.tsx'
+import { ConsultationIntelligence } from './components/ai/ConsultationIntelligence.tsx'
 import { ManaPanel } from './components/mana/ManaPanel.tsx'
 
 const portal = (role: Role) => (
@@ -118,6 +119,7 @@ const router = createBrowserRouter([
             )}
             sidePanel={(e, inserter) => (
               <>
+                <ConsultationIntelligence encounterId={e.id} inserter={inserter} />
                 <ManaPanel patientId={e.patient.id} encounterId={e.id} inserter={inserter} />
                 <AiAssistantPanel encounter={e} inserter={inserter} />
               </>

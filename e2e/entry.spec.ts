@@ -424,6 +424,9 @@ test('the sign-in pages work from the keyboard: labelled fields in a sensible or
   expect(await page.getByRole('link', { name: 'Continue as Doctor' }).evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none')
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(at('/login/doctor'))
+  // The address changes before the page does (the route loads on its first visit, slowly on a cold development server): wait for the form itself,
+  // or the focus starting point is still in the page that is being replaced and the first Tab lands somewhere else.
+  await expect(page.getByLabel('Doctor username')).toBeVisible()
 
   // From the top: the way back to the applications comes before the fields, then username, password, the toggle, Sign in.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())

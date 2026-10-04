@@ -21,7 +21,7 @@ interface Item {
   producedBy: { provider: string | null; model: string | null; version: string | null }
 }
 
-const SUBJECT: Record<string, string> = { fact: 'Fact', recommendation: 'Recommendation', draft_item: 'Note suggestion', image_analysis: 'Image description' }
+const SUBJECT: Record<string, string> = { fact: 'Fact', recommendation: 'Recommendation', draft_item: 'Note suggestion', image_analysis: 'Image description', consultation_item: 'Consultation draft statement' }
 
 /** Rejected and edited AI output, for doctors reviewing where the assistant goes wrong. */
 export function AiReviewPage() {

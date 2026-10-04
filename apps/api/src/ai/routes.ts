@@ -305,7 +305,8 @@ export function registerAiRoutes(app: FastifyInstance, deps: AiRouteDeps) {
         producedBy: { provider: run.provider, model: run.model, version: run.promptVersion },
         evidence: evidence.get(r.id) ?? [],
       })),
-      reviewActions: reviews.map(({ a, by }) => ({ id: a.id, subjectType: a.subjectType, subjectId: a.subjectId, action: a.action, text: a.text, reason: a.reason, actorName: by, createdAt: a.createdAt.toISOString() })),
+      // The statements of a consultation draft are for the doctor who is making that consultation (V3): the decisions on them are not listed to others.
+      reviewActions: reviews.filter(({ a }) => a.subjectType !== 'consultation_item' || e.doctorId === me.id).map(({ a, by }) => ({ id: a.id, subjectType: a.subjectType, subjectId: a.subjectId, action: a.action, text: a.text, reason: a.reason, actorName: by, createdAt: a.createdAt.toISOString() })),
       audit: auditRows.map(({ a, by }) => ({ id: String(a.id), action: a.action, outcome: a.outcome, actorName: by, occurredAt: a.occurredAt.toISOString() })),
     }
   }

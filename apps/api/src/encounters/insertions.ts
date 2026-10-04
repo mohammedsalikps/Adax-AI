@@ -1,11 +1,11 @@
-import { type ImageType, InsertIntoNoteRequest, type InsertionSubject, NOTE_SECTION_MAX, type NoteFields, type NoteInsertion, photoNoteText } from '@adaxai/contracts'
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { CONSULT_NOTE_SECTION, type ConsultSection, type ImageType, InsertIntoNoteRequest, type InsertionSubject, LIVE_DRAFT_STATUSES, NOTE_SECTION_MAX, type NoteFields, type NoteInsertion, photoNoteText } from '@adaxai/contracts'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { audit } from '../audit/audit.ts'
 import { currentUser } from '../auth/plugin.ts'
 import type { DbOrTx, Db } from '../db/client.ts'
-import { aiDraftItems, aiDrafts, aiRecommendations, aiReviewActions, aiRuns, clinicalFacts, clinicalImages, encounters, imageAnalyses, manaQuestions, noteInsertions, users } from '../db/schema.ts'
+import { aiDraftItems, aiDrafts, aiRecommendations, aiReviewActions, aiRuns, clinicalFacts, clinicalImages, consultationDraftItems, consultationDrafts, encounters, imageAnalyses, manaQuestions, noteInsertions, users } from '../db/schema.ts'
 import { badRequest, conflict, HttpError, notFound } from '../http/errors.ts'
 import { parse } from '../http/validate.ts'
 import { assertOwnDraft, assertWithDoctor, getEncounterOr404, loadEncounter } from './service.ts'
@@ -72,6 +72,16 @@ async function verifySubject(db: Db, e: EncounterRow, type: InsertionSubject, id
       if (!row || row.img.patientId !== e.patientId) throw notFound('Photo description')
       if (!REVIEWED.includes(row.a.status)) throw notReviewed()
       return { producedBy: produced(await runOf(row.a.runId)), expected: photoNoteText(row.img.imageType as ImageType, row.img.bodySite, row.a.finalText ?? (row.a.result as { summary: string }).summary) }
+    }
+    case 'consultation_item': {
+      const [row] = await db.select({ item: consultationDraftItems, draft: consultationDrafts }).from(consultationDraftItems).innerJoin(consultationDrafts, eq(consultationDrafts.id, consultationDraftItems.draftId)).where(eq(consultationDraftItems.id, id))
+      if (!row || row.draft.encounterId !== e.id) throw notFound('Consultation draft statement')
+      if (!REVIEWED.includes(row.item.decision)) throw notReviewed()
+      // A comment on the record (an uncertainty) is not something for the note, and only the current draft's statements go there (as with review).
+      if (CONSULT_NOTE_SECTION[row.item.section as ConsultSection] === null) throw conflict('This statement is a comment on the record, not text for the note', 'not_insertable')
+      const [newest] = await db.select({ v: sql<number>`max(${consultationDrafts.version})::int` }).from(consultationDrafts).where(and(eq(consultationDrafts.encounterId, e.id), inArray(consultationDrafts.status, [...LIVE_DRAFT_STATUSES])))
+      if ((newest?.v ?? row.draft.version) > row.draft.version) throw conflict('A newer draft replaced this one; use the statements of the newer draft', 'superseded')
+      return { producedBy: produced(await runOf(row.draft.runId)), expected: row.item.finalText ?? row.item.text }
     }
     case 'mana_answer': {
       const q = await db.query.manaQuestions.findFirst({ where: and(eq(manaQuestions.id, id), eq(manaQuestions.facilityId, e.facilityId)) })

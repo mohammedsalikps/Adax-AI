@@ -1692,3 +1692,116 @@ export const patientHistoryEvents = pgTable(
     check('patient_history_events_entity_check', sql`entity_type in ('condition', 'medication', 'investigation') and action in ('created', 'status_changed')`),
   ],
 )
+/**
+ * A draft made by the local language model for one consultation (slice V3). Many per consultation (a new one supersedes the last); at most one is
+ * being made at a time (partial unique index). The sources it was made from are kept as a manifest (keys and hashes, not text) so a later change
+ * to the record, the doctor's notes or the confirmed points can be told from the draft; the statements and the evidence they rest on are rows below.
+ * While `status` is "generating" the row changes; once it ends, nothing in it changes (trigger).
+ */
+export const consultationDrafts = pgTable(
+  'consultation_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    facilityId: uuid('facility_id')
+      .notNull()
+      .references(() => facilities.id),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    version: integer('version').notNull(),
+    /** generating | ready | partial | failed | unavailable | cancelled */
+    status: text('status').notNull().default('generating'),
+    /** While generating: queued (waiting for the one local model) or running. */
+    phase: text('phase'),
+    /** The record held too little to draft from; the model was not asked. */
+    insufficient: boolean('insufficient').notNull().default(false),
+    jobId: uuid('job_id').references(() => aiJobs.id),
+    runId: uuid('run_id').references(() => aiRuns.id),
+    idempotencyKey: text('idempotency_key'),
+    promptId: text('prompt_id').notNull(),
+    schemaVersion: text('schema_version').notNull(),
+    /** Version of the explicit record rules (conflicts, old items, missing items) and of the checks run after the model. */
+    rulesVersion: text('rules_version').notNull(),
+    checksVersion: text('checks_version').notNull(),
+    provider: text('provider'),
+    model: text('model'),
+    runtime: text('runtime'),
+    weightsSha256: text('weights_sha256'),
+    /** local | external: where the model ran. */
+    locality: text('locality'),
+    contextSha256: text('context_sha256').notNull(),
+    /** [{key, ref, sourceType, field, date, status, hash}] of what the model was shown. No clinical text. */
+    contextManifest: jsonb('context_manifest').notNull(),
+    sourceCount: integer('source_count').notNull(),
+    omittedCount: integer('omitted_count').notNull().default(0),
+    recordCheck: jsonb('record_check').notNull(),
+    /** Counts of what the checks removed or flagged, by reason. No text. */
+    validation: jsonb('validation'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    retryable: boolean('retryable').notNull().default(false),
+    requestedBy: uuid('requested_by')
+      .notNull()
+      .references(() => users.id),
+    latencyMs: integer('latency_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('consultation_drafts_version_uq').on(t.encounterId, t.version),
+    uniqueIndex('consultation_drafts_one_generating_uq')
+      .on(t.encounterId)
+      .where(sql`status = 'generating'`),
+    uniqueIndex('consultation_drafts_idempotency_uq')
+      .on(t.requestedBy, t.idempotencyKey)
+      .where(sql`idempotency_key is not null`),
+    index('consultation_drafts_encounter_idx').on(t.encounterId, t.createdAt),
+    check('consultation_drafts_status_check', sql`${t.status} in ('generating', 'ready', 'partial', 'failed', 'unavailable', 'cancelled')`),
+    check('consultation_drafts_phase_check', sql`${t.phase} is null or ${t.phase} in ('queued', 'running')`),
+    check('consultation_drafts_locality_check', sql`${t.locality} is null or ${t.locality} in ('local', 'external')`),
+    check('consultation_drafts_version_check', sql`${t.version} >= 1`),
+  ],
+)
+
+/**
+ * One statement of a draft. What the model wrote (text, support, flags, sources) never changes; only the doctor's decision does (the shared
+ * review guard, `ai_review_guard('decision')`). Rejected and unreviewed statements are never part of the record.
+ */
+export const consultationDraftItems = pgTable(
+  'consultation_draft_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    draftId: uuid('draft_id')
+      .notNull()
+      .references(() => consultationDrafts.id),
+    section: text('section').notNull(),
+    position: integer('position').notNull().default(0),
+    text: text('text').notNull(),
+    /** supported | inferred | not_found | conflicting | outdated: decided by the server from the cited items. */
+    support: text('support').notNull(),
+    rationale: text('rationale'),
+    uncertainty: text('uncertainty'),
+    flags: jsonb('flags').notNull().default(sql`'[]'::jsonb`),
+    /** Stable keys of the record items it rests on (their excerpts are copied to ai_evidence). */
+    sourceKeys: jsonb('source_keys').notNull().default(sql`'[]'::jsonb`),
+    /** The doctor must tick "I have checked this" before accepting it. */
+    needsConfirmation: boolean('needs_confirmation').notNull().default(false),
+    decision: text('decision').notNull().default('pending'),
+    finalText: text('final_text'),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('consultation_draft_items_draft_idx').on(t.draftId),
+    check('consultation_draft_items_section_check', sql`${t.section} in ('summary', 'presenting_problem', 'symptoms', 'observations', 'relevant_history', 'allergies', 'medications', 'potential_considerations', 'potential_investigations', 'potential_medication_considerations', 'missing_information', 'uncertainties')`),
+    check('consultation_draft_items_support_check', sql`${t.support} in ('supported', 'inferred', 'not_found', 'conflicting', 'outdated')`),
+    check('consultation_draft_items_decision_check', sql`${t.decision} in ('pending', 'accepted', 'edited', 'rejected', 'deferred')`),
+    check('consultation_draft_items_text_check', sql`length(btrim(${t.text})) between 1 and 400`),
+  ],
+)

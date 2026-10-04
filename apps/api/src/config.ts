@@ -7,6 +7,15 @@ import pkg from '../package.json' with { type: 'json' }
 export const API_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const REPO_ROOT = path.resolve(API_ROOT, '..', '..')
 
+/** The contents of a small secret file (trimmed), or undefined when it is not there. The value is never logged. */
+function readSecretFile(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf8').trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Loads the repo-root `.env` into process.env without overriding values already set. */
 export function loadDotEnv(file = path.join(REPO_ROOT, '.env')): void {
   if (fs.existsSync(file)) process.loadEnvFile(file)
@@ -52,6 +61,18 @@ const EnvSchema = z.object({
    * setting in config/adaxai.yaml (ai.egress.hostedProviders, false) decides. "true" allows it on purpose; "false" forbids it whatever the file says.
    */
   AI_EGRESS_HOSTED: z.union([z.enum(['true', 'false']), z.literal('')]).optional().transform((v) => (v ? v === 'true' : undefined)),
+  /**
+   * The reasoning model (V3, V4): "local" (llama.cpp on this machine, scripts/llm.mjs), "none", or "hosted" (the hosted provider, only if egress is
+   * allowed and a key is set). Unset: config/adaxai.yaml (ai.reasoning.provider) decides. Nothing falls back from one to another.
+   */
+  LLM_PROVIDER: z.union([z.enum(['none', 'local', 'hosted']), z.literal('')]).optional().transform((v) => v || undefined),
+  /** Where the local model server listens (default http://127.0.0.1:8081). Loopback only unless LLM_ALLOW_NON_LOOPBACK is "true". */
+  LLM_URL: z.union([z.url(), z.literal('')]).optional().transform((v) => v || undefined),
+  LLM_ALLOW_NON_LOOPBACK: z.enum(['true', 'false', '1', '0']).optional().transform((v) => v === 'true' || v === '1'),
+  /** The per-install secret the local model server was started with. Never sent to a browser, never logged. */
+  LLM_API_KEY: z.string().optional().transform((v) => v || undefined),
+  /** A file holding that secret (scripts/llm.mjs makes .data/llm/api-key). Used when LLM_API_KEY is not set. */
+  LLM_API_KEY_FILE: z.string().optional().transform((v) => v || undefined),
 })
 
 export interface DbConfig {
@@ -87,6 +108,8 @@ export interface Config {
     egressHosted: boolean | undefined
     /** An AI_STT_API_KEY is set in the environment. It is never used; the server says so at start-up. */
     hostedSttKeyIgnored: boolean
+    /** Env overrides of ai.reasoning in config/adaxai.yaml (undefined: use the file) and the secret for the local model server. */
+    llm: { provider: 'none' | 'local' | 'hosted' | undefined; url: string | undefined; allowNonLoopback: boolean; apiKey: string | undefined }
   }
 }
 
@@ -127,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       speech: { provider: e.SPEECH_PROVIDER, url: e.SPEECH_URL?.replace(/\/+$/, ''), allowNonLoopback: e.SPEECH_ALLOW_NON_LOOPBACK },
       egressHosted: e.AI_EGRESS_HOSTED,
       hostedSttKeyIgnored: !!env.AI_STT_API_KEY,
+      llm: { provider: e.LLM_PROVIDER, url: e.LLM_URL?.replace(/\/+$/, ''), allowNonLoopback: e.LLM_ALLOW_NON_LOOPBACK, apiKey: e.LLM_API_KEY ?? readSecretFile(e.LLM_API_KEY_FILE ?? path.join(REPO_ROOT, '.data', 'llm', 'api-key')) },
     },
   }
 }
